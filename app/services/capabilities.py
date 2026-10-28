@@ -26,6 +26,7 @@ GROUP_DEFAULT_TOOLS = {
     "bili_comments",
     "bili_knowledge_search",
     "bili_last_opinion",
+    "create_excel",
 }
 
 BUILTIN_TOOLS: list[dict[str, Any]] = [
@@ -38,6 +39,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     {"name": "search_files", "label": "搜索文件", "desc": "按 glob 搜索工作区", "risk": "low"},
     {"name": "run_powershell", "label": "PowerShell", "desc": "执行 PowerShell 命令，可选 UAC 提权", "risk": "high"},
     {"name": "web_request", "label": "外部 HTTP", "desc": "调用 http/https 接口", "risk": "medium"},
+    {"name": "create_excel", "label": "生成 Excel", "desc": "把二维数据生成为 .xlsx 文件，生成后自动发到群聊", "risk": "low"},
     {"name": "list_skills", "label": "技能列表", "desc": "列出可用技能", "risk": "low"},
     {"name": "read_skill", "label": "读取技能", "desc": "读取 SKILL.md 和文件列表", "risk": "low"},
     {"name": "write_skill", "label": "创建/更新技能", "desc": "自我迭代：写 SKILL.md/run 脚本", "risk": "high"},
@@ -553,10 +555,19 @@ async def catalog_for_scope(scope: str) -> dict[str, Any]:
             continue
         seen_tools.add(name)
         tools.append(item)
+    # Group scope only gets explicit, purpose-built tools. Generic skills and
+    # MCP projects can drive the desktop, so they stay assistant/admin-only
+    # unless a resource is explicitly marked ``group_safe`` in its metadata.
+    include_generic_resources = scope != "group"
     skills = [
         {"name": row.name, "description": row.description}
         for row in rows
-        if row.type == "skill" and enabled.get(row.key)
+        if row.type == "skill"
+        and enabled.get(row.key)
+        and (
+            include_generic_resources
+            or bool((row.meta or {}).get("group_safe"))
+        )
     ]
     mcps = [
         {
@@ -566,7 +577,12 @@ async def catalog_for_scope(scope: str) -> dict[str, Any]:
             "path": row.source,
         }
         for row in rows
-        if row.type == "mcp" and enabled.get(row.key)
+        if row.type == "mcp"
+        and enabled.get(row.key)
+        and (
+            include_generic_resources
+            or bool((row.meta or {}).get("group_safe"))
+        )
     ]
     apis = [
         {
@@ -631,6 +647,10 @@ async def check_capability(key: str, scope: str) -> bool:
 
 
 async def check_tool_allowed(name: str, args: dict[str, Any], scope: str) -> None:
+    if scope == "group" and name in {"run_skill", "run_mcp"}:
+        raise PermissionError(
+            "群聊不开放通用技能/MCP执行；请使用专用的群聊工具"
+        )
     if name == "run_skill":
         skill = str(args.get("name") or "")
         if not await check_capability(f"skill:{skill}", scope):
@@ -683,6 +703,10 @@ async def execute_capability(
             float(args.get("timeout") or 120),
             bool(args.get("admin")),
         )
+    if name == "create_excel":
+        from app.services.spreadsheet import create_excel
+
+        return await asyncio.to_thread(create_excel, args)
     if name == "call_interface":
         api = str(args.get("name") or "")
         async with SessionLocal() as db:

@@ -532,6 +532,7 @@ def tool_catalog() -> list[dict[str, Any]]:
         {"name": "bili_knowledge_search", "args": {"query": "主题", "limit": 5}, "desc": "检索 B站视频知识库"},
         {"name": "bili_knowledge_add", "args": {"bvid": "BV...", "model": "small"}, "desc": "按需转写 B站视频并记录到知识库"},
         {"name": "bili_last_opinion", "args": {}, "desc": "读取最近一次 B站视频分析中 Agent 自己的看法"},
+        {"name": "create_excel", "args": {"filename": "点检表.xlsx", "sheets": [{"name": "点检表", "rows": [["序号", "点检项目"], ["1", "车架主体"]]}]}, "desc": "把二维数组写成 Excel 文件，生成后自动发到群聊"},
         {"name": "send_contact_message", "args": {"contact_id": 72, "text": "..."}, "desc": "给微信联系人发送文本，必须走 wechatauto-replica"},
         {"name": "send_contact_image", "args": {"contact_id": 72, "path": "..."}, "desc": "给微信联系人发送图片，必须走 wechatauto-replica"},
     ]
@@ -540,6 +541,10 @@ def tool_catalog() -> list[dict[str, Any]]:
 def execute_tool(name: str, args: dict[str, Any] | None = None) -> Any:
     """Synchronous tool dispatcher used by the assistant loop."""
     args = args or {}
+    if name == "create_excel":
+        from app.services.spreadsheet import create_excel
+
+        return create_excel(args)
     if name == "list_dir":
         return list_dir(args.get("path") or ".", int(args.get("limit") or 300))
     if name == "read_file":

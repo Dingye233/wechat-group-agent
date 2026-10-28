@@ -112,7 +112,8 @@ class AgentEngine:
 4. 用户当前情绪（user_emotion）和强度（0-1）；
 5. 最合适的回复语气（tone）；
 6. 如果需要工具，给一句自然过渡语（ack），例如“我去看看”“我查一下”；
-7. 对这个用户的简短新印象（impression_note）和性格/偏好标签（traits）。
+7. 对这个用户的简短新印象（impression_note）和性格/偏好标签（traits）；
+8. 如果明确缺少能完成任务的工具，在 missing_capability 里写缺少什么。
 
 规则：
 - 拿不准时 should_reply=true。
@@ -121,8 +122,11 @@ class AgentEngine:
 - 不因消息短就跳过。
 - 涉及查询/泄露他人个人信息、手机号、住址等隐私，intent=privacy，need_tools=false。
 - 普通闲聊不要调用工具；只有需要外部事实/动作时才 need_tools=true。
+- 只有工具描述明确匹配任务时才选；不能为了凑数选 run_skill、run_mcp 或无关工具。
+- 做表格 / Excel / 点检表并要发到群里时，选 create_excel，把用户给的内容整理成 sheets[].rows；不要选屏幕控制类工具。
+- 工具列表里没有能完成任务的工具时，need_tools=false，并在 missing_capability 里写明缺少什么，不要假装能完成。
 - 不要输出任何解释，只输出 JSON：
-{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":""}"""
+{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":""}"""
         user_prompt = f"""# 群聊
 - 群名：{group.name or '未知'}
 - 机器人：{self.runtime.bot_name or '小助手'}
@@ -215,6 +219,7 @@ class AgentEngine:
             "ack": ack,
             "traits": [str(item)[:30] for item in traits[:6]],
             "impression_note": str(data.get("impression_note") or "")[:240],
+            "missing_capability": str(data.get("missing_capability") or "")[:120],
             "source": "planner",
         }
 
@@ -236,6 +241,9 @@ class AgentEngine:
             "找一下",
             "翻译",
             "总结",
+            "表格",
+            "excel",
+            "点检表",
         )
         privacy_words = ("个人信息", "手机号", "住址", "身份证", "查人")
         emotion_words = {
@@ -260,7 +268,9 @@ class AgentEngine:
         ) and any(word in text for word in task_words)
         selected = []
         if need_tools:
-            if "天气" in text and "call_interface" in allowed:
+            if any(word in text for word in ("表格", "excel", "点检表")) and "create_excel" in allowed:
+                selected = ["create_excel"]
+            elif "天气" in text and "call_interface" in allowed:
                 selected = ["call_interface"]
             elif "视频" in text and "bili_knowledge_search" in allowed:
                 selected = ["bili_knowledge_search"]
@@ -279,6 +289,7 @@ class AgentEngine:
             "ack": "我去看看，稍等～" if selected else "",
             "traits": [],
             "impression_note": "",
+            "missing_capability": "",
             "source": "fallback",
         }
 
@@ -462,6 +473,31 @@ class AgentEngine:
         except Exception as exc:
             await self._update_chat_task(task_id, "error", error=str(exc))
             return
+        if meta.get("tool_required_unmet"):
+            await self._update_chat_task(
+                task_id,
+                "error",
+                error="任务需要工具，但模型没有调用任何工具；已停止，避免编造结果",
+            )
+            missing = str(plan.get("missing_capability") or "").strip()
+            text = (
+                f"这个任务需要{missing}，我这边没有能直接用的工具，先不糊弄你。"
+                if missing
+                else "这个任务我这边没有能直接用的工具，先不糊弄你。"
+            )
+            try:
+                await self.runtime.send_agent_message(
+                    group.id,
+                    text=text,
+                    meta={
+                        "source": "llm",
+                        "task_id": task_id,
+                        "task_blocked": True,
+                    },
+                )
+            except Exception:
+                pass
+            return
         if reply_data is None:
             await self._update_chat_task(task_id, "done", result="没有生成回复")
             return
@@ -612,6 +648,7 @@ class AgentEngine:
                     group_id,
                     "task",
                     f"挂载任务 #{task['id']}：{plan.get('intent', 'task')} "
+                    f"tools={plan.get('tools') or []} "
                     f"{str(message.content or '')[:80]}",
                 )
                 self._start_chat_task(int(task["id"]))
@@ -1223,6 +1260,7 @@ class AgentEngine:
             "ack": "",
             "traits": [],
             "impression_note": "",
+            "missing_capability": "",
         }
         tool_payload = await catalog_for_scope("group")
         group_tools = tool_payload.get("tools") or []
@@ -1288,7 +1326,7 @@ class AgentEngine:
 {tool_example}{api_example}
 工具结果会以 OBSERVATION 返回，然后你再决定回复或继续调用。
 参数键必须与工具列表完全一致；如果 OBSERVATION 以 ERROR 开头，先修正参数重试，不要编造结果。
-群聊里不要调用屏幕、鼠标、键盘、文件、终端、沙箱类工具；只做只读查询或群聊安全动作。
+群聊里不要调用屏幕、鼠标、键盘、终端、沙箱或任意路径读写工具；只允许调用上面列出的群聊安全工具。create_excel 只生成表格，不会读取本地文件；生成后会自动把文件发到群里。
 不要假装调用过工具；没有拿到 OBSERVATION 就不能声称完成。{bili_hint}"""
         multi_rules = ""
         multi_format = '{"action": "reply", "reply": "要发送的文字，可为空", "sticker": 3}'
@@ -1324,12 +1362,15 @@ class AgentEngine:
 - 用户情绪：{plan.get('user_emotion', 'neutral')}（强度 {float(plan.get('emotion_intensity') or 0):.2f}）
 - 回复语气：{plan.get('tone', 'warm')}
 - 是否需要工具：{'是' if use_tools else '否'}
+- 缺少的能力：{plan.get('missing_capability') or '无'}
 - 对这个人的印象：
 {impression_prompt(impression or {})}
 
 # 输出风格（内部规则，不要复述）
 - 不要输出工具名、工具调用过程、OBSERVATION、🔧、JSON 字段名或分析过程。
 - 需要工具时，用“我去看看”“我查一下”这类自然话过渡；只给最终结果。
+- 缺少的能力不是“无”时，直接如实说明当前做不到，不要编造结果或假装完成。
+- 需要生成表格时调用 create_excel，把内容整理成 sheets[].rows，第一行是表头；不要调用屏幕/鼠标/键盘类工具。
 - 像真人聊天，带一点符合当前情绪的语气，但不要夸张表演。"""
         extra_prompt = str(settings.get("group_prompt_extra") or "").strip()
         extra_block = (
@@ -1401,6 +1442,9 @@ class AgentEngine:
         # final reply.  The old limit of 2 stopped right after the first tool
         # result, so a bad argument could never be retried.
         max_steps = 4 if use_tools else 1
+        tool_required = bool(plan.get("need_tools")) and bool(plan.get("tools"))
+        tool_retry_used = False
+        nudges: list[str] = []
         try:
             for _step in range(max_steps):
                 prompt = user_prompt
@@ -1408,6 +1452,10 @@ class AgentEngine:
                     prompt += (
                         "\n\nOBSERVATION\uff08\u771f\u5b9e\u5de5\u5177\u7ed3\u679c\uff0c\u6309\u987a\u5e8f\uff09\uff1a\n"
                         + "\n".join(observations[-3:])
+                    )
+                if nudges:
+                    prompt += "\n\n# 系统提醒（必须遵守）\n" + "\n".join(
+                        nudges[-2:]
                     )
                 data, result = await self.llm.complete_json(
                     base_url=str(settings.get("llm_base_url") or ""),
@@ -1424,6 +1472,15 @@ class AgentEngine:
                 total_completion += int(result.get("completion_tokens") or 0)
                 action = str(data.get("action") or "reply").lower()
                 if action != "tool":
+                    if tool_required and not tool_trace and not tool_retry_used:
+                        tool_retry_used = True
+                        nudges.append(
+                            "本轮是必须使用工具的任务，但你还没有调用任何工具。"
+                            "请立刻从工具列表中选择最合适的工具并输出 action=tool。"
+                            "如果工具列表里确实没有能完成任务的工具，就明确说当前没有这个能力，"
+                            "不要声称已经完成，也不要编造结果。"
+                        )
+                        continue
                     meta = {
                         "model": result.get("model") or model,
                         "latency_ms": result.get("latency_ms") or 0,
@@ -1434,6 +1491,9 @@ class AgentEngine:
                         "intent": plan.get("intent"),
                         "emotion": plan.get("user_emotion"),
                         "need_tools": use_tools,
+                        "tool_required_unmet": bool(
+                            tool_required and not tool_trace
+                        ),
                     }
                     return data, meta
                 if not use_tools:
@@ -1495,6 +1555,7 @@ class AgentEngine:
                 "intent": plan.get("intent"),
                 "emotion": plan.get("user_emotion"),
                 "need_tools": use_tools,
+                "tool_required_unmet": bool(tool_required and not tool_trace),
             }
             return {"action": "none"}, meta
         except LLMError as exc:

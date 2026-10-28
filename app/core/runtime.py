@@ -107,6 +107,7 @@ _TOOL_ACKS = {
     "discover_capabilities": "我先找找有没有合适的办法",
     "run_mcp": "我先接一下手头的工具",
     "call_interface": "我去查一下",
+    "create_excel": "我先把表格做出来",
     "bili_search": "我去 B站搜搜",
     "bili_feed": "我去 B站逛逛",
     "bili_recommend": "我去 B站看看推荐",
@@ -1426,6 +1427,76 @@ class RuntimeManager:
         return paths
 
     @staticmethod
+    def _file_paths_from_trace(trace: list[dict[str, Any]]) -> list[Path]:
+        """Files produced by a group tool that are safe to send to the group."""
+
+        allowed_root = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "agent_workspace"
+            / "exports"
+        ).resolve()
+        suffixes = {
+            ".xlsx",
+            ".xls",
+            ".csv",
+            ".pdf",
+            ".docx",
+            ".pptx",
+            ".txt",
+            ".zip",
+        }
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for item in trace:
+            if item.get("tool") not in {
+                "create_excel",
+                "send_file",
+                "send_group_file",
+            }:
+                continue
+            raw = str(item.get("output") or "")
+            candidates: list[str] = []
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                for key in ("path", "file", "file_path"):
+                    value = str(data.get(key) or "").strip()
+                    if value:
+                        candidates.append(value)
+            if not candidates:
+                candidates.extend(
+                    re.findall(
+                        r"[A-Za-z]:\\[^\s\"',}]+\.(?:xlsx|xls|csv|pdf|docx|pptx|txt|zip)",
+                        raw,
+                        flags=re.I,
+                    )
+                )
+            for text in candidates:
+                path = Path(text)
+                if not path.is_absolute():
+                    path = Path.cwd() / path
+                try:
+                    path = path.resolve()
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() not in suffixes:
+                        continue
+                    if allowed_root not in path.parents:
+                        continue
+                    if path.stat().st_size > 25 * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                key = str(path)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(path)
+        return paths
+
+    @staticmethod
     def _strip_inline_images(text: str) -> str:
         value = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", str(text or ""))
         value = re.sub(r"/media/assistant/[^\s\"',}]+", "", value)
@@ -1956,14 +2027,27 @@ class RuntimeManager:
         account = self.account or {}
         sent_any = False
         meta = meta or {}
-        image_paths = RuntimeManager._image_paths_from_trace(
-            meta.get("tool_trace") or []
+        try:
+            segment = int(meta.get("segment") or 1)
+            segment_count = int(meta.get("segment_count") or 1)
+        except (TypeError, ValueError):
+            segment, segment_count = 1, 1
+        final_segment = segment >= segment_count
+        image_paths = (
+            RuntimeManager._image_paths_from_trace(meta.get("tool_trace") or [])
+            if final_segment
+            else []
+        )
+        file_paths = (
+            RuntimeManager._file_paths_from_trace(meta.get("tool_trace") or [])
+            if final_segment
+            else []
         )
         # Tool traces belong to logs/dashboard, not to chat message metadata.
         persist_meta = {
             key: value for key, value in meta.items() if key != "tool_trace"
         }
-        if image_paths:
+        if image_paths or file_paths:
             text = RuntimeManager._strip_inline_images(text)
 
         if text.strip():
@@ -2022,6 +2106,47 @@ class RuntimeManager:
                 is_from_agent=True,
                 meta=image_meta,
                 account=account,
+                media_path=str(path),
+            )
+            sent_any = True
+
+        for path in file_paths:
+            if sent_any:
+                await asyncio.sleep(0.45)
+            allow = getattr(self.adapter, "allow_ui_action", None)
+            if callable(allow):
+                allow(300.0)
+            file_meta = {
+                **persist_meta,
+                "source": "agent-file",
+                "file_name": path.name,
+            }
+            try:
+                self._ensure_attached()
+                send_file = getattr(self.adapter, "send_file", None)
+                if not callable(send_file):
+                    raise RuntimeError("当前适配器不支持发送文件")
+                await send_file(group.external_id, path)
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="file",
+                    content=path.name,
+                    is_from_agent=True,
+                    meta=file_meta,
+                    account=account,
+                    media_path=str(path),
+                    error=str(exc),
+                )
+                raise
+            await self._persist_outgoing(
+                group,
+                kind="file",
+                content=path.name,
+                is_from_agent=True,
+                meta=file_meta,
+                account=account,
+                media_path=str(path),
             )
             sent_any = True
 
@@ -2160,6 +2285,17 @@ class RuntimeManager:
                 age = abs((now - created).total_seconds())
                 if age <= 120:
                     return True
+        # WeChat stores the file title from the XML payload. It may omit the
+        # extension or normalize whitespace, so allow a contained match.
+        if row_kind == kind == "file" and row_content and content:
+            created = row.created_at
+            if created is not None:
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                age = abs((now - created).total_seconds())
+                if age <= 120 and (
+                    row_content in content or content in row_content
+                ):
+                    return True
         return False
 
     async def _persist_outgoing(
@@ -2172,6 +2308,7 @@ class RuntimeManager:
         meta: dict[str, Any],
         account: dict[str, str],
         sticker: Sticker | None = None,
+        media_path: str = "",
     ) -> dict[str, Any]:
         async with SessionLocal() as db:
             db_group = await db.get(Group, group.id)
@@ -2232,7 +2369,7 @@ class RuntimeManager:
                 is_self=True,
                 kind=kind,
                 content=content,
-                media_path=sticker.filename if sticker else "",
+                media_path=media_path or (sticker.filename if sticker else ""),
                 meta=record_meta,
                 created_at=now,
             )
@@ -2582,7 +2719,7 @@ class RuntimeManager:
                 is_self=True,
                 kind=kind,
                 content=content,
-                media_path=sticker.filename if sticker else "",
+                media_path=media_path or (sticker.filename if sticker else ""),
                 meta=record_meta,
                 created_at=now,
             )
@@ -2790,6 +2927,14 @@ class RuntimeManager:
                         if not path:
                             raise RuntimeError("待重发图片缺少本地文件路径")
                         await self.adapter.send_image(group.external_id, Path(path))
+                    elif row.kind == "file":
+                        path = str(meta.get("_outbox_media_path") or "").strip()
+                        if not path:
+                            raise RuntimeError("待重发文件缺少本地文件路径")
+                        send_file = getattr(self.adapter, "send_file", None)
+                        if not callable(send_file):
+                            raise RuntimeError("当前适配器不支持发送文件")
+                        await send_file(group.external_id, Path(path))
                     elif row.kind == "sticker":
                         sticker_id = meta.get("sticker_id")
                         db_sticker = None
