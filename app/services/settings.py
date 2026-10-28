@@ -235,6 +235,9 @@ async def update_settings(
     if "default_trigger_mode" in updates:
         if updates["default_trigger_mode"] not in VALID_TRIGGER_MODES:
             raise ValueError("默认触发方式无效")
+    if "memory_engine" in updates:
+        if updates["memory_engine"] not in {"auto", "mem0", "sqlite"}:
+            raise ValueError("memory_engine 只能是 auto、mem0 或 sqlite")
 
     if "llm_api_key" in payload and payload["llm_api_key"] is not None:
         key = _clean_str(payload["llm_api_key"], "llm_api_key")
