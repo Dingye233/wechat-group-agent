@@ -4902,9 +4902,125 @@ async function summarizeAssistantMemories() {
   }
 }
 
+const TOOL_TASK_TYPES = [
+  ['wechat', '微信', /wechat|wxid|contact|group_message/i],
+  ['bili', 'B站', /bili|bilibili/i],
+  ['memory', '记忆', /memory|mem0/i],
+  ['weather', '天气 / 接口', /weather|interface|web_request|http_request|webfetch/i],
+  ['skill', '技能', /skill/i],
+  ['mcp', 'MCP', /mcp/i],
+  ['plugin', '插件', /plugin/i],
+  ['terminal', '终端 / 命令', /powershell|pwsh|bash|terminal|shell|exec/i],
+  ['file', '文件', /(^|_)read$|(^|_)write$|(^|_)edit$|glob|grep|file|workspace/i],
+  ['browser', '网页', /web|fetch|search/i],
+]
+
+function toolTaskType(toolName) {
+  const name = String(toolName || '');
+  const found = TOOL_TASK_TYPES.find(([, , pattern]) => pattern.test(name));
+  return found ? { key: found[0], label: found[1] } : { key: 'other', label: '其他工具' };
+}
+
+function toolTaskStatus(tasks) {
+  if (tasks.some((task) => task.status === 'running')) {
+    return { text: '执行中', cls: '' };
+  }
+  if (tasks.some((task) => task.status === 'error')) {
+    return { text: '有失败', cls: ' danger' };
+  }
+  return { text: '已完成', cls: ' accent' };
+}
+
+function toolTaskTitle(toolName) {
+  const name = String(toolName || 'tool');
+  const known = {
+    wechat_status: '微信状态',
+    wechat_list_groups: '群列表',
+    wechat_read_group: '读群消息',
+    wechat_send_message: '发微信',
+    write: '写文件',
+    read: '读文件',
+    edit: '编辑文件',
+    glob: '查找文件',
+    grep: '搜索文件',
+    qunban_powershell: 'PowerShell',
+    qunban_run_skill: '运行技能',
+    qunban_run_mcp: '运行 MCP',
+    qunban_call_interface: '调用接口',
+  };
+  if (known[name]) return known[name];
+  if (name.startsWith('qunban_interface_')) {
+    return `接口 ${name.slice('qunban_interface_'.length)}`;
+  }
+  if (name.startsWith('qunban_skill_')) {
+    return `技能 ${name.slice('qunban_skill_'.length)}`;
+  }
+  if (name.startsWith('qunban_mcp_')) {
+    return `MCP ${name.slice('qunban_mcp_'.length)}`;
+  }
+  return name.replace(/^qunban_/, '').replace(/_/g, ' ');
+}
+
+function toolTaskTime(value) {
+  const text = String(value || '');
+  const match = text.match(/T(\d{2}:\d{2}:\d{2})/);
+  return match ? match[1] : text.slice(0, 19);
+}
+
+function toolTaskChild(task) {
+  const item = el(
+    'details',
+    `assistant-tool-task ${task.status || 'running'}`,
+  );
+  const summary = el('summary', 'assistant-tool-task-head');
+  const name = el('strong', null, `⚙ ${toolTaskTitle(task.tool_name)}`);
+  name.title = task.tool_name || 'tool';
+  summary.appendChild(name);
+  summary.appendChild(
+    el(
+      'span',
+      `plugin-badge${task.status === 'error' ? ' danger' : task.status === 'done' ? ' accent' : ''}`,
+      task.status === 'running' ? '执行中' : task.status === 'done' ? '完成' : '失败',
+    ),
+  );
+  summary.appendChild(
+    el(
+      'span',
+      'assistant-tool-task-meta',
+      toolTaskTime(task.created_at),
+    ),
+  );
+  item.appendChild(summary);
+  const body = el('div', 'assistant-tool-task-body');
+  body.appendChild(el('div', 'assistant-tool-label', '工具'));
+  body.appendChild(el('code', 'assistant-tool-task-tool', task.tool_name || 'tool'));
+  const input = assistantToolValue(task.tool_input);
+  if (input) {
+    body.appendChild(el('div', 'assistant-tool-label', '输入'));
+    body.appendChild(el('pre', 'assistant-tool-input', input));
+  }
+  body.appendChild(el('div', 'assistant-tool-label', '输出'));
+  body.appendChild(
+    el(
+      'pre',
+      'assistant-tool-output',
+      task.tool_output || (task.status === 'running' ? '执行中…' : '（无输出）'),
+    ),
+  );
+  body.appendChild(
+    el(
+      'p',
+      'assistant-tool-task-time',
+      `会话 ${task.session_id || '—'}${task.updated_at ? ` · 更新 ${task.updated_at}` : ''}`,
+    ),
+  );
+  item.appendChild(body);
+  return item;
+}
+
 async function loadAssistantTasks() {
   try {
-    const data = await api('/assistant/tool-tasks?limit=80');
+    const data = await api('/assistant/tool-tasks?limit=120');
     state.assistantTasks = data.tasks || [];
     const root = $('#assistant-task-list');
     if (!root) return;
@@ -4915,54 +5031,39 @@ async function loadAssistantTasks() {
       );
       return;
     }
+    const groups = new Map();
     for (const task of state.assistantTasks) {
-      const item = el(
-        'details',
-        `assistant-tool-task ${task.status || 'running'}`,
-      );
-      if (task.status === 'running') item.open = true;
-      else if (String(task.tool_output || '').length <= 700) item.open = true;
-      const summary = el('summary', 'assistant-tool-task-head');
-      summary.appendChild(el('strong', null, `⚙ ${task.tool_name || 'tool'}`));
-      summary.appendChild(
-        el(
-          'span',
-          `plugin-badge${task.status === 'error' ? ' danger' : task.status === 'done' ? ' accent' : ''}`,
-          task.status === 'running' ? '执行中' : task.status === 'done' ? '完成' : '失败',
-        ),
-      );
-      summary.appendChild(
-        el(
-          'span',
-          'assistant-tool-task-meta',
-          `${task.channel === 'wechat' ? '微信私聊' : '助手对话'} · ${task.session_id || ''}`,
-        ),
-      );
-      item.appendChild(summary);
-      const body = el('div', 'assistant-tool-task-body');
-      const input = assistantToolValue(task.tool_input);
-      if (input) {
-        body.appendChild(el('div', 'assistant-tool-label', '输入'));
-        body.appendChild(el('pre', 'assistant-tool-input', input));
-      }
-      body.appendChild(el('div', 'assistant-tool-label', '输出'));
-      body.appendChild(
-        el(
-          'pre',
-          'assistant-tool-output',
-          task.tool_output || (task.status === 'running' ? '执行中…' : '（无输出）'),
-        ),
-      );
-      body.appendChild(
-        el(
-          'p',
-          'assistant-tool-task-time',
-          `开始 ${task.created_at || '—'}${task.updated_at ? ` · 更新 ${task.updated_at}` : ''}`,
-        ),
-      );
-      item.appendChild(body);
-      root.appendChild(item);
+      const type = toolTaskType(task.tool_name);
+      if (!groups.has(type.key)) groups.set(type.key, { ...type, tasks: [] });
+      groups.get(type.key).tasks.push(task);
     }
+    const ordered = [...groups.values()].sort((a, b) => {
+      const aId = Math.max(...a.tasks.map((task) => Number(task.id) || 0));
+      const bId = Math.max(...b.tasks.map((task) => Number(task.id) || 0));
+      return bId - aId;
+    });
+    ordered.forEach((group, index) => {
+      const active = group.tasks.some((task) =>
+        ['running', 'error'].includes(task.status),
+      );
+      const box = el('details', 'tool-task-group');
+      box.open = active;
+      const summary = el('summary', 'tool-task-group-head');
+      summary.appendChild(el('strong', null, group.label));
+      summary.appendChild(
+        el('span', 'tool-task-group-count', `${group.tasks.length} 个调用`),
+      );
+      const status = toolTaskStatus(group.tasks);
+      summary.appendChild(el('span', `plugin-badge${status.cls}`, status.text));
+      box.appendChild(summary);
+      const children = el('div', 'tool-task-children');
+      group.tasks
+        .slice()
+        .sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
+        .forEach((task) => children.appendChild(toolTaskChild(task)));
+      box.appendChild(children);
+      root.appendChild(box);
+    });
   } catch (error) {
     toast(error.message, 'error');
   }

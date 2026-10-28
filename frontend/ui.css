@@ -2850,3 +2850,107 @@ dialog.modal::backdrop {
 .plugin-mini .plugin-functions-head span {
   display: none;
 }
+
+/* grouped private-chat tool tasks */
+.plugin-badge {
+  white-space: nowrap;
+  flex: none;
+}
+.tool-task-group {
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.tool-task-group[open] {
+  border-color: var(--line-strong);
+}
+.tool-task-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  cursor: pointer;
+  list-style: none;
+  background: var(--panel-3);
+}
+.tool-task-group-head::-webkit-details-marker {
+  display: none;
+}
+.tool-task-group-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.tool-task-group-count {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.tool-task-group-head .plugin-badge {
+  margin-left: auto;
+  font-size: 9px;
+  padding: 1px 5px;
+}
+.tool-task-children {
+  padding: 5px 5px 3px;
+  display: grid;
+  gap: 5px;
+}
+.tool-task-children .assistant-tool-task {
+  margin: 0;
+  background: var(--panel);
+}
+.tool-task-children .assistant-tool-task-head {
+  padding: 6px 7px;
+}
+.tool-task-children .assistant-tool-task-head strong {
+  font-size: 10.5px;
+}
+.tool-task-children .assistant-tool-task-meta {
+  max-width: 45%;
+  text-align: right;
+}
+.assistant-tool-task-tool {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-task-children .assistant-tool-task-head .plugin-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+}
+.tool-task-children .assistant-tool-task-meta {
+  max-width: 52px;
+  font-size: 8.5px;
+}
+.assistant-panel[data-assistant-panel-body="tasks"] .assistant-memory-list {
+  max-height: min(52vh, 520px);
+}
+.tool-task-group-head::before {
+  content: "▸";
+  flex: none;
+  color: var(--muted-2);
+  font-size: 9px;
+  width: 8px;
+}
+.tool-task-group[open] > .tool-task-group-head::before {
+  content: "▾";
+}
+.assistant-tool-task-head::before {
+  content: "▸";
+  flex: none;
+  color: var(--muted-2);
+  font-size: 8px;
+  width: 7px;
+}
+.assistant-tool-task[open] > .assistant-tool-task-head::before {
+  content: "▾";
+}
