@@ -66,12 +66,181 @@ _CANCEL_WORDS = {
     "停止",
     "取消",
     "停下",
+    "停",
+    "停一下",
+    "停下来",
+    "停吧",
     "中断",
+    "终止",
+    "结束",
+    "终止任务",
+    "停止任务",
+    "取消任务",
+    "结束任务",
+    "停止执行",
+    "终止执行",
     "别做了",
     "不用了",
+    "别找了",
+    "不要找了",
+    "不用找了",
     "stop",
     "cancel",
+    "abort",
 }
+
+_CANCEL_PREFIXES = (
+    "停止",
+    "取消",
+    "打断",
+    "中断",
+    "终止",
+    "结束",
+    "停下",
+    "停掉",
+    "别做",
+    "别找",
+    "别跑",
+    "别下",
+    "不要做",
+    "不要找",
+    "不要跑",
+    "不要下",
+    "不用做",
+    "不用找",
+    "不用跑",
+    "不用下",
+    "先别",
+)
+
+_CANCEL_PHRASES = (
+    "不要让它找了",
+    "别让它找了",
+    "不要让它做了",
+    "别让它做了",
+    "不要继续",
+    "不用继续",
+    "别继续",
+    "到此为止",
+)
+
+_CASUAL_TASK_MARKERS = (
+    "帮我",
+    "给我",
+    "把",
+    "做",
+    "写",
+    "改",
+    "加",
+    "删",
+    "换",
+    "补",
+    "填",
+    "统计",
+    "合并",
+    "拆分",
+    "重做",
+    "下载",
+    "找",
+    "查",
+    "发",
+    "运行",
+    "执行",
+    "安装",
+    "整理",
+    "生成",
+    "导出",
+    "打开",
+    "删除",
+    "上传",
+    "部署",
+    "修",
+    "优化",
+    "继续",
+    "开始",
+    "新建",
+    "创建",
+    "保存",
+    "发送",
+    "换成",
+    "换一个",
+    "再加",
+    "加上",
+    "去掉",
+    "删掉",
+)
+
+_CASUAL_TASK_PREFIX_RE = re.compile(
+    r"^(帮我|给我|把|做|写|改|加|删|换|补|填|统计|合并|拆分|重做|"
+    r"下载|找|查|发|运行|执行|安装|整理|生成|导出|打开|删除|上传|部署|"
+    r"修|优化|继续|开始|新建|创建|保存|发送)"
+)
+
+_CASUAL_CHAT_HINTS = (
+    "吗",
+    "呢",
+    "啊",
+    "呀",
+    "哈",
+    "嗯",
+    "哦",
+    "喔",
+    "吧",
+    "嘛",
+    "在",
+    "好",
+    "早",
+    "晚",
+    "睡",
+    "吃",
+    "玩",
+    "笑",
+    "累",
+    "烦",
+    "开心",
+    "难过",
+    "无聊",
+    "谢谢",
+    "今天",
+    "天气",
+    "心情",
+    "感觉",
+    "觉得",
+    "为什么",
+    "怎么",
+    "什么",
+    "哪",
+    "谁",
+    "是不是",
+    "有没有",
+)
+
+_CASUAL_STATUS_MARKERS = (
+    "在吗",
+    "在干嘛",
+    "干嘛呢",
+    "怎么样了",
+    "好了吗",
+    "完成了吗",
+    "找到了吗",
+    "到哪了",
+    "还要多久",
+    "进度",
+    "为什么没",
+    "怎么没",
+    "为什么还",
+    "怎么还",
+    "为什么这么",
+    "怎么这么",
+    "谢谢",
+    "哈哈",
+    "聊聊",
+    "说说",
+    "无聊",
+    "累",
+)
+
+_CASUAL_STATUS_RE = re.compile(r"找[^，。！？,.!?]{0,12}了吗")
 
 _TOOL_ACKS = {
     "send_message": "我先把消息发出去",
@@ -176,6 +345,7 @@ class RuntimeManager:
         self._last_media_backfill = 0.0
         self._memory_tasks: dict[int, asyncio.Task] = {}
         self._admin_tasks: dict[str, asyncio.Task] = {}
+        self._admin_side_tasks: set[asyncio.Task] = set()
         self._proactive_tasks: dict[int, asyncio.Task] = {}
         self._memory_loop: asyncio.Task | None = None
         self._hotkey = GlobalHotkey()
@@ -1589,6 +1759,140 @@ class RuntimeManager:
                         pass
                 await asyncio.sleep(0.8)
 
+    @staticmethod
+    def _admin_cancel_message(text: str, active: bool, starting: bool) -> bool:
+        raw = re.sub(
+            r"^@[^\s，。！？,.!?]+[\s\u2005]*",
+            "",
+            str(text or "").strip(),
+        ).strip()
+        raw = raw.lstrip("¿？").strip()
+        normalized = re.sub(r"[\s，。！？,.!?~～]+", "", raw).lower()
+        if not normalized:
+            return False
+        if normalized in _CANCEL_WORDS:
+            return True
+        if not (active or starting):
+            return False
+        if raw.endswith(("吗", "呢", "嘛", "？", "?")) or "了吗" in raw:
+            # "结束了吗 / 停止了吗" is a status question, not a stop command.
+            return False
+        return bool(
+            normalized.startswith(_CANCEL_PREFIXES)
+            or any(phrase in normalized for phrase in _CANCEL_PHRASES)
+            or (
+                "token" in normalized
+                and ("用完" in normalized or "没了" in normalized)
+            )
+        )
+
+    @staticmethod
+    def _admin_casual_message(text: str) -> bool:
+        """Heuristic: true for chat/status questions, false for task edits."""
+        value = re.sub(r"\s+", "", str(text or "")).lower()
+        if not value:
+            return False
+        if value in {
+            "加油",
+            "好的",
+            "好吧",
+            "行",
+            "可以",
+            "嗯",
+            "哦",
+            "在",
+            "早",
+            "晚安",
+            "谢谢",
+            "哈哈",
+        }:
+            return True
+        if any(marker in value for marker in _CASUAL_STATUS_MARKERS):
+            return True
+        if _CASUAL_STATUS_RE.search(value):
+            return True
+        if _CASUAL_TASK_PREFIX_RE.match(value):
+            return False
+        if any(marker in value for marker in _CASUAL_TASK_MARKERS):
+            return False
+        if any(marker in value for marker in _CASUAL_CHAT_HINTS):
+            return True
+        return False
+
+    async def _admin_task_status(self, wxid: str) -> str:
+        try:
+            from app.services.opencode_agent import get_opencode_runtime
+
+            runtime = get_opencode_runtime()
+            if runtime.running:
+                tasks = await runtime.task_snapshots(limit=8)
+                target = f"群伴 admin:{wxid}"
+                for task in tasks:
+                    if str(task.get("title") or "") != target:
+                        continue
+                    status = str(task.get("status") or "running")
+                    last = str(task.get("last_assistant") or "").strip()
+                    if last:
+                        return f"{status}，最近动作：{last[:120]}"
+                    return status
+        except Exception:
+            pass
+        return "后台任务仍在执行"
+
+    async def _send_admin_side_chat(
+        self, contact_id: int, wxid: str, text: str
+    ) -> None:
+        """Answer casual admin messages without waiting for the task lane."""
+        persona = ""
+        temperature: float | None = None
+        try:
+            async with SessionLocal() as db:
+                contact = await db.get(Contact, contact_id)
+                if contact is not None:
+                    persona = contact.persona or ""
+                    if contact.temperature is not None:
+                        temperature = float(contact.temperature)
+            busy_task = self._admin_tasks.get(wxid)
+            busy = bool(busy_task and not busy_task.done())
+            if busy:
+                try:
+                    status = await asyncio.wait_for(
+                        self._admin_task_status(wxid), timeout=3.0
+                    )
+                except Exception:
+                    status = "后台任务仍在执行"
+            else:
+                status = "当前没有后台任务，我在陪你聊天"
+            service = AssistantService(self.llm, self)
+            reply = await service.quick_chat(
+                text,
+                session_id=f"admin:{wxid}",
+                persona=persona,
+                task_status=status,
+                busy=busy,
+                temperature=temperature,
+            )
+            if reply:
+                await self._send_admin_notice(contact_id, reply)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("管理员闲聊回复失败: %s", exc)
+            await self._send_admin_notice(
+                contact_id,
+                "我看到了，不过刚刚回话时卡了一下；稍后再跟我说一遍。",
+            )
+
+    def _start_admin_side_chat(
+        self, contact_id: int, wxid: str, text: str
+    ) -> None:
+        task = asyncio.create_task(
+            self._send_admin_side_chat(contact_id, wxid, text),
+            name=f"admin-side-chat-{wxid}",
+        )
+        self._admin_side_tasks.add(task)
+        task.add_done_callback(self._admin_side_tasks.discard)
+
     def _schedule_admin_reply(self, contact_id: int, wxid: str, text: str) -> None:
         session_id = f"admin:{wxid}"
         clean = str(text or "").strip()
@@ -1598,16 +1902,12 @@ class RuntimeManager:
         active = is_session_active(session_id)
         previous = self._admin_tasks.get(wxid)
         starting = bool(previous and not previous.done())
-        normalized = re.sub(r"[\s，。！？,.!?~～]+", "", clean).lower()
-        is_cancel = normalized in _CANCEL_WORDS or (
-            (active or starting)
-            and normalized.startswith(("停止", "取消", "打断", "中断"))
-        )
+        is_cancel = self._admin_cancel_message(clean, active, starting)
         if is_cancel:
             if active and cancel_session(session_id):
                 asyncio.create_task(
                     self._send_admin_notice(
-                        contact_id, "收到，当前工具返回后就会停止。"
+                        contact_id, "收到，正在停止。"
                     ),
                     name=f"admin-stop-{wxid}",
                 )
@@ -1629,9 +1929,27 @@ class RuntimeManager:
             return
 
         if starting:
+            # A long OpenCode run must not swallow casual messages. Answer
+            # chat/status questions in a separate LLM call while the task keeps
+            # running; only real task instructions are inserted into the loop.
+            if self._admin_casual_message(clean):
+                self._start_admin_side_chat(contact_id, wxid, clean)
+                return
             # Do not cancel the running task. Queue this message and let the
             # running loop process it as an inserted requirement.
             enqueue_session_message(session_id, clean)
+            asyncio.create_task(
+                self._send_admin_notice(
+                    contact_id, "收到，已插到当前任务里，完成后一起回你。"
+                ),
+                name=f"admin-queued-{wxid}",
+            )
+            return
+
+        # With no task running, casual messages go to the chat model directly;
+        # they must not spin up an OpenCode session just to say hello.
+        if self._admin_casual_message(clean):
+            self._start_admin_side_chat(contact_id, wxid, clean)
             return
 
         # The previous task may have ended between our check and its cleanup.
@@ -1981,6 +2299,10 @@ class RuntimeManager:
             if not task.done():
                 task.cancel()
         self._admin_tasks.clear()
+        for task in list(self._admin_side_tasks):
+            if not task.done():
+                task.cancel()
+        self._admin_side_tasks.clear()
         for task in list(self._proactive_tasks.values()):
             if not task.done():
                 task.cancel()

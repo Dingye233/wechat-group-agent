@@ -817,6 +817,82 @@ class AssistantService:
             "engine": "opencode",
         }
 
+    async def quick_chat(
+        self,
+        message: str,
+        *,
+        session_id: str,
+        persona: str = "",
+        task_status: str = "",
+        busy: bool = True,
+        temperature: float | None = None,
+    ) -> str:
+        """Reply to casual chat while a long task owns the main session.
+
+        This deliberately does not touch OpenCode or the tool loop: it is a
+        separate chat-model call so a running task can never block a simple
+        question or status check.
+        """
+        message = str(message or "").strip()
+        if not message:
+            return ""
+        async with SessionLocal() as db:
+            settings = await get_settings(db)
+        if not settings.get("llm_api_key"):
+            return "我这边还没配好模型，等配置好再跟你聊。"
+        rows = await history(session_id, limit=20)
+        transcript: list[str] = []
+        for row in rows:
+            if row.get("role") not in {"user", "assistant"}:
+                continue
+            content = _clip(str(row.get("content") or ""), 600).strip()
+            if not content:
+                continue
+            speaker = "用户" if row.get("role") == "user" else "我"
+            transcript.append(f"{speaker}：{content}")
+        recent = "\n".join(transcript[-12:]) or "（无）"
+        persona_text = str(
+            persona or settings.get("operator_persona") or ""
+        ).strip()
+        status_text = str(task_status or "后台任务仍在执行").strip()
+        if busy:
+            context_text = (
+                "现在后台有一个任务正在执行，用户发来的是闲聊、吐槽或状态询问，"
+                "不是新的任务指令。"
+            )
+        else:
+            context_text = "现在没有后台任务，你正在和用户闲聊。"
+        system_prompt = (
+            f"你是「群伴」的聊天人格。{context_text}"
+            "请直接、自然地回答，像微信聊天一样用简短中文段落；"
+            "不要调用工具，不要输出 Markdown，不要假装后台任务已经完成，"
+            "也不要编造进度。如果用户问进度，就结合给出的后台状态回答；"
+            "如果用户只是闲聊，就正常陪聊。"
+            f"\n当前后台状态：{status_text}"
+            + (f"\n人设：{persona_text}" if persona_text else "")
+        )
+        user_prompt = (
+            f"最近对话：\n{recent}\n\n"
+            f"用户刚刚说：{message}\n\n"
+            "请只输出要发给用户的回复正文。"
+        )
+        result = await self.llm.complete(
+            base_url=str(settings.get("llm_base_url") or ""),
+            api_key=str(settings.get("llm_api_key") or ""),
+            model=str(settings.get("llm_model") or ""),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.8 if temperature is None else float(temperature),
+            max_tokens=600,
+            json_mode=False,
+        )
+        reply = str(result.get("content") or "").strip()
+        if not reply:
+            reply = "我看到了。后台任务还在跑，等有结果我再详细跟你说。"
+        await _store(session_id, "user", message)
+        await _store(session_id, "assistant", reply)
+        return reply
+
     def _system_prompt(
         self,
         *,

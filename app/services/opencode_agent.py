@@ -536,6 +536,15 @@ class OpenCodeRuntime:
 
         started_ms = int(time.time() * 1000)
         started = time.monotonic()
+        last_event_at = started
+        try:
+            stall_timeout = float(
+                settings.get("opencode_stall_timeout_seconds") or 600.0
+            )
+        except (TypeError, ValueError):
+            stall_timeout = 600.0
+        if stall_timeout > 0:
+            stall_timeout = max(60.0, min(3600.0, stall_timeout))
         last_request_poll = 0.0
         texts: dict[str, str] = {}
         tool_states: dict[str, str] = {}
@@ -543,6 +552,7 @@ class OpenCodeRuntime:
         error = ""
         cancelled = False
         timed_out = False
+        stalled = False
 
         async def emit(event: dict[str, Any]) -> None:
             if progress is None:
@@ -579,6 +589,13 @@ class OpenCodeRuntime:
                     timed_out = True
                     await self.abort(session_id)
                     break
+                if (
+                    stall_timeout > 0
+                    and time.monotonic() - last_event_at > stall_timeout
+                ):
+                    stalled = True
+                    await self.abort(session_id)
+                    break
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
@@ -588,6 +605,7 @@ class OpenCodeRuntime:
                             sid, emit, permission_handler, question_handler
                         )
                     continue
+                last_event_at = time.monotonic()
                 etype = str(event.get("type") or "")
                 raw_data = event.get("data")
                 raw_props = event.get("properties")
@@ -688,6 +706,17 @@ class OpenCodeRuntime:
                 "trace": trace,
                 "model": model,
                 "cancelled": True,
+                "error": "",
+            }
+        if stalled:
+            return {
+                "reply": (
+                    f"后台任务超过 {int(stall_timeout)} 秒没有新进展，"
+                    "我已经自动中止，避免继续消耗 token。"
+                ),
+                "trace": trace,
+                "model": model,
+                "stalled": True,
                 "error": "",
             }
         if timed_out:

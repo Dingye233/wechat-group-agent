@@ -1055,6 +1055,17 @@ class AgentEngine:
             return
 
         reply = str(result.get("reply") or "").strip()
+        if result.get("stalled"):
+            await self._update_chat_task(
+                task_id,
+                "error",
+                error="OpenCode 长时间没有新进展，已自动中止",
+            )
+            await self._send_task_notice(
+                group.id,
+                "后台执行器长时间没有新进展，我已经自动中止了，避免继续消耗 token。",
+            )
+            return
         if result.get("timed_out") or (result.get("error") and not reply):
             await self._log(
                 group.id,
