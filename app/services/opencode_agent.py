@@ -182,6 +182,14 @@ class OpenCodeRuntime:
             if settings is None:
                 async with SessionLocal() as db:
                     settings = await get_settings(db)
+            if not (
+                _clean(settings.get("llm_base_url"))
+                and _clean(settings.get("llm_api_key"))
+                and _clean(settings.get("llm_model"))
+            ):
+                raise OpenCodeError(
+                    "请先在「设置」中配置群伴自己的模型 API：Base URL、API Key 和模型名。"
+                )
             self._prepare_dirs()
             token = _ensure_token()
             self.port = _free_port()
@@ -199,9 +207,6 @@ class OpenCodeRuntime:
                     "PYTHONUTF8": "1",
                 }
             )
-            key = _clean(settings.get("llm_api_key"))
-            if key:
-                env["DEEPSEEK_API_KEY"] = key
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             out = LOG_PATH.open("ab")
             err = ERR_PATH.open("ab")
@@ -302,10 +307,10 @@ class OpenCodeRuntime:
 
     def _write_config(self, settings: dict[str, Any], token: str) -> None:
         self._prepare_dirs()
-        base_url = _clean(settings.get("llm_base_url")) or "https://api.deepseek.com/v1"
+        base_url = _clean(settings.get("llm_base_url"))
         api_key = _clean(settings.get("llm_api_key"))
-        model = _clean(settings.get("llm_model")) or "deepseek-chat"
-        provider_id = "deepseek"
+        model = _clean(settings.get("llm_model"))
+        provider_id = "qunban"
         qunban_api = os.environ.get("QUNBAN_API_BASE", "http://127.0.0.1:8000")
         plugin_entries: list[Any] = []
         plugins_dir = DATA_DIR / "plugins"
@@ -487,7 +492,7 @@ class OpenCodeRuntime:
             async with SessionLocal() as db:
                 settings = await get_settings(db)
         await self.ensure_started(settings)
-        model = _clean(settings.get("llm_model")) or "deepseek-chat"
+        model = _clean(settings.get("llm_model"))
         async with httpx.AsyncClient(timeout=30) as client:
             sid = await self._ensure_session(client, session_id, settings)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1000)
@@ -515,7 +520,7 @@ class OpenCodeRuntime:
 
         payload: dict[str, Any] = {
             "parts": [{"type": "text", "text": message}],
-            "model": {"providerID": "deepseek", "modelID": model},
+            "model": {"providerID": "qunban", "modelID": model},
         }
         if system_prompt:
             payload["system"] = system_prompt
@@ -754,7 +759,7 @@ class OpenCodeRuntime:
         if settings is None:
             async with SessionLocal() as db:
                 settings = await get_settings(db)
-        model = _clean(settings.get("llm_model")) or "deepseek-chat"
+        model = _clean(settings.get("llm_model"))
         tools: list[dict[str, Any]] = []
         try:
             async with httpx.AsyncClient(timeout=15) as client:
@@ -777,7 +782,7 @@ class OpenCodeRuntime:
                     f"{self.url}/experimental/tool",
                     params={
                         "directory": str(WORKSPACE),
-                        "provider": "deepseek",
+                        "provider": "qunban",
                         "model": model,
                     },
                 )

@@ -3578,6 +3578,9 @@ async function loadOpenCode() {
           : '未找到官方 OpenCode，请运行 scripts/setup-opencode.ps1';
     }
     const data = await api('/opencode/tools');
+    if (data.error && statusLine) {
+      statusLine.textContent = `未启动：${data.error}`;
+    }
     const tools = [
       ...(data.tools || []),
       ...(data.mcp_tools || []).map((tool) => ({ ...tool, source: 'qunban-mcp' })),

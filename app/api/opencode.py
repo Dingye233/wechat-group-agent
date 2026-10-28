@@ -35,10 +35,12 @@ async def opencode_tools() -> dict:
     runtime = _runtime()
     async with SessionLocal() as db:
         settings = await get_settings(db)
+    start_error = ""
     if not runtime.running and settings.get("opencode_enabled", True):
         try:
             await runtime.ensure_started(settings)
         except Exception as exc:
+            start_error = str(exc)
             logger.warning("OpenCode 启动失败（工具面板）：%s", exc)
     tools = await runtime.tools(settings)
     plugins = await runtime.plugins()
@@ -62,6 +64,7 @@ async def opencode_tools() -> dict:
         "running": runtime.running,
         "version": (await runtime.status()).get("version", ""),
         "source": "https://github.com/anomalyco/opencode",
+        "error": start_error,
     }
 
 

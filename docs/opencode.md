@@ -12,7 +12,9 @@
   `data/opencode/opencode.db` 和 `data/opencode/xdg/`，不会污染用户已有的
   OpenCode 会话。
 - 模型：把群伴设置里的 `llm_base_url`、`llm_api_key`、`llm_model`
-  写成 OpenCode 的 OpenAI-compatible provider。
+  写成 OpenCode 的自定义 OpenAI-compatible provider。每个群伴用户配置自己的
+  服务端 API；群伴不内置 Key，也不读取 OpenCode 官方账号或云端免费模型。
+  该 API 需要支持 OpenAI-compatible Chat Completions 和 tool calling。
 - Agent：群伴只通过 OpenCode 的 `system` 参数注入人设、记忆、通道规则；
   工具调用、步骤、重试、压缩和会话历史都由 OpenCode 自己负责。
 - 群伴能力：`app/mcp_server.py` 作为本地 MCP server 启动，把微信、B站、

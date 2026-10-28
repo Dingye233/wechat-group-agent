@@ -5,7 +5,7 @@
 - **后端**：FastAPI + SQLAlchemy + SQLite，WebSocket 实时推送
 - **前端**：原生 HTML/CSS/JS 控制台，无需前端构建
 - **适配器**：演示模式；Windows 真实微信使用「微信 4.x（wechatauto-replica）」本地数据库读取 + UIA/OCR 发送，WeChatFerry 仅保留为实验备选
-- **模型**：任意 OpenAI Compatible API（DeepSeek / OpenAI / Moonshot / Qwen / Ollama…）
+- **模型**：任意 OpenAI Compatible API（DeepSeek / OpenAI / Moonshot / Qwen / Ollama…）；每个群伴用户自己配置 Base URL、Key 和模型，仓库不内置任何 Key
 - **表情包**：内置示例 + 上传 PNG/JPG/GIF/WEBP，模型按标签与语境自动选择
 - **可拓展**：适配器、事件总线、触发规则、人设、表情库均解耦
 
@@ -46,7 +46,7 @@
 
 「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 默认由 GitHub 官方 [OpenCode](https://github.com/anomalyco/opencode) 运行时执行，群伴不再复刻 agent loop：
 
-- **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。
+- **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。模型请求只使用群伴设置里每个用户自己的 Base URL / API Key / 模型，不读取 OpenCode 官方账号或内置 Key。
 - **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode；工具调用仍经过群伴的 capability 权限网关。
 - **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。
 
