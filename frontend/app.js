@@ -3165,7 +3165,27 @@ function populateAssistantConversationOptions() {
     ? state.assistantContacts
     : state.contacts;
   const options = [new Option('主对话（Operator）', 'main')];
-  for (const contact of contacts || []) {
+  const currentContactId = state.assistantConversationContactId;
+  const all = contacts || [];
+  const selected = all.find((contact) => contact.id === currentContactId);
+  const recent = all
+    .filter(
+      (contact) =>
+        contact.id !== currentContactId &&
+        (contact.last_message || contact.is_admin),
+    )
+    .sort((left, right) => {
+      const a = left.last_message?.created_at
+        ? new Date(left.last_message.created_at).getTime()
+        : 0;
+      const b = right.last_message?.created_at
+        ? new Date(right.last_message.created_at).getTime()
+        : 0;
+      return b - a;
+    })
+    .slice(0, 29);
+  if (selected) recent.unshift(selected);
+  for (const contact of recent) {
     const name = contact.name || contact.remark || contact.wxid || `联系人 ${contact.id}`;
     options.push(new Option(`私聊 · ${name}`, `contact:${contact.id}`));
   }
