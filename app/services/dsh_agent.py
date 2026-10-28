@@ -653,6 +653,7 @@ class DSHAgentRuntime:
                                     "engine": "dsh",
                                     "tool": item["tool"],
                                     "args": item["args"],
+                                    "call_id": call_id,
                                     "thought": "",
                                 }
                             )
@@ -677,8 +678,10 @@ class DSHAgentRuntime:
                                         or (item or {}).get("tool")
                                         or "tool"
                                     ),
+                                    "call_id": call_id,
                                     "ok": ok,
                                     "message": output[:220],
+                                    "output": output[:12000],
                                 }
                             )
                 elif kind == "final":

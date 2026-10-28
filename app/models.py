@@ -299,6 +299,31 @@ class AssistantMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class AssistantToolTask(Base):
+    """A tool call made by the private-chat/Operator DSH agent."""
+
+    __tablename__ = "assistant_tool_tasks"
+    __table_args__ = (
+        Index("ix_assistant_tool_tasks_session_status", "session_id", "status"),
+        Index("ix_assistant_tool_tasks_call", "call_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), default="main", index=True)
+    account_key: Mapped[str] = mapped_column(String(160), default="", index=True)
+    channel: Mapped[str] = mapped_column(String(24), default="dashboard")
+    call_id: Mapped[str] = mapped_column(String(96), default="")
+    tool_name: Mapped[str] = mapped_column(String(96), default="")
+    tool_input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    tool_output: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class AgentMemory(Base):
     __tablename__ = "agent_memories"
     __table_args__ = (

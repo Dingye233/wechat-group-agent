@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui17">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui17">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui19">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui19">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -409,7 +409,8 @@
               </div>
 
               <div class="assistant-panel" data-assistant-panel-body="tasks" hidden>
-                <div class="assistant-section-head"><strong>自我迭代任务</strong><button class="text-btn" id="assistant-refresh-tasks">刷新</button></div>
+                <div class="assistant-section-head"><strong>工具调用任务</strong><span class="assistant-head-actions"><button class="text-btn" id="assistant-refresh-tasks">刷新</button><button class="text-btn" id="assistant-clear-tasks">清空</button></span></div>
+                <p class="field-hint">私聊/助手对话中 DSH 分析到需要调用工具时，会实时显示在这里。</p>
                 <div class="assistant-memory-list" id="assistant-task-list"></div>
               </div>
 
@@ -1047,6 +1048,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui17" defer></script>
+  <script src="/app.js?v=20261029-ui19" defer></script>
 </body>
 </html>

@@ -13,7 +13,7 @@ from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
 from app.models import AgentMemory, AgentTask, AssistantMessage, Group, GroupConfig
-from app.services import assistant_tools, mem0_memory
+from app.services import assistant_tools, mem0_memory, tool_tasks
 from app.services.assistant import (
     AssistantService,
     cancel_session,
@@ -48,7 +48,7 @@ async def assistant_status(runtime: RuntimeManager = Depends(get_runtime)) -> di
                 select(func.count(AgentMemory.id)).where(AgentMemory.active.is_(True))
             )
         ).scalar() or 0
-        tasks = (await db.execute(select(func.count(AgentTask.id)))).scalar() or 0
+        tasks = int(await tool_tasks.count())
         messages = (await db.execute(select(func.count(AssistantMessage.id)))).scalar() or 0
     mem0_memory.warmup(settings)
     root = assistant_tools.workspace_root()
@@ -415,6 +415,20 @@ async def assistant_run_skill(name: str, payload: dict = Body(default={})) -> di
         )
     except Exception as exc:
         raise _tool_error(exc) from exc
+
+
+# ------------------------------------------------------------- tool tasks
+@router.get("/assistant/tool-tasks")
+async def assistant_tool_tasks(
+    limit: int = Query(default=50, ge=1, le=200)
+) -> dict:
+    return {"tasks": await tool_tasks.list_tasks(limit)}
+
+
+@router.delete("/assistant/tool-tasks")
+async def assistant_clear_tool_tasks() -> dict:
+    await tool_tasks.clear()
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------- tasks

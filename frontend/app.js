@@ -4797,21 +4797,63 @@ async function summarizeAssistantMemories() {
 
 async function loadAssistantTasks() {
   try {
-    const data = await api('/assistant/tasks');
+    const data = await api('/assistant/tool-tasks?limit=80');
     state.assistantTasks = data.tasks || [];
     const root = $('#assistant-task-list');
     if (!root) return;
     root.replaceChildren();
     if (!state.assistantTasks.length) {
-      root.appendChild(el('p', 'tool-empty', '还没有自我迭代任务。'));
+      root.appendChild(
+        el('p', 'tool-empty', '还没有工具调用任务。私聊里让 Agent 查天气、B站、记忆或知识库时，这里会实时出现。'),
+      );
       return;
     }
     for (const task of state.assistantTasks) {
-      const item = el('div', 'assistant-memory-item');
-      item.appendChild(el('strong', null, `#${task.id} ${task.title}`));
-      item.appendChild(el('p', null, task.detail || ''));
-      item.appendChild(el('span', 'tool-meta', `${task.status} · ${task.updated_at || ''}`));
-      if (task.result) item.appendChild(el('p', null, task.result));
+      const item = el(
+        'details',
+        `assistant-tool-task ${task.status || 'running'}`,
+      );
+      if (task.status === 'running') item.open = true;
+      else if (String(task.tool_output || '').length <= 700) item.open = true;
+      const summary = el('summary', 'assistant-tool-task-head');
+      summary.appendChild(el('strong', null, `⚙ ${task.tool_name || 'tool'}`));
+      summary.appendChild(
+        el(
+          'span',
+          `plugin-badge${task.status === 'error' ? ' danger' : task.status === 'done' ? ' accent' : ''}`,
+          task.status === 'running' ? '执行中' : task.status === 'done' ? '完成' : '失败',
+        ),
+      );
+      summary.appendChild(
+        el(
+          'span',
+          'assistant-tool-task-meta',
+          `${task.channel === 'wechat' ? '微信私聊' : '助手对话'} · ${task.session_id || ''}`,
+        ),
+      );
+      item.appendChild(summary);
+      const body = el('div', 'assistant-tool-task-body');
+      const input = assistantToolValue(task.tool_input);
+      if (input) {
+        body.appendChild(el('div', 'assistant-tool-label', '输入'));
+        body.appendChild(el('pre', 'assistant-tool-input', input));
+      }
+      body.appendChild(el('div', 'assistant-tool-label', '输出'));
+      body.appendChild(
+        el(
+          'pre',
+          'assistant-tool-output',
+          task.tool_output || (task.status === 'running' ? '执行中…' : '（无输出）'),
+        ),
+      );
+      body.appendChild(
+        el(
+          'p',
+          'assistant-tool-task-time',
+          `开始 ${task.created_at || '—'}${task.updated_at ? ` · 更新 ${task.updated_at}` : ''}`,
+        ),
+      );
+      item.appendChild(body);
       root.appendChild(item);
     }
   } catch (error) {
@@ -5739,6 +5781,17 @@ function bindAssistantActions() {
     if (event.key === 'Enter') loadAssistantMemories();
   });
   $('#assistant-refresh-tasks')?.addEventListener('click', loadAssistantTasks);
+  $('#assistant-clear-tasks')?.addEventListener('click', async () => {
+    if (!window.confirm('清空工具调用任务记录？')) return;
+    try {
+      await api('/assistant/tool-tasks', { method: 'DELETE' });
+      await loadAssistantTasks();
+      await loadAssistantStatus();
+      toast('工具调用任务已清空');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
   $('#assistant-refresh-capabilities')?.addEventListener('click', () =>
     loadAssistantCapabilities(true),
   );
@@ -6091,6 +6144,10 @@ function handleWsEvent(event) {
     }
     case 'assistant.progress':
       handleAssistantProgress(data);
+      break;
+    case 'assistant.tool_task':
+      if (state.assistantPanel === 'tasks') loadAssistantTasks();
+      loadAssistantStatus().catch(() => {});
       break;
     case 'bili.autopilot':
       biliAppendAutoLog(data);

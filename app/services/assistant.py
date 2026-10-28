@@ -20,7 +20,7 @@ from app.models import (
     Message,
     utcnow,
 )
-from app.services import assistant_tools, mem0_memory
+from app.services import assistant_tools, mem0_memory, tool_tasks
 from app.services.capabilities import (
     catalog_for_scope,
     check_tool_allowed,
@@ -889,6 +889,34 @@ class AssistantService:
         result: dict[str, Any] = {}
         final = ""
         pending_followup: list[str] = []
+
+        async def record_progress(event: dict[str, Any]) -> None:
+            try:
+                phase = str(event.get("phase") or "")
+                if phase == "tool":
+                    await tool_tasks.start(
+                        session_id=session_id,
+                        account_key=account_key,
+                        channel=channel,
+                        call_id=str(event.get("call_id") or ""),
+                        tool_name=str(event.get("tool") or "tool"),
+                        tool_input=event.get("args") if isinstance(event.get("args"), dict) else {},
+                        broadcast=self.runtime.broadcast if self.runtime else None,
+                    )
+                elif phase == "tool_result":
+                    await tool_tasks.finish(
+                        session_id=session_id,
+                        call_id=str(event.get("call_id") or ""),
+                        tool_name=str(event.get("tool") or "tool"),
+                        output=str(event.get("output") or event.get("message") or ""),
+                        ok=bool(event.get("ok", True)),
+                        broadcast=self.runtime.broadcast if self.runtime else None,
+                    )
+            except Exception:
+                logger.warning("记录私聊工具任务失败", exc_info=True)
+            if emit:
+                await emit(event)
+
         await emit(
             {
                 "phase": "start",
@@ -904,7 +932,7 @@ class AssistantService:
                 system_prompt=system_prompt,
                 settings=settings,
                 temperature=temperature,
-                progress=emit,
+                progress=record_progress,
                 cancel_event=cancel_event,
                 call_site="dsh.assistant" if engine == "dsh" else "opencode.assistant",
             )
