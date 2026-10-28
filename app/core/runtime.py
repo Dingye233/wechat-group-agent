@@ -1518,6 +1518,10 @@ class RuntimeManager:
             state["sent"] = int(state.get("sent") or 0) + 1
             state["last_sent"] = time.monotonic()
             return "收到你的新要求，已插入当前任务。"
+        if phase == "permission":
+            return f"已自动确认：{event.get('tool') or '权限'}"
+        if phase == "question":
+            return "已自动回答确认选项，继续执行"
         if phase == "tool":
             sent = int(state.get("sent") or 0)
             if sent >= int(state.get("max") or 6):
@@ -2019,6 +2023,7 @@ class RuntimeManager:
         text: str = "",
         sticker: Sticker | None = None,
         meta: dict[str, Any] | None = None,
+        files: list[Path] | None = None,
         reuse_chat: bool = False,
     ) -> bool:
         if not self.is_online or self.adapter is None:
@@ -2038,11 +2043,30 @@ class RuntimeManager:
             if final_segment
             else []
         )
-        file_paths = (
-            RuntimeManager._file_paths_from_trace(meta.get("tool_trace") or [])
-            if final_segment
-            else []
-        )
+        file_paths: list[Path] = []
+        if final_segment:
+            file_paths.extend(files or [])
+            file_paths.extend(
+                RuntimeManager._file_paths_from_trace(
+                    meta.get("tool_trace") or []
+                )
+            )
+        safe_files: list[Path] = []
+        seen_files: set[str] = set()
+        for item in file_paths:
+            try:
+                path = Path(item).resolve()
+                if not path.is_file():
+                    continue
+                if path.stat().st_size > 25 * 1024 * 1024:
+                    continue
+            except OSError:
+                continue
+            key = str(path)
+            if key not in seen_files:
+                seen_files.add(key)
+                safe_files.append(path)
+        file_paths = safe_files
         # Tool traces belong to logs/dashboard, not to chat message metadata.
         persist_meta = {
             key: value for key, value in meta.items() if key != "tool_trace"

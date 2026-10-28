@@ -348,21 +348,30 @@ class OpenCodeRuntime:
                         "最终用简洁中文说明真实结果。"
                     ),
                     "tools": {
-                        "bash": False,
-                        "edit": False,
-                        "write": False,
-                        "patch": False,
-                        "task": False,
+                        "bash": True,
+                        "edit": True,
+                        "write": True,
+                        "patch": True,
+                        "task": True,
                     },
                 }
             },
             "permission": {
-                "bash": "deny",
-                "edit": "deny",
-                "write": "deny",
-                "patch": "deny",
-                "question": "deny",
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "bash": "allow",
+                "task": "allow",
                 "external_directory": "allow",
+                "todowrite": "allow",
+                "question": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "lsp": "allow",
+                "doom_loop": "allow",
+                "skill": "allow",
             },
             "mcp": {
                 "qunban": {
@@ -463,8 +472,17 @@ class OpenCodeRuntime:
                                 event = json.loads(line[5:].strip())
                             except Exception:
                                 continue
-                            props = event.get("properties") or {}
-                            sid = str(props.get("sessionID") or "")
+                            raw_data = event.get("data")
+                            raw_props = event.get("properties")
+                            payload = {
+                                **(raw_data if isinstance(raw_data, dict) else {}),
+                                **(
+                                    raw_props
+                                    if isinstance(raw_props, dict)
+                                    else {}
+                                ),
+                            }
+                            sid = str(payload.get("sessionID") or "")
                             queue = self._queues.get(sid)
                             if queue is not None:
                                 with contextlib.suppress(asyncio.QueueFull):
@@ -487,6 +505,12 @@ class OpenCodeRuntime:
         progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         cancel_event: asyncio.Event | None = None,
         timeout: float = _PROMPT_TIMEOUT,
+        permission_handler: (
+            Callable[[dict[str, Any]], Awaitable[str]] | None
+        ) = None,
+        question_handler: (
+            Callable[[dict[str, Any]], Awaitable[list[list[str]]]] | None
+        ) = None,
     ) -> dict[str, Any]:
         if settings is None:
             async with SessionLocal() as db:
@@ -503,6 +527,7 @@ class OpenCodeRuntime:
 
         started_ms = int(time.time() * 1000)
         started = time.monotonic()
+        last_request_poll = 0.0
         texts: dict[str, str] = {}
         tool_states: dict[str, str] = {}
         trace: list[dict[str, Any]] = []
@@ -548,9 +573,33 @@ class OpenCodeRuntime:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    if time.monotonic() - last_request_poll >= 2.0:
+                        last_request_poll = time.monotonic()
+                        await self._drain_pending_requests(
+                            sid, emit, permission_handler, question_handler
+                        )
                     continue
                 etype = str(event.get("type") or "")
-                props = event.get("properties") or {}
+                raw_data = event.get("data")
+                raw_props = event.get("properties")
+                props = {
+                    **(raw_data if isinstance(raw_data, dict) else {}),
+                    **(raw_props if isinstance(raw_props, dict) else {}),
+                }
+                if etype in {
+                    "permission.asked",
+                    "permission.v2.asked",
+                    "permission.updated",
+                }:
+                    await self._handle_permission(
+                        props, emit, permission_handler
+                    )
+                    continue
+                if etype in {"question.asked", "question.v2.asked"}:
+                    await self._handle_question(
+                        props, emit, question_handler
+                    )
+                    continue
                 if etype == "message.part.updated":
                     part = props.get("part") or {}
                     ptype = str(part.get("type") or "")
@@ -658,6 +707,196 @@ class OpenCodeRuntime:
             "error": error,
             **usage,
         }
+
+    async def _drain_pending_requests(
+        self,
+        session_id: str,
+        emit: Callable[[dict[str, Any]], Awaitable[None]],
+        permission_handler: (
+            Callable[[dict[str, Any]], Awaitable[str]] | None
+        ),
+        question_handler: (
+            Callable[[dict[str, Any]], Awaitable[list[list[str]]]] | None
+        ),
+    ) -> None:
+        """Fallback poll for permission/question requests missed by events."""
+
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                for path, kind in (
+                    ("/permission", "permission"),
+                    ("/question", "question"),
+                ):
+                    response = await client.get(
+                        f"{self.url}{path}",
+                        params={"directory": str(WORKSPACE)},
+                    )
+                    if response.status_code != 200:
+                        continue
+                    rows = response.json()
+                    for row in rows if isinstance(rows, list) else []:
+                        if not isinstance(row, dict):
+                            continue
+                        if str(row.get("sessionID") or "") != session_id:
+                            continue
+                        if kind == "permission":
+                            await self._handle_permission(
+                                row, emit, permission_handler
+                            )
+                        else:
+                            await self._handle_question(
+                                row, emit, question_handler
+                            )
+        except Exception as exc:
+            logger.debug("OpenCode pending request poll failed: %s", exc)
+
+    async def _handle_permission(
+        self,
+        payload: dict[str, Any],
+        emit: Callable[[dict[str, Any]], Awaitable[None]],
+        handler: Callable[[dict[str, Any]], Awaitable[str]] | None,
+    ) -> None:
+        request_id = str(
+            payload.get("id")
+            or payload.get("requestID")
+            or payload.get("permissionID")
+            or ""
+        ).strip()
+        session_id = str(payload.get("sessionID") or "").strip()
+        permission = str(
+            payload.get("permission")
+            or payload.get("action")
+            or "permission"
+        )
+        patterns = payload.get("patterns") or payload.get("resources") or []
+        decision = "always"
+        if handler is not None:
+            try:
+                candidate = str(await handler(payload) or "").strip()
+                if candidate in {"once", "always", "reject"}:
+                    decision = candidate
+            except Exception as exc:
+                logger.debug("OpenCode permission handler failed: %s", exc)
+        ok = False
+        if request_id.startswith("per"):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.post(
+                        f"{self.url}/permission/{request_id}/reply",
+                        json={"reply": decision},
+                        params={"directory": str(WORKSPACE)},
+                    )
+                    if response.status_code != 200 and session_id:
+                        response = await client.post(
+                            f"{self.url}/session/{session_id}/permissions/{request_id}",
+                            json={"response": decision},
+                            params={"directory": str(WORKSPACE)},
+                        )
+                ok = response.status_code == 200
+            except Exception as exc:
+                logger.debug("OpenCode permission reply failed: %s", exc)
+        await emit(
+            {
+                "phase": "permission",
+                "tool": permission,
+                "patterns": patterns,
+                "reply": decision,
+                "ok": ok,
+            }
+        )
+
+    async def _handle_question(
+        self,
+        payload: dict[str, Any],
+        emit: Callable[[dict[str, Any]], Awaitable[None]],
+        handler: Callable[[dict[str, Any]], Awaitable[list[list[str]]]] | None,
+    ) -> None:
+        request_id = str(
+            payload.get("id") or payload.get("requestID") or ""
+        ).strip()
+        questions = payload.get("questions") or []
+        answers: list[list[str]] = []
+        if handler is not None:
+            try:
+                candidate = await handler(payload)
+                if isinstance(candidate, list):
+                    answers = [
+                        [str(item) for item in row]
+                        if isinstance(row, (list, tuple))
+                        else [str(row)]
+                        for row in candidate
+                    ]
+            except Exception as exc:
+                logger.debug("OpenCode question handler failed: %s", exc)
+        if not answers:
+            answers = self._default_question_answers(questions)
+        ok = False
+        if request_id.startswith("que"):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.post(
+                        f"{self.url}/question/{request_id}/reply",
+                        json={"answers": answers},
+                        params={"directory": str(WORKSPACE)},
+                    )
+                ok = response.status_code == 200
+            except Exception as exc:
+                logger.debug("OpenCode question reply failed: %s", exc)
+        await emit(
+            {
+                "phase": "question",
+                "questions": questions,
+                "answers": answers,
+                "ok": ok,
+            }
+        )
+
+    @staticmethod
+    def _default_question_answers(questions: Any) -> list[list[str]]:
+        answers: list[list[str]] = []
+        for item in questions if isinstance(questions, list) else []:
+            if not isinstance(item, dict):
+                continue
+            labels: list[str] = []
+            for option in item.get("options") or []:
+                if isinstance(option, dict):
+                    label = str(
+                        option.get("label")
+                        or option.get("value")
+                        or option.get("text")
+                        or ""
+                    ).strip()
+                else:
+                    label = str(option).strip()
+                if label:
+                    labels.append(label)
+            preferred = ""
+            for label in labels:
+                low = label.lower()
+                if (
+                    any(
+                        word in label
+                        for word in ("继续", "允许", "确定", "同意", "好的")
+                    )
+                    or low
+                    in {
+                        "yes",
+                        "allow",
+                        "approve",
+                        "always",
+                        "continue",
+                        "ok",
+                    }
+                ):
+                    preferred = label
+                    break
+            if preferred:
+                answers.append([preferred])
+            elif labels:
+                answers.append([labels[0]])
+            else:
+                answers.append(["按你的最佳判断继续"])
+        return answers
 
     @staticmethod
     def _describe_input(value: Any) -> str:

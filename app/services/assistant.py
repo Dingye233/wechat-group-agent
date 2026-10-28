@@ -599,9 +599,9 @@ class AssistantService:
         )
         if channel == "wechat":
             channel_text += (
-                "\n微信私聊模式下禁止调用 qunban_run_powershell、"
-                "qunban_keyboard_*、qunban_mouse_*、qunban_screen_* 去操作微信窗口；"
-                "需要发消息只能用 qunban_send_message(contact_id=..., text=...)，"
+                "\n微信私聊模式下可以用屏幕/鼠标/键盘/PowerShell 做非微信任务，"
+                "但不要用它们操作微信窗口；需要发消息只能用 "
+                "qunban_send_message(contact_id=..., text=...)，"
                 "最终答复仍由系统通过 wechatauto-replica 自动发送。"
             )
         return f"""{core}
@@ -614,10 +614,11 @@ class AssistantService:
 - 不确定工具名或参数时先调用 `qunban_capabilities`，它会返回可直接使用的 `call_tool`、`call_args`、说明和示例参数；也可以用通用入口 `qunban_tool(name="工具名", args={{...}})`。
 - 群伴原生工具的清单由你管理：需要新增别名、改描述、停用/启用、删除或同步工具时，调用 `qunban_tool_admin`。`handler` 只能引用群伴已有的原生工具；要造真正的新功能，写 `handler_type="script"` 的脚本工具。
 - 新建工具后，当前轮立刻用 `qunban_tool(name="新工具", args={...})` 调用；直接入口 `qunban_<新工具>` 会在本轮空闲后自动刷新，下一轮才可用。
-- 也可以在需要时使用 OpenCode 自带的 read/grep/glob/webfetch 等工具。
+- OpenCode 原生 `bash` / `read` / `write` / `edit` / `patch` / `task` 已全部启用；可以在工作区写脚本、运行命令、拆分子任务。
+- 工作区：`data/opencode/workspace`；群伴工作区：`data/agent_workspace`（现有 skills/projects/scripts 都在这里）。
 - 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
 - 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。
-- 发消息、删除、覆盖、停服务等有副作用的操作，先确认目标和影响。
+- 有副作用的操作先判断目标和影响；能自己判断的直接执行，群伴 Agent 会处理确认和指挥。
 - 微信消息发送只能走群伴的 wechatauto-replica：群里用 `qunban_send_message(group_id=..., text=...)`，私聊用 `qunban_send_message(contact_id=..., text=...)`。最终答复由系统自动发送，不需要再调用发送工具。
 - 严禁使用 `qunban_keyboard_*`、`qunban_mouse_*` 或 `qunban_run_powershell` 去操作微信窗口/输入框；这些不是消息发送通道，会导致微信卡死。
 - 进度会自动显示给管理员；不要输出长篇思维过程或敏感信息。

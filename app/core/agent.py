@@ -7,6 +7,7 @@ import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -113,7 +114,8 @@ class AgentEngine:
 5. 最合适的回复语气（tone）；
 6. 如果需要工具，给一句自然过渡语（ack），例如“我去看看”“我查一下”；
 7. 对这个用户的简短新印象（impression_note）和性格/偏好标签（traits）；
-8. 如果明确缺少能完成任务的工具，在 missing_capability 里写缺少什么。
+8. 如果明确缺少能完成任务的工具，在 missing_capability 里写缺少什么；
+9. 是否需要交给后台 OpenCode 执行器（delegate_to_opencode），以及给它的具体需求（opencode_brief）。
 
 规则：
 - 拿不准时 should_reply=true。
@@ -125,8 +127,10 @@ class AgentEngine:
 - 只有工具描述明确匹配任务时才选；不能为了凑数选 run_skill、run_mcp 或无关工具。
 - 做表格 / Excel / 点检表并要发到群里时，选 create_excel，把用户给的内容整理成 sheets[].rows；不要选屏幕控制类工具。
 - 工具列表里没有能完成任务的工具时，need_tools=false，并在 missing_capability 里写明缺少什么，不要假装能完成。
+- 需要写代码、写脚本、运行命令、读写工作区文件、生成 PPT/复杂文档、操作桌面或多个应用、多步工具编排，或现有群聊工具明显不够时，delegate_to_opencode=true，并把具体需求写进 opencode_brief。
+- 简单查天气、B站、点检表用群聊工具即可，不要委派；委派时 need_tools 可以为 false，should_reply=true。
 - 不要输出任何解释，只输出 JSON：
-{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":""}"""
+{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}"""
         user_prompt = f"""# 群聊
 - 群名：{group.name or '未知'}
 - 机器人：{self.runtime.bot_name or '小助手'}
@@ -208,6 +212,53 @@ class AgentEngine:
             ack = random.choice(
                 ["我去看看，稍等～", "我查一下，等我一下", "我去确认一下"]
             )
+        delegate = bool(data.get("delegate_to_opencode"))
+        brief = str(data.get("opencode_brief") or "")[:800]
+        content_text = str(message.content or "").lower()
+        complex_words = (
+            "写脚本",
+            "写个脚本",
+            "写代码",
+            "写个程序",
+            "python",
+            "ppt",
+            "幻灯片",
+            "爬虫",
+            "自动化",
+            "工作区",
+            "批量",
+            "多步",
+            "桌面",
+            "生成报告",
+            "运行脚本",
+            "命令行",
+            "宏",
+        )
+        if (
+            not delegate
+            and intent not in {"privacy", "spam"}
+            and not selected
+            and any(word in content_text for word in complex_words)
+        ):
+            delegate = True
+            brief = brief or str(message.content or "")[:600]
+            if intent == "chat":
+                intent = "task"
+        if intent in {"privacy", "spam"}:
+            delegate = False
+            brief = ""
+        if delegate:
+            should_reply = True
+            if not ack:
+                ack = random.choice(
+                    [
+                        "这个我得到后台跑一下，稍等～",
+                        "我去后台处理，弄好发你",
+                        "我安排一下，马上回来",
+                    ]
+                )
+            if not brief:
+                brief = str(message.content or "")[:600]
         return {
             "should_reply": should_reply,
             "intent": intent,
@@ -220,6 +271,8 @@ class AgentEngine:
             "traits": [str(item)[:30] for item in traits[:6]],
             "impression_note": str(data.get("impression_note") or "")[:240],
             "missing_capability": str(data.get("missing_capability") or "")[:120],
+            "delegate_to_opencode": delegate,
+            "opencode_brief": brief,
             "source": "planner",
         }
 
@@ -274,6 +327,32 @@ class AgentEngine:
                 selected = ["call_interface"]
             elif "视频" in text and "bili_knowledge_search" in allowed:
                 selected = ["bili_knowledge_search"]
+        complex_words = (
+            "写脚本",
+            "写个脚本",
+            "写代码",
+            "写个程序",
+            "python",
+            "ppt",
+            "幻灯片",
+            "爬虫",
+            "自动化",
+            "工作区",
+            "批量",
+            "多步",
+            "桌面",
+            "生成报告",
+            "运行脚本",
+            "命令行",
+            "宏",
+        )
+        delegate = (
+            not selected
+            and intent not in {"privacy", "spam"}
+            and any(word in text for word in complex_words)
+        )
+        if delegate:
+            intent = "task"
         emotion = next(
             (value for word, value in emotion_words.items() if word in text),
             "neutral",
@@ -286,10 +365,16 @@ class AgentEngine:
             "user_emotion": emotion,
             "emotion_intensity": 0.5,
             "tone": "warm",
-            "ack": "我去看看，稍等～" if selected else "",
+            "ack": (
+                "我去后台处理，稍等～"
+                if delegate
+                else ("我去看看，稍等～" if selected else "")
+            ),
             "traits": [],
             "impression_note": "",
             "missing_capability": "",
+            "delegate_to_opencode": delegate,
+            "opencode_brief": str(message.content or "")[:600] if delegate else "",
             "source": "fallback",
         }
 
@@ -456,6 +541,21 @@ class AgentEngine:
                 except Exception:
                     pass
 
+        if plan.get("delegate_to_opencode"):
+            await self._run_opencode_task(
+                task_id=task_id,
+                group=group,
+                config=config,
+                settings=settings,
+                message=message,
+                plan=plan,
+                context=context,
+                memory_text=memory_text,
+                impression=impression,
+                reason="planner 判定为复杂任务",
+            )
+            return
+
         try:
             reply_data, meta = await self._generate_llm(
                 message,
@@ -471,40 +571,74 @@ class AgentEngine:
                 force_tools=True,
             )
         except Exception as exc:
-            await self._update_chat_task(task_id, "error", error=str(exc))
+            await self._log(
+                group.id,
+                "opencode",
+                f"群聊工具执行失败，转交 OpenCode：{exc}",
+                level="warn",
+            )
+            await self._run_opencode_task(
+                task_id=task_id,
+                group=group,
+                config=config,
+                settings=settings,
+                message=message,
+                plan=plan,
+                context=context,
+                memory_text=memory_text,
+                impression=impression,
+                reason=f"群聊工具执行失败：{exc}",
+            )
             return
         if meta.get("tool_required_unmet"):
-            await self._update_chat_task(
-                task_id,
-                "error",
-                error="任务需要工具，但模型没有调用任何工具；已停止，避免编造结果",
+            await self._log(
+                group.id,
+                "opencode",
+                "群聊工具不足或模型没有调用工具，转交 OpenCode 继续",
+                level="warn",
             )
-            missing = str(plan.get("missing_capability") or "").strip()
-            text = (
-                f"这个任务需要{missing}，我这边没有能直接用的工具，先不糊弄你。"
-                if missing
-                else "这个任务我这边没有能直接用的工具，先不糊弄你。"
+            await self._run_opencode_task(
+                task_id=task_id,
+                group=group,
+                config=config,
+                settings=settings,
+                message=message,
+                plan=plan,
+                context=context,
+                memory_text=memory_text,
+                impression=impression,
+                reason="群聊工具不足，需要后台执行器",
             )
-            try:
-                await self.runtime.send_agent_message(
-                    group.id,
-                    text=text,
-                    meta={
-                        "source": "llm",
-                        "task_id": task_id,
-                        "task_blocked": True,
-                    },
-                )
-            except Exception:
-                pass
             return
         if reply_data is None:
-            await self._update_chat_task(task_id, "done", result="没有生成回复")
+            await self._run_opencode_task(
+                task_id=task_id,
+                group=group,
+                config=config,
+                settings=settings,
+                message=message,
+                plan=plan,
+                context=context,
+                memory_text=memory_text,
+                impression=impression,
+                reason="群聊模型没有生成回复",
+            )
             return
         async with SessionLocal() as db:
             segments = await self._build_segments(db, config, reply_data)
         if not segments:
-            await self._update_chat_task(task_id, "done", result="没有生成回复")
+            await self._run_opencode_task(
+                task_id=task_id,
+                group=group,
+                config=config,
+                settings=settings,
+                message=message,
+                plan=plan,
+                context=context,
+                memory_text=memory_text,
+                impression=impression,
+                reason="群聊模型返回空回复",
+            )
             return
         lock = self._locks.setdefault(group.id, asyncio.Lock())
         sent_text = ""
@@ -531,9 +665,347 @@ class AgentEngine:
                 except Exception as exc:
                     await self._update_chat_task(task_id, "error", error=str(exc))
                     return
+        self._mark_reply_sent(group.id, config)
         await self._update_chat_task(
             task_id, "done", result=(sent_text or "仅表情")[:4000]
         )
+
+    def _mark_reply_sent(self, group_id: int, config: GroupConfig) -> None:
+        now = time.time()
+        self._last_reply[group_id] = now
+        self._reply_times[group_id].append(now)
+        self._next_reply_at[group_id] = now + max(
+            int(config.cooldown_seconds or 0), 0
+        )
+
+    @staticmethod
+    def _split_plain_text(text: str, limit: int = 500) -> list[str]:
+        value = str(text or "").strip()
+        if not value:
+            return []
+        parts: list[str] = []
+        while value and len(parts) < 3:
+            if len(value) <= limit:
+                parts.append(value)
+                value = ""
+                break
+            cut = value.rfind("\n", 0, limit)
+            if cut < limit // 2:
+                cut = limit
+            parts.append(value[:cut].strip())
+            value = value[cut:].strip()
+        if value and parts:
+            parts[-1] = parts[-1].rstrip("…") + "…"
+        return [part for part in parts if part]
+
+    @staticmethod
+    def _clean_opencode_reply(text: str) -> str:
+        value = str(text or "").strip()
+        value = re.sub(r"```.*?```", "", value, flags=re.S)
+        value = re.sub(
+            r"(?m)^.*(?:文件路径|输出目录|保存路径|路径)[:：].*$\n?",
+            "",
+            value,
+        )
+        value = re.sub(r"[A-Za-z]:\\[^\s\n，。；、]+", "", value)
+        value = re.sub(
+            r"(?:data[\\/]agent_workspace[\\/]exports|exports[\\/]task-\d+)"
+            r"(?:[\\/][^\s，。；、]*)?",
+            "",
+            value,
+        )
+        value = re.sub(r"(?m)^\s*[-*]\s*", "", value)
+        value = value.replace("`", "")
+        value = re.sub(r"[ \t]+\n", "\n", value)
+        value = re.sub(r"\n{3,}", "\n\n", value)
+        value = re.sub(r"文件路径[:：]?\s*$", "", value)
+        value = value.strip()
+        return value or "任务跑完了，文件已经发你了。"
+
+    def _opencode_brief(
+        self,
+        *,
+        group: Group,
+        message: Message,
+        plan: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+        impression: dict[str, Any],
+        output_dir: Path,
+        reason: str,
+    ) -> str:
+        plan_view = {
+            key: plan.get(key)
+            for key in (
+                "intent",
+                "tools",
+                "missing_capability",
+                "opencode_brief",
+                "ack",
+            )
+        }
+        return f"""# 群伴任务
+- 群名：{group.name or '未知'}
+- 发送者：{message.sender_name or '未知'}（{message.sender_wxid or ''}）
+- 转交原因：{reason or '复杂任务'}
+- 原始需求：
+{message.content or ''}
+
+# 任务计划
+{json.dumps(plan_view, ensure_ascii=False)}
+
+# 最近上下文
+{chr(10).join(context[-10:])}
+
+# 长期记忆
+{(memory_text or '无')[:1500]}
+
+# 对这个人的印象
+{impression_prompt(impression or {})}
+
+# 输出要求
+- 需要生成文件时，写到：{output_dir}
+- 文件名要清晰，最多保留 6 个最终文件。
+- 完成后用简洁中文说明：实际做了什么、结果、生成了哪些文件、还有什么没完成。
+- 不要直接给群友发消息，不要操作微信窗口；最终由群伴 Agent 统一发送。
+- 群聊最终答复只写群友需要看的结果，用 1-3 句自然中文；不要写绝对路径、内部目录、代码块、工具名或 Markdown 清单，文件会由群伴自动附上。
+"""
+
+    def _opencode_task_system_prompt(self, output_dir: Path) -> str:
+        from app.services.assistant_tools import workspace_root
+        from app.services.opencode_agent import WORKSPACE
+
+        return f"""你是群伴的「后台执行器」，由 OpenCode 运行。群伴 Agent 已经把复杂任务转交给你。
+- 你的工作区：{WORKSPACE}
+- 群伴工作区：{workspace_root()}
+- 你可以写脚本、运行命令、读写文件、使用 OpenCode 原生工具和 qunban_* MCP 工具，也可以使用现有 skills/projects。
+- 需要生成文件时写到：{output_dir}
+- 不要直接给群友发消息，不要操作微信窗口；群伴 Agent 会统一发送结果。
+- 遇到权限确认或选择题，群伴 Agent 会自动确认；你按最合理的方案继续，不要停下来反复追问。
+- 最终说明实际做了什么、结果、文件路径、未完成项；不要声称未执行的事情。
+- 给群友的最终答复要短、自然，不要贴绝对路径或内部目录，文件会自动附带。
+"""
+
+    async def _run_opencode_task(
+        self,
+        *,
+        task_id: int,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        message: Message,
+        plan: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+        impression: dict[str, Any],
+        reason: str = "",
+    ) -> None:
+        from app.services.opencode_agent import OpenCodeError, get_opencode_runtime
+
+        output_dir = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "agent_workspace"
+            / "exports"
+            / f"task-{task_id}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        brief = self._opencode_brief(
+            group=group,
+            message=message,
+            plan=plan,
+            context=context,
+            memory_text=memory_text,
+            impression=impression,
+            output_dir=output_dir,
+            reason=reason,
+        )
+        system_prompt = self._opencode_task_system_prompt(output_dir)
+        session_id = f"group-task-{task_id}-{getattr(message, 'id', 0) or 0}"
+
+        async with SessionLocal() as db:
+            row = await db.get(ChatTask, task_id)
+            if row is not None:
+                row.plan = {
+                    **(row.plan or {}),
+                    "engine": "opencode",
+                    "output_dir": str(output_dir),
+                    "opencode_reason": reason,
+                }
+                await db.commit()
+                await db.refresh(row)
+                self.runtime.broadcast(
+                    "chat_task.updated", self._chat_task_dict(row)
+                )
+
+        async def on_progress(event: dict[str, Any]) -> None:
+            phase = str(event.get("phase") or "")
+            if phase == "tool":
+                tool = str(event.get("tool") or "tool")
+                thought = str(event.get("thought") or "").strip()
+                await self._log(
+                    group.id,
+                    "opencode",
+                    f"OpenCode 调用 {tool}：{thought[:160]}",
+                    level="info",
+                )
+            elif phase == "permission":
+                await self._log(
+                    group.id,
+                    "opencode",
+                    "已自动确认 OpenCode 权限："
+                    f"{event.get('tool') or ''} {event.get('patterns') or ''}",
+                    level="info",
+                )
+            elif phase == "question":
+                await self._log(
+                    group.id,
+                    "opencode",
+                    f"已自动回答 OpenCode 确认选项：{event.get('answers') or ''}",
+                    level="info",
+                )
+            elif phase == "tool_result" and event.get("ok") is False:
+                await self._log(
+                    group.id,
+                    "opencode",
+                    f"OpenCode 工具失败：{event.get('tool') or ''} "
+                    f"{str(event.get('message') or '')[:160]}",
+                    level="warn",
+                )
+
+        await self._log(
+            group.id,
+            "opencode",
+            f"任务 #{task_id} 转交 OpenCode：{reason or '复杂任务'}",
+            level="info",
+        )
+
+        runtime = get_opencode_runtime()
+        result: dict[str, Any] = {}
+        try:
+            result = await runtime.chat(
+                brief,
+                session_id=session_id,
+                system_prompt=system_prompt,
+                settings=settings,
+                progress=on_progress,
+                timeout=1800.0,
+            )
+        except OpenCodeError as exc:
+            await self._update_chat_task(
+                task_id, "error", error=f"OpenCode 执行失败：{exc}"
+            )
+            await self._send_task_notice(
+                group.id,
+                "后台执行器没跑起来，我已经把错误记下来了；稍后可以再让我试一次。",
+            )
+            return
+        except Exception as exc:
+            await self._update_chat_task(
+                task_id, "error", error=f"OpenCode 执行异常：{exc}"
+            )
+            await self._send_task_notice(
+                group.id,
+                "后台执行器出了点问题，我已经把错误记下来了。",
+            )
+            return
+
+        reply = str(result.get("reply") or "").strip()
+        if result.get("timed_out") or (result.get("error") and not reply):
+            await self._log(
+                group.id,
+                "opencode",
+                "OpenCode 超时或中断，继续一次",
+                level="warn",
+            )
+            try:
+                result = await runtime.chat(
+                    "继续完成刚才的任务，不要重复已经完成的步骤。"
+                    "完成后给出最终结果、文件路径和未完成项。",
+                    session_id=session_id,
+                    system_prompt=system_prompt,
+                    settings=settings,
+                    progress=on_progress,
+                    timeout=1800.0,
+                )
+                reply = str(result.get("reply") or "").strip()
+            except Exception as exc:
+                await self._update_chat_task(
+                    task_id, "error", error=f"OpenCode 继续执行失败：{exc}"
+                )
+                await self._send_task_notice(
+                    group.id,
+                    "后台执行器中断了，我没拿到最终结果，先把任务停在这里。",
+                )
+                return
+
+        if not reply:
+            await self._update_chat_task(
+                task_id, "error", error="OpenCode 没有返回结果"
+            )
+            await self._send_task_notice(
+                group.id,
+                "后台执行器跑完了，但没有返回可读结果，我先不糊弄你。",
+            )
+            return
+
+        reply = self._clean_reply(self._clean_opencode_reply(reply))
+        if not reply:
+            reply = "任务跑完了，但结果不太完整，我再整理一下。"
+        files: list[Path] = []
+        for path in sorted(output_dir.rglob("*")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            try:
+                if path.stat().st_size > 25 * 1024 * 1024:
+                    continue
+            except OSError:
+                continue
+            files.append(path)
+            if len(files) >= 6:
+                break
+
+        segments = self._split_plain_text(reply, 500) or [reply]
+        lock = self._locks.setdefault(group.id, asyncio.Lock())
+        sent_text = ""
+        async with lock:
+            for index, segment in enumerate(segments):
+                if index:
+                    await asyncio.sleep(random.uniform(0.5, 1.1))
+                try:
+                    await self.runtime.send_agent_message(
+                        group.id,
+                        text=segment,
+                        files=files if index == len(segments) - 1 else None,
+                        meta={
+                            "source": "opencode",
+                            "engine": "opencode",
+                            "task_id": task_id,
+                            "segment": index + 1,
+                            "segment_count": len(segments),
+                        },
+                        reuse_chat=index > 0,
+                    )
+                    sent_text += segment
+                except Exception as exc:
+                    await self._update_chat_task(
+                        task_id, "error", error=str(exc)
+                    )
+                    return
+        self._mark_reply_sent(group.id, config)
+        await self._update_chat_task(
+            task_id, "done", result=(sent_text or "OpenCode 完成")[:4000]
+        )
+
+    async def _send_task_notice(self, group_id: int, text: str) -> None:
+        try:
+            await self.runtime.send_agent_message(
+                group_id,
+                text=text,
+                meta={"source": "opencode", "task_notice": True},
+            )
+        except Exception:
+            pass
 
     async def _handle(self, group_id: int, message_id: int) -> None:
         if self.runtime.detached:
@@ -637,7 +1109,7 @@ class AgentEngine:
                     "本轮不参与",
                 )
                 return
-            if plan.get("need_tools"):
+            if plan.get("need_tools") or plan.get("delegate_to_opencode"):
                 task = await self._create_chat_task(
                     group=group,
                     message=message,
@@ -649,6 +1121,7 @@ class AgentEngine:
                     "task",
                     f"挂载任务 #{task['id']}：{plan.get('intent', 'task')} "
                     f"tools={plan.get('tools') or []} "
+                    f"delegate={bool(plan.get('delegate_to_opencode'))} "
                     f"{str(message.content or '')[:80]}",
                 )
                 self._start_chat_task(int(task["id"]))
@@ -1261,6 +1734,8 @@ class AgentEngine:
             "traits": [],
             "impression_note": "",
             "missing_capability": "",
+            "delegate_to_opencode": False,
+            "opencode_brief": "",
         }
         tool_payload = await catalog_for_scope("group")
         group_tools = tool_payload.get("tools") or []

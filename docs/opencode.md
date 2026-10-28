@@ -49,6 +49,16 @@
 - 停止：微信管理员发「停止」时，群伴调用 OpenCode 的
   `/session/{id}/abort`。
 
+## 群聊复杂任务转交
+
+- 群伴 Agent 先做意图和能力判断：查天气、B站、点检表等简单任务继续走群聊工具；写代码、写脚本、运行命令、生成 PPT/复杂文档、读写工作区文件、操作桌面或多步工具编排等复杂任务，会在 plan 里标记 `delegate_to_opencode`。
+- 复杂任务进入 `ChatTask` 后台队列，由群伴 Agent 创建独立的 OpenCode 会话执行；群伴先回一句自然过渡，不阻塞继续聊天。
+- OpenCode 原生 `bash` / `read` / `write` / `edit` / `patch` / `task` 已全部启用，`permission` 全部设为 `allow`；可以在 workspace 里写脚本、运行命令，也可以使用群伴 MCP 工具、现有 skills/projects。
+- OpenCode 工作区是 `data/opencode/workspace`；群伴工作区是 `data/agent_workspace`。任务需要发文件时，OpenCode 把文件写到 `data/agent_workspace/exports/task-<id>/`，由群伴 Agent 统一发送。
+- OpenCode 不直接给群友发消息；最终文本和文件由群伴 Agent 检查后通过 wechatauto-replica 发送。
+- 出现权限确认或选择题时，群伴 Agent 自动确认/选择，并把过程写入「Agent 动态」；不会让 OpenCode 卡在确认框。
+- 群聊工具执行失败、模型没有调用工具或没有返回结果时，会自动转交 OpenCode 继续；OpenCode 超时或报错会再继续一次，仍失败则任务标记错误。
+
 ## 工具与插件展示
 
 「助手 → OpenCode」面板会显示：
