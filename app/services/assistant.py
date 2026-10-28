@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -386,6 +387,26 @@ class AssistantService:
             return await self.runtime.list_group_payloads()
         if name in ("read_group_messages", "send_group_message", "set_group_access", "pin_group", "summarize_group"):
             return await self._admin_group_tool(name, args, settings)
+        if name == "send_contact_message":
+            contact_id = int(args.get("contact_id") or 0)
+            text = str(args.get("text") or "").strip()
+            if contact_id <= 0 or not text:
+                raise ValueError("contact_id 和 text 不能为空")
+            if self.runtime is None:
+                raise ValueError("运行时不可用")
+            await self.runtime.send_contact_message(
+                contact_id, text, is_agent=True
+            )
+            return {"ok": True, "contact_id": contact_id, "text": text}
+        if name == "send_contact_image":
+            contact_id = int(args.get("contact_id") or 0)
+            path = str(args.get("path") or "").strip()
+            if contact_id <= 0 or not path:
+                raise ValueError("contact_id 和 path 不能为空")
+            if self.runtime is None:
+                raise ValueError("运行时不可用")
+            await self.runtime.send_contact_image(contact_id, Path(path))
+            return {"ok": True, "contact_id": contact_id, "path": path}
         if name == "list_capabilities":
             from app.services.capabilities import list_capabilities as _list_caps
 
@@ -576,6 +597,13 @@ class AssistantService:
             if channel == "wechat"
             else "你在群伴后台的 Agent 对话中，可以使用 Markdown，但保持简洁、可执行。"
         )
+        if channel == "wechat":
+            channel_text += (
+                "\n微信私聊模式下禁止调用 qunban_run_powershell、"
+                "qunban_keyboard_*、qunban_mouse_*、qunban_screen_* 去操作微信窗口；"
+                "需要发消息只能用 qunban_send_message(contact_id=..., text=...)，"
+                "最终答复仍由系统通过 wechatauto-replica 自动发送。"
+            )
         return f"""{core}
 
 # 运行方式（官方 OpenCode）
@@ -590,6 +618,8 @@ class AssistantService:
 - 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
 - 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。
 - 发消息、删除、覆盖、停服务等有副作用的操作，先确认目标和影响。
+- 微信消息发送只能走群伴的 wechatauto-replica：群里用 `qunban_send_message(group_id=..., text=...)`，私聊用 `qunban_send_message(contact_id=..., text=...)`。最终答复由系统自动发送，不需要再调用发送工具。
+- 严禁使用 `qunban_keyboard_*`、`qunban_mouse_*` 或 `qunban_run_powershell` 去操作微信窗口/输入框；这些不是消息发送通道，会导致微信卡死。
 - 进度会自动显示给管理员；不要输出长篇思维过程或敏感信息。
 
 # 当前通道

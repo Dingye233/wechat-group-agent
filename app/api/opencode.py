@@ -305,6 +305,36 @@ async def opencode_tool(
         scope = "admin"
     if not name:
         raise HTTPException(status_code=400, detail="工具名不能为空")
+    if name.startswith(("keyboard_", "mouse_")) and not payload.get("allow_desktop"):
+        return {
+            "ok": False,
+            "tool": name,
+            "error": (
+                "桌面键鼠工具默认不允许由 OpenCode 调用。"
+                "发送微信消息请用 qunban_send_message；"
+                "确需桌面操作时由用户在设置中显式开启。"
+            ),
+        }
+    if name == "run_powershell":
+        command = str((args or {}).get("command") or "").lower()
+        blocked = (
+            "sendkeys",
+            "wechatauto",
+            "wechat",
+            "weixin",
+            "微信",
+            "sendmsg",
+            "uiautomation",
+        )
+        if any(token in command for token in blocked):
+            return {
+                "ok": False,
+                "tool": name,
+                "error": (
+                    "禁止用 PowerShell 操作微信窗口或模拟发送。"
+                    "微信消息请用 qunban_send_message(group_id/contact_id)。"
+                ),
+            }
 
     async with SessionLocal() as db:
         settings = await get_settings(db)

@@ -32,6 +32,8 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     {"name": "run_skill", "label": "运行技能", "desc": "执行技能的 run.ps1/run.py", "risk": "high"},
     {"name": "save_memory", "label": "保存记忆", "desc": "保存长期记忆", "risk": "low"},
     {"name": "search_memories", "label": "搜索记忆", "desc": "检索长期记忆", "risk": "low"},
+    {"name": "send_contact_message", "label": "发送私聊消息", "desc": "给微信联系人发送文本，走 wechatauto-replica", "risk": "high"},
+    {"name": "send_contact_image", "label": "发送私聊图片", "desc": "给微信联系人发送图片，走 wechatauto-replica", "risk": "high"},
     {"name": "create_task", "label": "创建任务", "desc": "创建自我迭代任务", "risk": "low"},
     {"name": "update_task", "label": "更新任务", "desc": "更新任务状态/结果", "risk": "low"},
     {"name": "list_tasks", "label": "任务列表", "desc": "列出自我迭代任务", "risk": "low"},

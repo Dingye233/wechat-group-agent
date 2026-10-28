@@ -403,6 +403,8 @@ def _add_manifest_tool(entry: dict[str, Any]) -> None:
     handler = str(entry.get("handler") or name).strip()
     if not name or not handler or name in CURATED_TOOL_NAMES:
         return
+    if name.startswith(("keyboard_", "mouse_")) and not entry.get("allow_desktop"):
+        return
     try:
         server.remove_tool(name)
     except Exception:

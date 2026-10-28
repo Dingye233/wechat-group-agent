@@ -55,6 +55,8 @@ def _seed_entry(item: dict[str, Any]) -> dict[str, Any]:
     name = str(item.get("name") or "").strip()
     args = item.get("args") if isinstance(item.get("args"), dict) else {}
     desc = str(item.get("desc") or "群伴原生工具")
+    if name == "run_powershell":
+        desc += "；禁止用 PowerShell 操作微信窗口或模拟发送消息，微信发送只能走 send_contact_message/send_group_message"
     return {
         "name": name,
         "description": f"{desc}。参数示例：{json.dumps(args, ensure_ascii=False)}",
@@ -119,6 +121,20 @@ def load_manifest() -> dict[str, Any]:
         data = {}
     if not isinstance(data, dict) or not isinstance(data.get("tools"), list):
         data = {"version": 1, "managed_by": "opencode", "tools": default_entries()}
+        _write(data)
+    # Desktop input simulation must never be the message-send path.  It stays
+    # available in the legacy capability panel, but OpenCode tools are off
+    # unless a user explicitly sets allow_desktop=true.
+    changed = False
+    for row in data.get("tools") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        if name.startswith(("keyboard_", "mouse_")) and not row.get("allow_desktop"):
+            if row.get("enabled", True):
+                row["enabled"] = False
+                changed = True
+    if changed:
         _write(data)
     return data
 
@@ -185,6 +201,7 @@ def _normalise_tool(payload: dict[str, Any], existing: dict[str, Any] | None = N
     if not isinstance(args_example, dict):
         raise ValueError("args_example 必须是对象")
     enabled = payload.get("enabled", row.get("enabled", True))
+    allow_desktop = payload.get("allow_desktop", row.get("allow_desktop", False))
     row.update(
         {
             "name": name,
@@ -194,6 +211,7 @@ def _normalise_tool(payload: dict[str, Any], existing: dict[str, Any] | None = N
             "script": script,
             "args_example": args_example,
             "enabled": bool(enabled),
+            "allow_desktop": bool(allow_desktop),
             "source": row.get("source") or "opencode",
             "managed_by": "opencode",
             "updated_at": _now(),

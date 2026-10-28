@@ -35,6 +35,11 @@
 - 群伴 MCP 项目 / 技能 / 接口：分别通过 `qunban_run_mcp`、
   `qunban_run_skill`、`qunban_call_interface` 调用；`qunban_capabilities`
   会返回可直接使用的工具名、示例参数和 `call_tool` / `call_args` 提示。
+- 微信发送：必须走 wechatauto-replica 的 `qunban_send_message` /
+  `send_contact_message` 链路。OpenCode 默认不注册 `keyboard_*` / `mouse_*`；
+  wechatauto 发送前会先打开目标会话并确认输入框，确认不了就取消，不会盲打键盘。
+- OpenCode 的 `run_powershell` 会拦截包含 `SendKeys`、`wechatauto`、`WeChat`、
+  `微信`、`SendMsg` 等微信操作关键词的命令，防止再用 PowerShell 模拟回复。
 - B站看法 → 评论：自动刷视频会生成 `opinion`；评论动作通过
   `bili_comment` 工具发送，若模型未填写 `comment_text`，会直接使用
   `opinion`。Agent 也可以先调用 `bili_last_opinion`，再调用

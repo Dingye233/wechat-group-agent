@@ -1779,12 +1779,49 @@ class ReplicaAdapter(BaseAdapter):
     async def send_text(self, room_id: str, text: str) -> None:
         await asyncio.to_thread(self._send_text_sync, room_id, text)
 
+    def _prepare_send_gui(self, raw: str) -> Any:
+        """Bind wechatauto to the current WeChat window and pre-open the chat.
+
+        This is deliberately done before ``SendMsg``: if the UIA/OCR driver
+        cannot open the target chat or find the input box, abort instead of
+        letting wechatauto blind-type into whatever window has focus.
+        """
+        self._ensure_attached()
+        try:
+            self.recover_window()
+        except Exception:
+            with self._lock:
+                self._wx = None
+        wx = self._ensure_wx()
+        gui = getattr(wx, "_gui", None)
+        if gui is not None:
+            try:
+                gui.ensure_visible()
+            except Exception:
+                pass
+            try:
+                # Re-assert the UIA accessibility gate after a WeChat restart.
+                gui._get_uia(refresh=True)
+            except Exception:
+                pass
+        if not wx.ChatWith(raw, exact=False):
+            raise RuntimeError(
+                "wechatauto 无法打开目标会话或输入框，已取消发送，"
+                "避免键盘误输入到其他窗口"
+            )
+        if gui is not None and not gui.get_input_box():
+            raise RuntimeError(
+                "wechatauto 未识别到微信输入框，已取消发送，"
+                "避免键盘误输入到其他窗口"
+            )
+        return wx
+
     def _send_text_sync(self, room_id: str, text: str) -> None:
         self._ensure_attached()
         raw = self._room_raw(room_id)
 
         def task() -> Any:
-            wx = self._ensure_wx()
+            wx = self._prepare_send_gui(raw)
             return wx.SendMsg(text, who=raw)
 
         self._send_with_retry(
@@ -1806,7 +1843,7 @@ class ReplicaAdapter(BaseAdapter):
         raw = self._room_raw(room_id)
 
         def task() -> Any:
-            wx = self._ensure_wx()
+            wx = self._prepare_send_gui(raw)
             # Use the replica public API for sticker/image delivery. WeChat
             # stores the resulting message as an image row, which the DB
             # listener reads back normally.
