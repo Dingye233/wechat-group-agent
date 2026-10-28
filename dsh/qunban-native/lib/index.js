@@ -535,7 +535,15 @@ async function loadCapabilityTools(attempt = 0) {
 
 const capabilityTools = await loadCapabilityTools()
 
+const DENY_TOOLS = String(process.env.QUNBAN_DENY_TOOLS || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean)
+
 export function apply(ctx) {
+  if (DENY_TOOLS.length && typeof ctx.tools?.restrict === 'function') {
+    ctx.tools.restrict({ deny: DENY_TOOLS })
+  }
   for (const item of [...tools, ...capabilityTools]) {
     if (TOOLSET === 'primary' && item.name === 'wechat_send_message') continue
     ctx.tools.register(item)

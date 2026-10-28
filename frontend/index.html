@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui19">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui19">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui21">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui21">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -602,7 +602,7 @@
                 <section class="plugin-card">
                   <div class="plugin-card-head"><strong>已安装 DSH 插件</strong><span class="plugin-count" id="plugin-installed-count">0</span></div>
                   <div class="plugin-mini-list" id="plugin-installed"></div>
-                  <p class="field-hint">群伴原生插件、导入包和生成插件都在这里。内置插件也可单独启停；关闭核心插件会先显示风险提示。</p>
+                  <p class="field-hint">每个插件有私聊/群聊两个开关；关闭核心插件会先显示风险提示。</p>
                   <p class="field-hint" id="plugin-qunban-tools-hint">群伴工具加载中…</p>
                 </section>
 
@@ -613,7 +613,7 @@
                   </label>
                   <label class="check-row"><input type="checkbox" id="plugin-import-enabled" checked><span>导入后立即启用</span></label>
                   <button class="btn btn-primary plugin-wide" id="plugin-import-btn"><span data-icon="upload"></span>导入到 DSH profile</button>
-                  <p class="field-hint">导入的插件会执行任意 JavaScript，只安装你信任的包。下一次 DSH 任务或主链路重启后生效。</p>
+                  <p class="field-hint">导入后 DSH 会先读 README、校验插件并按私聊/群聊拆分工具；默认偏保守，可在插件行里再调整两个通道开关。</p>
                 </section>
 
                 <section class="plugin-card plugin-create-card">
@@ -629,10 +629,14 @@
                       <textarea id="plugin-create-requirements" rows="3" placeholder="描述输入、输出、调用条件。DSH 会据此写 lib/index.js，并自检。"></textarea>
                     </label>
                   </div>
-                  <label class="check-row"><input type="checkbox" id="plugin-create-agent" checked><span>让 DSH 编写实现（较慢，但会按需求生成）</span></label>
+                  <div class="plugin-channel-create">
+                    <label class="check-row"><input type="checkbox" id="plugin-create-private" checked><span>私聊可用</span></label>
+                    <label class="check-row"><input type="checkbox" id="plugin-create-group"><span>群聊可用</span></label>
+                  </div>
+                  <label class="check-row"><input type="checkbox" id="plugin-create-agent" checked><span>让 DSH 编写实现（会同时按通道要求拆分工具）</span></label>
                   <label class="check-row"><input type="checkbox" id="plugin-create-enabled" checked><span>生成后立即启用</span></label>
                   <button class="btn btn-primary plugin-wide" id="plugin-create-btn"><span data-icon="sparkles"></span>生成并安装</button>
-                  <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件，方便之后继续改。</p>
+                  <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件。群聊插件不得包含微信发送、删除文件等高风险工具。</p>
                 </section>
               </div>
 
@@ -1048,6 +1052,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui19" defer></script>
+  <script src="/app.js?v=20261029-ui21" defer></script>
 </body>
 </html>

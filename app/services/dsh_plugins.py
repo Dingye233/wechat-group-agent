@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.services import plugin_policy
 from app.services.dsh_runtime import (
     DATA_DIR,
     HOME_DIR,
@@ -48,7 +49,6 @@ PROFILE_DIR = HOME_DIR / "profiles" / PROFILE
 PATCH_PATH = PROFILE_DIR / "cordis.patch.yml"
 STUDIO_DIR = DATA_DIR / "studio"
 MANIFEST_PATH = STUDIO_DIR / "index.json"
-TOGGLES_PATH = PROFILE_DIR / "plugin-toggles.json"
 CACHE_TTL = 20.0
 
 _CRITICAL_IDS = {
@@ -179,7 +179,7 @@ def _slug(value: str) -> str:
 
 def _read_json(path: Path, default: Any) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return default
 
@@ -427,6 +427,11 @@ def catalog() -> dict[str, Any]:
             continue
         seen_names.add(name)
         package = _package_json(name)
+        plugin_id = str(entry.get("id") or "")
+        enabled = not entry.get("disabled")
+        plugin_policy.ensure_builtin(
+            plugin_id, name=name, enabled=enabled
+        )
         builtin.append(
             {
                 **entry,
@@ -437,9 +442,11 @@ def catalog() -> dict[str, Any]:
                 if isinstance(package.get("dsh"), dict)
                 and "bundle" in (package.get("dsh") or {})
                 else "plugin",
-                "active": not entry.get("disabled"),
+                "active": enabled,
                 "core": _category(entry) == "核心"
-                or str(entry.get("id") or "") in _CRITICAL_IDS,
+                or plugin_id in _CRITICAL_IDS,
+                "channels": plugin_policy.channels(plugin_id, name=name),
+                "locked": plugin_policy.locked(plugin_id),
             }
         )
     for item in _OPTIONAL:
@@ -455,6 +462,8 @@ def catalog() -> dict[str, Any]:
                 "active": False,
                 "installed": _package_installed(item["name"]),
                 "core": False,
+                "channels": {"private": False, "group": False},
+                "locked": {"private": False, "group": False},
             }
         )
     builtin.sort(
@@ -470,6 +479,12 @@ def catalog() -> dict[str, Any]:
     installed: list[dict[str, Any]] = []
     native_entry = PROFILE_DIR / "node_modules" / "@qunban" / "dsh-native"
     if native_entry.exists():
+        plugin_policy.ensure(
+            "qunban-native",
+            name="@qunban/dsh-native",
+            private=True,
+            group=True,
+        )
         installed.append(
             {
                 "id": "qunban-native",
@@ -481,6 +496,7 @@ def catalog() -> dict[str, Any]:
                 "installed": True,
                 "core": True,
                 "critical": True,
+                "channels": plugin_policy.channels("qunban-native", name="@qunban/dsh-native"),
             }
         )
     for name in sorted(dependencies):
@@ -488,9 +504,11 @@ def catalog() -> dict[str, Any]:
             continue
         package = _read_json(PROFILE_DIR / "node_modules" / name / "package.json", {})
         row = entries.get(name, {})
+        plugin_id = str(row.get("id") or _slug(name.split("/")[-1]))
+        plugin_policy.ensure(plugin_id, name=name, private=True, group=False)
         installed.append(
             {
-                "id": row.get("id") or _slug(name.split("/")[-1]),
+                "id": plugin_id,
                 "name": name,
                 "version": package.get("version") or str(dependencies.get(name) or ""),
                 "description": package.get("description")
@@ -498,6 +516,7 @@ def catalog() -> dict[str, Any]:
                 "disabled": bool(row.get("disabled")),
                 "source": "imported",
                 "installed": _package_installed(name),
+                "channels": plugin_policy.channels(plugin_id, name=name),
             }
         )
 
@@ -510,13 +529,17 @@ def catalog() -> dict[str, Any]:
             continue
         name = str(item.get("name") or "")
         row = entries.get(name, {})
+        plugin_id = str(item.get("id") or f"studio-{item.get('slug') or _slug(name)}")
+        plugin_policy.ensure(plugin_id, name=name, private=True, group=False)
         generated.append(
             {
                 **item,
+                "id": plugin_id,
                 "disabled": bool(row.get("disabled")),
                 "enabled": not bool(row.get("disabled")),
                 "installed": _package_installed(name),
                 "source": "studio",
+                "channels": plugin_policy.channels(plugin_id, name=name),
             }
         )
 
@@ -687,6 +710,133 @@ def start_import(spec: str, *, enabled: bool = True) -> dict[str, Any]:
     return job.public()
 
 
+def _read_readme(package_name: str, source: Path) -> str:
+    candidates = [
+        source / "README.md",
+        source / "readme.md",
+        source / "Readme.md",
+        source / "README.MD",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8", errors="replace")[:16000]
+        except Exception:
+            continue
+    try:
+        package = source / "node_modules" / package_name / "README.md"
+        if package.is_file():
+            return package.read_text(encoding="utf-8", errors="replace")[:16000]
+    except Exception:
+        pass
+    return ""
+
+
+def _json_from_reply(text: str) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", raw, re.S)
+    if not match:
+        return {}
+    try:
+        value = json.loads(match.group(0))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+async def _review_import(
+    job: PluginJob,
+    package_name: str,
+    source: Path,
+) -> dict[str, Any]:
+    """Ask DSH to read the plugin README and split its tools by channel."""
+    readme = _read_readme(package_name, source)
+    package = _read_json(source / "package.json", {})
+    default = {"private": True, "group": False, "tools": {}, "summary": "默认仅私聊"}
+    if not readme:
+        return {**default, "summary": "未找到 README，保守起见默认仅私聊"}
+    _log(job, f"读取 README（{len(readme)} 字符），交给 DSH 做插件校验和功能分离…")
+    prompt = f"""你是 DSH 插件导入审查器。阅读下面的插件 README 和 package 信息，判断这个第三方插件应该允许在哪些通道使用，并把它的工具按通道拆分。
+
+# 输出要求
+只输出一个 JSON 对象，不要 Markdown 代码块：
+{{
+  "private": true,
+  "group": false,
+  "tools": {{
+    "tool_name": {{"private": true, "group": false}}
+  }},
+  "summary": "一句话说明",
+  "risk": "主要风险"
+}}
+
+规则：
+1. 默认 group=false；只有当 README 明确说明该插件适合群聊、且没有群发/删除/写文件等高风险能力时，才允许 group=true。
+2. private 可以是 true；如果插件会发微信消息、操作系统、读敏感文件，private 也应保守评估。
+3. tools 必须列出 README 中出现或能从 package 推断的工具名；无法确定时留空。
+4. 工具名要能与插件注册到 DSH 的 name 对上；不要编造不存在的工具。
+5. 这是安全审查，不确定就收紧权限。
+
+# package.json
+{json.dumps(package, ensure_ascii=False)[:4000]}
+
+# README
+{readme[:14000]}
+"""
+    try:
+        from app.db import SessionLocal
+        from app.services.dsh_agent import get_dsh_agent_runtime
+        from app.services.settings import get_settings
+
+        async with SessionLocal() as db:
+            settings = await get_settings(db)
+        result = await get_dsh_agent_runtime().chat(
+            prompt,
+            session_id=f"plugin-review-{job.id}",
+            settings=settings,
+            timeout=150,
+            scope="assistant",
+            call_site="dsh.plugin_review",
+        )
+        reply = str(result.get("reply") or "")
+        value = _json_from_reply(reply)
+        if not value:
+            return {**default, "summary": "DSH 未返回可解析结果，默认仅私聊"}
+        tools = value.get("tools")
+        clean_tools: dict[str, Any] = {}
+        if isinstance(tools, dict):
+            for name, policy in tools.items():
+                if not name or not isinstance(policy, dict):
+                    continue
+                clean_tools[str(name)] = {
+                    "private": bool(policy.get("private", True)),
+                    "group": bool(policy.get("group", False)),
+                }
+        _log(
+            job,
+            "DSH 校验完成："
+            f"{str(value.get('summary') or '')[:120]}；工具 {len(clean_tools)} 个",
+        )
+        return {
+            "private": bool(value.get("private", True)),
+            "group": bool(value.get("group", False)),
+            "tools": clean_tools,
+            "summary": str(value.get("summary") or "")[:500],
+            "risk": str(value.get("risk") or "")[:500],
+        }
+    except Exception as exc:
+        logger.warning("DSH 插件导入审查失败: %s", exc, exc_info=True)
+        _log(job, f"DSH 审查失败，使用保守默认（仅私聊）：{exc}")
+        return {**default, "summary": "审查失败，默认仅私聊"}
+
+
 async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
     global _DUMP_CACHE
     async with _LOCK:
@@ -729,7 +879,20 @@ async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
                 package_name = added[0] if added else package_name
             if not package_name:
                 raise RuntimeError("无法解析插件包名")
+            plugin_path = (
+                source
+                if local
+                else PROFILE_DIR / "node_modules" / package_name
+            )
+            review = await _review_import(job, package_name, plugin_path)
             plugin_id = _ensure_patch_entry(package_name, enabled=enabled)
+            plugin_policy.set_channels(
+                plugin_id,
+                name=package_name,
+                private=bool(review.get("private", True)) and bool(enabled),
+                group=bool(review.get("group", False)) and bool(enabled),
+                tools=review.get("tools") if isinstance(review.get("tools"), dict) else {},
+            )
             _DUMP_CACHE = None
             _finish(
                 job,
@@ -737,7 +900,12 @@ async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
                     "package": package_name,
                     "id": plugin_id,
                     "enabled": enabled,
-                    "next": "下一次 DSH 任务会自动加载；如未出现，请在面板刷新或重启服务。",
+                    "private": bool(review.get("private", True)),
+                    "group": bool(review.get("group", False)),
+                    "tools": review.get("tools") or {},
+                    "summary": review.get("summary") or "",
+                    "risk": review.get("risk") or "",
+                    "next": "已按通道策略挂载；私聊/群聊开关可随时调整。",
                 },
             )
         except Exception as exc:
@@ -794,6 +962,10 @@ def _write_scaffold(slug: str, description: str, requirements: str) -> Path:
             "main": "lib/index.js",
             "exports": {".": "./lib/index.js"},
             "description": description,
+            "qunban": {
+                "channels": {"private": True, "group": False},
+                "tools": {},
+            },
         },
     )
     (target / "lib" / "index.js").write_text(
@@ -829,7 +1001,14 @@ def _validate_plugin(target: Path) -> None:
         raise RuntimeError((proc.stderr or proc.stdout)[-1200:])
 
 
-def _install_generated(slug: str, target: Path, *, enabled: bool = True) -> str:
+def _install_generated(
+    slug: str,
+    target: Path,
+    *,
+    enabled: bool = True,
+    private: bool = True,
+    group: bool = False,
+) -> str:
     global _DUMP_CACHE
     package = _read_json(target / "package.json", {})
     name = str(package.get("name") or f"@qunban/{slug}")
@@ -867,6 +1046,15 @@ def _install_generated(slug: str, target: Path, *, enabled: bool = True) -> str:
     items = [item for item in items if not (isinstance(item, dict) and item.get("slug") == slug)]
     items.append(record)
     _write_json(MANIFEST_PATH, {"plugins": items})
+    plugin_policy.set_channels(
+        plugin_id,
+        name=name,
+        private=bool(private) and bool(enabled),
+        group=bool(group) and bool(enabled),
+        tools=package.get("qunban", {}).get("tools")
+        if isinstance(package.get("qunban"), dict)
+        else {},
+    )
     _DUMP_CACHE = None
     return plugin_id
 
@@ -878,12 +1066,18 @@ def start_create(
     *,
     use_agent: bool = True,
     enabled: bool = True,
+    private: bool = True,
+    group: bool = False,
 ) -> dict[str, Any]:
     slug = _slug(name)
     if len(slug) < 2:
         raise ValueError("插件名至少 2 个字符")
     job = _new_job("create", f"创建插件 @qunban/{slug}")
-    _spawn(_create_job(job, slug, description, requirements, use_agent, enabled))
+    _spawn(
+        _create_job(
+            job, slug, description, requirements, use_agent, enabled, private, group
+        )
+    )
     return job.public()
 
 
@@ -894,6 +1088,8 @@ async def _create_job(
     requirements: str,
     use_agent: bool,
     enabled: bool,
+    private: bool = True,
+    group: bool = False,
 ) -> None:
     async with _LOCK:
         try:
@@ -914,6 +1110,8 @@ async def _create_job(
 - 工具参数、输出 schema 必须显式写 `additionalProperties`，output 必须提供 `render`。
 - 只写这个目录，不要安装、不要修改群伴其他文件、不要直接操作微信。
 - 完成后运行 `node --check lib/index.js` 自检，最后回复 DONE。
+- 通道要求：私聊可用={"是" if private else "否"}，群聊可用={"是" if group else "否"}。
+- 在 package.json 写入 `"qunban": {{"tools": {{}}}}`，并在 lib/index.js 中把只允许私聊的工具、只允许群聊的工具分开；群聊工具不得调用微信发送、删除文件等高风险能力。
 用户需求：
 {requirements}
 """
@@ -932,7 +1130,9 @@ async def _create_job(
             _log(job, "校验插件…")
             _validate_plugin(target)
             _log(job, "安装到 qunban profile…")
-            plugin_id = _install_generated(slug, target, enabled=enabled)
+            plugin_id = _install_generated(
+                slug, target, enabled=enabled, private=private, group=group
+            )
             _finish(
                 job,
                 result={
@@ -941,7 +1141,9 @@ async def _create_job(
                     "id": plugin_id,
                     "path": str(target),
                     "authored_by_dsh": use_agent,
-                    "next": "下一次 DSH 任务会加载；在插件页可停用/重新生成。",
+                    "private": private,
+                    "group": group,
+                    "next": "已按私聊/群聊策略安装；可在插件页继续调整。",
                 },
             )
         except Exception as exc:
@@ -975,11 +1177,7 @@ def install_existing(path: str, *, enabled: bool = True) -> dict[str, Any]:
     }
 
 
-def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
-    global _DUMP_CACHE
-    plugin_id = str(plugin_id or "").strip()
-    if not plugin_id:
-        raise ValueError("plugin id 不能为空")
+def _resolve_plugin(plugin_id: str) -> tuple[dict[str, Any], str, bool, bool]:
     rows = _patch_rows()
     entries = _patch_entries(rows)
     found = next((row for row in entries if row.get("id") == plugin_id), None)
@@ -1002,40 +1200,61 @@ def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
             core = False
     if found is None:
         raise ValueError("未找到该插件条目")
-    if found.get("insert") is None and found.get("name") is None:
-        # Built-in override row: append a new override after all profile layers.
-        rows.append({"id": plugin_id, "disabled": not enabled})
-    else:
-        found["disabled"] = not enabled
-        # If the row came from a patch insert, mutate that object in place;
-        # otherwise append an explicit override for the runtime row.
-        if not any(
-            item.get("id") == plugin_id
-            for row in rows
-            if isinstance(row.get("insert"), list)
-            for item in row["insert"]
-            if isinstance(item, dict)
-        ):
-            rows.append({"id": plugin_id, "disabled": not enabled})
+    critical = bool(found.get("critical")) or plugin_id == "qunban-native"
+    return found, name, core, critical
+
+
+def set_channels(
+    plugin_id: str,
+    *,
+    private: bool | None = None,
+    group: bool | None = None,
+) -> dict[str, Any]:
+    global _DUMP_CACHE
+    plugin_id = str(plugin_id or "").strip()
+    if not plugin_id:
+        raise ValueError("plugin id 不能为空")
+    _found, name, core, critical = _resolve_plugin(plugin_id)
+    current = plugin_policy.channels(plugin_id, name=name)
+    private = current["private"] if private is None else bool(private)
+    group = current["group"] if group is None else bool(group)
+    locks = plugin_policy.locked(plugin_id)
+    if locks["private"]:
+        private = False
+    if locks["group"]:
+        group = False
+    plugin_policy.set_channels(
+        plugin_id,
+        name=name,
+        private=private,
+        group=group,
+    )
+    rows = _patch_rows()
+    # The qunban profile is the private/Operator profile.  The group profile
+    # is composed later from plugin-policies.json.
+    rows.append({"id": plugin_id, "disabled": not private})
     _write_patch(rows)
-    toggles = _read_json(TOGGLES_PATH, {})
-    if not isinstance(toggles, dict):
-        toggles = {}
-    toggles[plugin_id] = bool(enabled)
-    _write_json(TOGGLES_PATH, toggles)
     _DUMP_CACHE = None
     manifest = _read_json(MANIFEST_PATH, {"plugins": []})
     items = manifest.get("plugins") if isinstance(manifest, dict) else []
     if isinstance(items, list):
         for item in items:
             if isinstance(item, dict) and item.get("name") == name:
-                item["enabled"] = enabled
+                item["enabled"] = bool(private or group)
+                item["channels"] = {"private": private, "group": group}
                 item["updated_at"] = _utcnow()
         _write_json(MANIFEST_PATH, {"plugins": items})
     return {
         "id": plugin_id,
         "name": name,
-        "enabled": enabled,
+        "private": private,
+        "group": group,
+        "enabled": bool(private or group),
         "core": core,
-        "critical": bool(found.get("critical")) or plugin_id == "qunban-native",
+        "critical": critical,
+        "locked": locks,
     }
+
+
+def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
+    return set_channels(plugin_id, private=enabled, group=enabled)

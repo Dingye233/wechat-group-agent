@@ -116,11 +116,11 @@
 
 「插件」选项卡只保留一套 **DSH 插件目录**：
 
-- **DSH 插件**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、86 个启用），按核心/工具/技能/服务/运行时/集成/界面分类；每个插件都有独立开关，关闭核心插件会先弹出风险确认。
+- **DSH 插件**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、87 个启用），按核心/工具/技能/服务/运行时/集成/界面分类；每个插件都有 **私聊 / 群聊两个开关**，关闭核心插件会先弹出风险确认，原生 shell/group 文件工具等安全敏感项会被锁定为关闭。
 - **群伴工具**：工作区 skills、MCP 项目和外部接口不再单独列一套插件目录，而是由 `@qunban/dsh-native` 在 DSH 启动时动态注册成独立工具；插件页显示已安装原生插件和工具数量。
-- **导入 DSH 插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包复制到 DSH profile，npm/git 通过 `corepack pnpm add` 安装。
-- **创造模式**：填写插件名和需求，DSH Operator 会在 `data/dsh/studio/<slug>` 写一个合法 Cordis 插件，自动 `node --check`、安装到 profile、写入 patch；同名学生重新提交即更新。DSH 在用户明确要求时也可以自己写插件并调用 `qunban_plugin_install` 安装。
-- **安全**：生成/导入的 DSH 插件会同步给 primary/Operator profile；只有用户点击或明确要求才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
+- **导入 DSH 插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径。导入时先读 README，由 DSH 校验并给出私聊/群聊默认策略和工具拆分；危险插件默认仅私聊，工具级 split 通过 `ctx.tools.restrict` 执行。
+- **创造模式**：填写插件名、需求和「私聊可用 / 群聊可用」，DSH Operator 会在 `data/dsh/studio/<slug>` 写一个合法 Cordis 插件，按通道要求拆分工具，自动 `node --check`、安装到 profile、写入策略。
+- **安全**：生成/导入的 DSH 插件按 `plugin-policies.json` 只挂载到允许的 profile；只有用户点击或明确要求才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
 
 ---
 

@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from app.db import SessionLocal
+from app.services import plugin_policy
 from app.services.dsh_runtime import (
     DATA_DIR,
     HOME_DIR,
@@ -326,13 +327,28 @@ def _ensure_profile(name: str, scope: str) -> Path:
     _write_json(profile / "package.json", manifest)
     rows = _profile_patch(scope)
     if scope == "assistant":
-        rows.extend(_preserved_plugin_rows(profile))
+        preserved = _preserved_plugin_rows(profile)
+        rows.extend(plugin_policy.filter_rows(preserved, "private"))
+        imported_ids = {
+            str(item.get("id") or "")
+            for row in preserved
+            if isinstance(row.get("insert"), list)
+            for item in row["insert"]
+            if isinstance(item, dict)
+        }
+        for plugin_id, policy in plugin_policy.all_policies().items():
+            if not isinstance(policy, dict) or plugin_id in imported_ids:
+                continue
+            rows.append(
+                {"id": str(plugin_id), "disabled": not bool(policy.get("private", True))}
+            )
         toggles = _read_json(profile / "plugin-toggles.json", {})
         if isinstance(toggles, dict):
             for plugin_id, enabled in toggles.items():
-                rows.append(
-                    {"id": str(plugin_id), "disabled": not bool(enabled)}
-                )
+                if plugin_policy.get(str(plugin_id)) is None:
+                    rows.append(
+                        {"id": str(plugin_id), "disabled": not bool(enabled)}
+                    )
     _write_json(profile / "cordis.patch.yml", rows)
     try:
         sync_skills()
@@ -517,6 +533,12 @@ class DSHAgentRuntime:
                 "QUNBAN_API_BASE": f"http://127.0.0.1:{process_settings.port}",
                 "QUNBAN_TOKEN": tool_token(),
                 "QUNBAN_SCOPE": "admin" if scope == "assistant" else "group",
+                "QUNBAN_CHANNEL": "private" if scope == "assistant" else "group",
+                "QUNBAN_DENY_TOOLS": ",".join(
+                    plugin_policy.deny_tools(
+                        "private" if scope == "assistant" else "group"
+                    )
+                ),
                 "QUNBAN_GROUP_ID": str(group_id or ""),
                 "QUNBAN_DSH_RUNTIME_ROOT": str(
                     RUNTIME_DIR / (self._runtime.installed_version() or "")

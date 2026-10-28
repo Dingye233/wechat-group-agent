@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.config import settings as process_settings
+from app.services import plugin_policy
 from app.services.dsh_agent import (
     _ensure_native_plugin,
     _preserved_plugin_rows,
@@ -102,10 +103,25 @@ class DSHPrimaryService:
         except Exception:
             dependencies = {}
         rows = _profile_patch("group_primary")
+        imported_ids: set[str] = set()
         try:
-            rows.extend(_preserved_plugin_rows(source_profile))
+            preserved = _preserved_plugin_rows(source_profile)
+            rows.extend(plugin_policy.filter_rows(preserved, "group"))
+            imported_ids = {
+                str(item.get("id") or "")
+                for row in preserved
+                if isinstance(row.get("insert"), list)
+                for item in row["insert"]
+                if isinstance(item, dict)
+            }
         except Exception:
             pass
+        for plugin_id, policy in plugin_policy.all_policies().items():
+            if not isinstance(policy, dict) or plugin_id in imported_ids:
+                continue
+            rows.append(
+                {"id": str(plugin_id), "disabled": not bool(policy.get("group", True))}
+            )
         rows.extend(
             [
                 {
@@ -148,9 +164,10 @@ class DSHPrimaryService:
             )
             if isinstance(toggles, dict):
                 for plugin_id, enabled in toggles.items():
-                    rows.append(
-                        {"id": str(plugin_id), "disabled": not bool(enabled)}
-                    )
+                    if plugin_policy.get(str(plugin_id)) is None:
+                        rows.append(
+                            {"id": str(plugin_id), "disabled": not bool(enabled)}
+                        )
         except Exception:
             pass
         if dependencies:
@@ -183,6 +200,8 @@ class DSHPrimaryService:
                 "QUNBAN_API_BASE": f"http://127.0.0.1:{process_settings.port}",
                 "QUNBAN_TOKEN": tool_token(),
                 "QUNBAN_SCOPE": "group",
+                "QUNBAN_CHANNEL": "group",
+                "QUNBAN_DENY_TOOLS": ",".join(plugin_policy.deny_tools("group")),
                 "QUNBAN_TOOLSET": "primary",
                 "QUNBAN_DSH_RUNTIME_ROOT": str(RUNTIME_DIR / version),
             }

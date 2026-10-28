@@ -40,6 +40,8 @@ async def dsh_plugins_create(body: dict | None = Body(default=None)) -> dict:
             str(payload.get("requirements") or ""),
             use_agent=bool(payload.get("use_agent", True)),
             enabled=bool(payload.get("enabled", True)),
+            private=bool(payload.get("private", True)),
+            group=bool(payload.get("group", False)),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -67,6 +69,19 @@ async def dsh_plugins_install(body: dict | None = Body(default=None)) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/dsh/plugins/channels")
+async def dsh_plugins_channels(body: dict | None = Body(default=None)) -> dict:
+    payload = body or {}
+    try:
+        return dsh_plugins.set_channels(
+            str(payload.get("id") or ""),
+            private=bool(payload.get("private", True)),
+            group=bool(payload.get("group", False)),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/dsh/plugins/toggle")

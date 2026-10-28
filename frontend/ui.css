@@ -2737,3 +2737,35 @@ dialog.modal::backdrop {
   color: var(--muted-2);
   font-size: 9px;
 }
+.plugin-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: flex-end;
+}
+.plugin-channel {
+  gap: 4px;
+}
+.plugin-channel .plugin-switch-track {
+  width: 24px;
+  height: 14px;
+}
+.plugin-channel .plugin-switch-track::after {
+  width: 8px;
+  height: 8px;
+}
+.plugin-channel input:checked + .plugin-switch-track::after {
+  transform: translateX(10px);
+}
+.plugin-channel .plugin-switch-text {
+  font-size: 9px;
+}
+.plugin-mini .plugin-channels {
+  gap: 2px 7px;
+}
+.plugin-channel-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 2px 0 4px;
+}

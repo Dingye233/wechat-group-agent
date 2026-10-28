@@ -9,9 +9,9 @@
 
 - **统计**：DSH 版本、内置插件数、当前启用数、导入/生成数。
 - **DSH 目录**：从 DSH 的 `--dump-config` 读取真实组合结果，不是硬编码。支持关键词、分类和「只看启用」。
-- **已安装 DSH 插件**：群伴原生插件、导入包、DSH 生成插件；非内置项可以启用/停用。
-- **导入 DSH 插件**：npm 包、GitHub 简写、git URL、本地绝对路径。
-- **DSH 创造模式**：填写插件名、说明和需求，让 DSH Operator 写 `lib/index.js`，校验后安装。
+- **已安装 DSH 插件**：群伴原生插件、导入包、DSH 生成插件；每行有私聊/群聊两个开关。
+- **导入 DSH 插件**：npm 包、GitHub 简写、git URL、本地绝对路径；导入时由 DSH 读 README 做校验和工具拆分。
+- **DSH 创造模式**：填写插件名、说明、需求，以及私聊/群聊可用性；让 DSH Operator 写 `lib/index.js`，校验后按通道安装。
 - **任务日志**：导入/创建是后台任务，页面每 1.5 秒轮询日志。
 - 群伴原生插件卡片显示当前有多少 skills/MCP/接口会注册为 DSH 工具。
 
@@ -25,9 +25,9 @@ node <runtime>/lib/bin.js --profile qunban --dump-config
 
 解析最终的 `- id` / `name` / `disabled` 行，再读取运行时 `node_modules/@deepseek-ai/<pkg>/package.json` 的版本和描述。因此升级 DSH 后目录会自动跟着变。
 
-当前 runtime `0.2.1-rc.4` 的组合结果约 **98 个内置插件，86 个启用**。前端按核心、工具、技能、服务、运行时、集成、界面/API 分类。
+当前 runtime `0.2.1-rc.4` 的组合结果约 **98 个内置插件，87 个启用**。前端按核心、工具、技能、服务、运行时、集成、界面/API 分类。
 
-内置 DSH 插件也可以在页面里启用/停用，每个插件都有独立开关。关闭核心插件（category=核心 或关键运行时）时会先弹出风险确认；确认后写入 profile，重启对应 DSH 链路生效。
+每个内置插件都有 **私聊 / 群聊** 两个开关。关闭核心插件（category=核心 或关键运行时）时会先弹出风险确认；确认后写入 `plugin-policies.json`。原生 shell、群聊文件/网页/skill 等安全敏感能力会被锁定为对应通道关闭，避免绕过微信网关。
 
 ## 3. 群伴工具如何进入 DSH
 
@@ -56,6 +56,8 @@ POST /api/dsh/plugins/import
 
 - 本地路径：读取 `package.json`，复制到 `data/dsh/home/profiles/qunban/node_modules/<name>`，写入 profile 依赖和 patch 行。
 - npm/git：通过 `corepack pnpm add <spec>` 在 profile 目录安装，再把新增依赖挂到 patch。
+- **导入审查**：安装前读取 README 和 package 信息，交给 DSH Operator 输出私聊/群聊默认策略、工具拆分和风险摘要。默认 `group=false`；不确定就只允许私聊。
+- **功能分离**：策略写入 `plugin-policies.json`；`qunban` profile 只挂载 `private=true` 的插件，`qunban-primary` 只挂载 `group=true` 的插件；工具级 split 通过 `QUNBAN_DENY_TOOLS` + `ctx.tools.restrict` 执行，不改第三方源码。
 - 安装后下一次 DSH 任务生效；`qunban-primary` 启动时会同步 qunban profile 的导入/生成插件。
 - 导入的插件是任意 JavaScript，和 DSH 同权限执行。只安装可信来源。
 
@@ -70,21 +72,24 @@ POST /api/dsh/plugins/create
   "description": "点检表助手",
   "requirements": "接收 group_id，生成点检表并返回下载路径",
   "use_agent": true,
-  "enabled": true
+  "enabled": true,
+  "private": true,
+  "group": false
 }
 ```
 
 流程：
 
-1. 在 `data/dsh/studio/<slug>` 生成合法脚手架（`package.json` + `lib/index.js` + `REQUIREMENTS.md`）。
-2. `use_agent=true` 时，把目录和需求交给 DSH Operator：
+1. 在 `data/dsh/studio/<slug>` 生成合法脚手架（`package.json` + `lib/index.js` + `REQUIREMENTS.md`），并在 `qunban.channels` 记录通道要求。
+2. `use_agent=true` 时，把目录、需求和「私聊/群聊可用」交给 DSH Operator：
    - DSH 用原生 `write` / `read` / `qunban_powershell` 编写实现；
    - 必须导出 `name`、`inject = ['tools']`、`apply(ctx)`；
    - 通过 `QUNBAN_DSH_RUNTIME_ROOT` 动态 import `@deepseek-ai/dsh-tools`；
    - 工具 schema 显式写 `additionalProperties`，output 必须提供 `render`；
+   - **按通道拆分工具**：群聊工具不得包含微信发送、删除文件等高风险能力；
    - 完成后 `node --check lib/index.js` 自检。
 3. 后端再次校验 package 名、入口和语法。
-4. 复制到 `profiles/qunban/node_modules/@qunban/<slug>`，写 profile 依赖和 patch 行。
+4. 复制到 `profiles/qunban/node_modules/@qunban/<slug>`，写 profile 依赖和 patch 行，并写入 `plugin-policies.json` 的私聊/群聊策略。
 5. 记录到 `data/dsh/studio/index.json`，页面显示为「DSH 生成」。
 
 `use_agent=false` 时只生成示例工具，适合先占位，之后再让 DSH 改。
@@ -100,10 +105,10 @@ POST /api/dsh/plugins/create
 
 - 只有用户点击「生成并安装 / 导入」才会安装代码。
 - 创建任务使用 `qunban` Operator profile，权限为 `danger-full-access`，因此生成代码等同本机代码执行；不要在不可信需求下勾选“让 DSH 编写”。
-- 生成插件会安装到 `qunban`（Operator/管理员私聊）profile，并在 `qunban-primary` 启动时同步；群聊 primary 可以加载这些 DSH 插件。`qunban-chat` / legacy 群聊仍不能安装或执行任意插件。
+- 生成插件会安装到 `qunban`（Operator/管理员私聊）profile，并按 `plugin-policies.json` 决定是否挂载到 `qunban-primary`（群聊）；`qunban-chat` / legacy 群聊仍不能安装或执行任意插件。
 - `_preserved_plugin_rows()` 会在每次 DSH 任务重建 profile 时保留用户插件行，避免“下一次任务插件消失”。
-- 内置插件和群伴原生插件也有开关；核心/关键插件关闭前会先显示风险提示。
-- 开关写入 `plugin-toggles.json`，profile 重建时会重新应用。
+- 内置插件和群伴原生插件也有私聊/群聊两个开关；核心/关键插件关闭前会先显示风险提示。
+- 通道策略写入 `plugin-policies.json`，profile 重建时重新应用；导入/生成插件的工具级 split 通过 `QUNBAN_DENY_TOOLS` 注入原生插件，由 `ctx.tools.restrict` 执行。
 
 ## 7. 代码位置
 
