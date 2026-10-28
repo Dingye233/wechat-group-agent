@@ -208,6 +208,24 @@ async def send_message(
     return {"ok": True, "messages": messages}
 
 
+@router.post("/groups/{group_id}/preflight")
+async def preflight_send(
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    """Open the target chat and verify wechatauto input box without sending."""
+    group = await _require_group(db, group_id, runtime)
+    adapter = runtime.adapter
+    preflight = getattr(adapter, "preflight", None)
+    if not callable(preflight):
+        raise HTTPException(status_code=400, detail="当前适配器不支持发送预检")
+    try:
+        return await preflight(group.external_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/groups/{group_id}/media/backfill")
 async def backfill_group_images(
     group_id: int,

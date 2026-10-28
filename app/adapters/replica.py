@@ -1787,11 +1787,26 @@ class ReplicaAdapter(BaseAdapter):
         letting wechatauto blind-type into whatever window has focus.
         """
         self._ensure_attached()
+        hwnd = 0
         try:
-            self.recover_window()
+            hwnd = self.recover_window()
         except Exception:
             with self._lock:
                 self._wx = None
+        # A 350x475 portrait window cannot render the main tab bar / search
+        # box that wechatauto needs.  Maximize only when the window is too
+        # small for the wide layout; normal-sized windows are left untouched.
+        try:
+            import win32con
+            import win32gui
+
+            if hwnd and not win32gui.IsIconic(hwnd):
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                if (right - left) < 900 or (bottom - top) < 600:
+                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                    time.sleep(0.5)
+        except Exception:
+            pass
         wx = self._ensure_wx()
         gui = getattr(wx, "_gui", None)
         if gui is not None:
@@ -1815,6 +1830,18 @@ class ReplicaAdapter(BaseAdapter):
                 "避免键盘误输入到其他窗口"
             )
         return wx
+
+    async def preflight(self, room_id: str) -> dict[str, Any]:
+        """Open the target chat and verify the input box, without sending."""
+        raw = self._room_raw(room_id)
+
+        def task() -> dict[str, Any]:
+            self._prepare_send_gui(raw)
+            return {"ok": True, "room": raw}
+
+        return await asyncio.to_thread(
+            self._run_ui, task, 90.0, True
+        )
 
     def _send_text_sync(self, room_id: str, text: str) -> None:
         self._ensure_attached()

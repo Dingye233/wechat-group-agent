@@ -303,6 +303,7 @@ New-ItemProperty -Path $key -Name 'C:\Program Files\Tencent\WeChat\WeChat.exe' -
 | 现象 | 处理 |
 | --- | --- |
 | 适配器显示「缺少 wechatauto-replica」 | 执行 `pip install -r requirements-replica.txt` |
+| 同时装了微信 3.x 和 4.x，群伴连到 3.x | 在设置里把 `replica_wechat_exe` 固定为 `D:\Weixin\Weixin.exe`；群伴只使用 `Weixin.exe` 4.x，不会接管 `WeChat.exe` 3.x |
 | 找不到微信数据目录 | 确认微信 4.1.12+ 已登录；在「设置 → 微信 4.x 数据库目录」手动指定 `xwechat_files` |
 | OCR 很慢或识别差 | 执行 `pip install -r requirements-ocr.txt` 安装 RapidOCR；不装会回退 Windows OCR |
 | 二维码区域空白/黑屏 | 确认微信登录窗口可见；也可以直接扫描微信窗口中的二维码 |
