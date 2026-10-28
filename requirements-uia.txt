@@ -1,0 +1,10 @@
+﻿# Windows 微信 PC 界面自动化适配器（无需注入，兼容 32 位 3.9.x）
+# wxauto 源码已随项目放在 vendor/wxauto，执行：
+#   pip install -r requirements-uia.txt
+-e ./vendor/wxauto
+pywin32>=308
+comtypes>=1.4
+pyperclip>=1.8
+psutil>=5.9
+tenacity>=8
+pillow>=9

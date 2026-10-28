@@ -1,0 +1,981 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from sqlalchemy import select
+
+from app.db import SessionLocal
+from app.models import (
+    AgentTask,
+    AssistantMessage,
+    Group,
+    GroupConfig,
+    Message,
+    utcnow,
+)
+from app.services import assistant_tools
+from app.services.capabilities import (
+    catalog_for_scope,
+    check_tool_allowed,
+    execute_capability,
+)
+from app.services.llm import LLMError, LLMService, parse_json_object
+from app.services.memory import memory_dict, save_memory, search_memories
+from app.services.settings import get_settings
+
+MAX_HISTORY_CHARS = 9000
+MAX_OBSERVATION_CHARS = 7000
+MAX_TASK_SECONDS = 1800
+MAX_SAFETY_STEPS = 500
+
+_ACTIVE_SESSIONS: set[str] = set()
+_CANCEL_EVENTS: dict[str, asyncio.Event] = {}
+_INBOX: dict[str, list[str]] = {}
+
+
+def is_session_active(session_id: str) -> bool:
+    return session_id in _ACTIVE_SESSIONS
+
+
+def enqueue_session_message(session_id: str, message: str) -> bool:
+    """Queue a mid-task message. Returns True when a task is currently running."""
+    text = str(message or "").strip()
+    if not text:
+        return False
+    bucket = _INBOX.setdefault(session_id, [])
+    bucket.append(text)
+    if len(bucket) > 20:
+        del bucket[:-20]
+    return session_id in _ACTIVE_SESSIONS
+
+
+def take_session_inbox(session_id: str) -> list[str]:
+    return [
+        item for item in _INBOX.pop(session_id, []) if str(item or "").strip()
+    ]
+
+
+def cancel_session(session_id: str) -> bool:
+    event = _CANCEL_EVENTS.get(session_id)
+    if event is None:
+        return False
+    event.set()
+    # Requirements queued before the stop belong to the cancelled task.
+    # Anything sent after this point can become a fresh follow-up task.
+    _INBOX.pop(session_id, None)
+    return True
+
+
+def cleanup_session(session_id: str) -> None:
+    _ACTIVE_SESSIONS.discard(session_id)
+    _CANCEL_EVENTS.pop(session_id, None)
+    # Do not throw away messages that arrived just before the loop ended.
+    # The next chat() for this session drains them as inserted requirements.
+    if not _INBOX.get(session_id):
+        _INBOX.pop(session_id, None)
+
+
+def _drain_inbox(session_id: str) -> list[str]:
+    return take_session_inbox(session_id)
+
+
+def _extract_json_string_field(content: str, field: str) -> str:
+    """Best-effort extraction of a string field from malformed JSON."""
+    marker = f'"{field}"'
+    index = content.find(marker)
+    if index < 0:
+        return ""
+    colon = content.find(":", index + len(marker))
+    if colon < 0:
+        return ""
+    index = colon + 1
+    while index < len(content) and content[index].isspace():
+        index += 1
+    if index >= len(content) or content[index] != '"':
+        return ""
+    start = index
+    index += 1
+    escaped = False
+    while index < len(content):
+        char = content[index]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            raw = content[start : index + 1]
+            try:
+                return str(json.loads(raw))
+            except Exception:
+                return ""
+        index += 1
+    return ""
+
+
+def _dedupe_image_markdown(text: str) -> str:
+    seen: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group(2).strip()
+        if url in seen:
+            return ""
+        seen.add(url)
+        return match.group(0)
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace, text)
+
+
+def _clip(text: str, limit: int) -> str:
+    text = str(text or "")
+    return text if len(text) <= limit else text[:limit] + "\n…（截断）"
+
+
+def _assistant_message_dict(row: AssistantMessage) -> dict[str, Any]:
+    media_path = str(row.media_path or "")
+    media_url = ""
+    if media_path:
+        normalized = media_path.replace("\\", "/")
+        marker = "data/media/assistant/"
+        if marker in normalized:
+            media_url = "/media/assistant/" + normalized.split(marker, 1)[1]
+        elif media_path.startswith("/media/"):
+            media_url = media_path
+    return {
+        "id": row.id,
+        "session_id": row.session_id,
+        "role": row.role,
+        "kind": row.kind,
+        "content": row.content,
+        "media_path": media_path,
+        "media_url": media_url,
+        "tool_name": row.tool_name,
+        "tool_input": row.tool_input or {},
+        "tool_output": row.tool_output,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def _store(
+    session_id: str,
+    role: str,
+    content: str,
+    *,
+    tool_name: str = "",
+    tool_input: dict[str, Any] | None = None,
+    tool_output: str = "",
+    kind: str = "text",
+    media_path: str = "",
+) -> AssistantMessage:
+    async with SessionLocal() as db:
+        row = AssistantMessage(
+            session_id=session_id,
+            role=role,
+            kind=kind,
+            content=content,
+            media_path=media_path,
+            tool_name=tool_name,
+            tool_input=tool_input or {},
+            tool_output=tool_output,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+    return row
+
+
+async def history(session_id: str = "main", limit: int = 80) -> list[dict[str, Any]]:
+    async with SessionLocal() as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(AssistantMessage)
+                    .where(AssistantMessage.session_id == session_id)
+                    .order_by(AssistantMessage.id.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [_assistant_message_dict(row) for row in reversed(rows)]
+
+
+async def clear_history(session_id: str = "main") -> int:
+    async with SessionLocal() as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(AssistantMessage).where(
+                        AssistantMessage.session_id == session_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            await db.delete(row)
+        await db.commit()
+    return len(rows)
+
+
+async def list_tasks(limit: int = 50) -> list[dict[str, Any]]:
+    async with SessionLocal() as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(AgentTask)
+                    .order_by(AgentTask.updated_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "id": row.id,
+            "title": row.title,
+            "detail": row.detail,
+            "status": row.status,
+            "result": row.result,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in rows
+    ]
+
+
+async def create_task(title: str, detail: str = "", status: str = "pending") -> dict[str, Any]:
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("任务标题不能为空")
+    async with SessionLocal() as db:
+        row = AgentTask(
+            title=title[:240], detail=str(detail or "")[:10000], status=status
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return {
+            "id": row.id,
+            "title": row.title,
+            "detail": row.detail,
+            "status": row.status,
+            "result": row.result,
+        }
+
+
+async def update_task(
+    task_id: int, *, status: str = "", result: str = "", detail: str = ""
+) -> dict[str, Any]:
+    async with SessionLocal() as db:
+        row = await db.get(AgentTask, int(task_id))
+        if row is None:
+            raise ValueError("任务不存在")
+        if status:
+            row.status = status[:24]
+        if result:
+            row.result = str(result)[:20000]
+        if detail:
+            row.detail = str(detail)[:20000]
+        await db.commit()
+        await db.refresh(row)
+        return {
+            "id": row.id,
+            "title": row.title,
+            "detail": row.detail,
+            "status": row.status,
+            "result": row.result,
+        }
+
+
+class AssistantService:
+    """A compact tool-using agent inspired by Open Interpreter / MemGPT.
+
+    It deliberately keeps the execution loop local and auditable: every tool
+    call is persisted as a message before its result is shown to the model.
+    """
+
+    def __init__(self, llm: LLMService, runtime: Any = None) -> None:
+        self.llm = llm
+        self.runtime = runtime
+
+    async def _tool_result(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        session_id: str,
+        settings: dict[str, Any],
+        account_key: str,
+        scope: str = "assistant",
+    ) -> Any:
+        await check_tool_allowed(name, args, scope)
+        if name == "save_memory":
+            memory = await save_memory(
+                group_id=None,
+                account_key=account_key,
+                scope="global",
+                category=str(args.get("category") or "assistant"),
+                title=str(args.get("title") or ""),
+                content=str(args.get("content") or ""),
+                importance=int(args.get("importance") or 3),
+                source="assistant",
+            )
+            return memory_dict(memory)
+        if name == "search_memories":
+            return await search_memories(
+                query=str(args.get("query") or ""),
+                group_id=None,
+                account_key=account_key,
+                limit=int(args.get("limit") or 12),
+            )
+        if name == "create_task":
+            return await create_task(
+                str(args.get("title") or ""),
+                str(args.get("detail") or ""),
+                str(args.get("status") or "pending"),
+            )
+        if name == "update_task":
+            return await update_task(
+                int(args.get("task_id") or 0),
+                status=str(args.get("status") or ""),
+                result=str(args.get("result") or ""),
+                detail=str(args.get("detail") or ""),
+            )
+        if name == "list_tasks":
+            return await list_tasks(int(args.get("limit") or 50))
+        if name == "list_groups":
+            return await self.runtime.list_group_payloads()
+        if name in ("read_group_messages", "send_group_message", "set_group_access", "pin_group", "summarize_group"):
+            return await self._admin_group_tool(name, args, settings)
+        if name == "list_capabilities":
+            from app.services.capabilities import list_capabilities as _list_caps
+
+            rows = await _list_caps()
+            return [
+                {
+                    "key": item["key"],
+                    "name": item["name"],
+                    "type": item["type"],
+                    "risk": item["risk"],
+                    "assistant": item["enabled_assistant"],
+                    "group": item["enabled_group"],
+                    "description": (item.get("description") or "")[:120],
+                }
+                for item in rows
+            ]
+        if name == "discover_capabilities":
+            from app.services.capabilities import (
+                list_capabilities as _list_caps,
+                sync_capabilities as _sync_caps,
+            )
+
+            await _sync_caps(force=True)
+            return await _list_caps()
+        if name == "web_request":
+            return await assistant_tools.web_request(
+                str(args.get("method") or "GET"),
+                str(args.get("url") or ""),
+                args.get("headers") if isinstance(args.get("headers"), dict) else None,
+                args.get("json") if "json" in args else None,
+                str(args.get("body") or ""),
+                float(args.get("timeout") or 30),
+            )
+        # File / PowerShell / skill / desktop tools are blocking; keep them off
+        # the event loop. The capability gate is applied by execute_capability.
+        return await execute_capability(name, args, scope)
+
+    def _system_prompt(
+        self,
+        *,
+        settings: dict[str, Any],
+        remembers: list[dict[str, Any]],
+        is_admin: bool,
+        capability_payload: dict[str, Any],
+        contact_persona: str = "",
+        max_steps: int = 0,
+        unlimited: bool = True,
+        channel: str = "dashboard",
+    ) -> str:
+        workspace = str(assistant_tools.workspace_root())
+        catalog = json.dumps(capability_payload.get("tools") or [], ensure_ascii=False)
+        memory_lines = "\n".join(
+            f"- [{item['importance']}★ {item['category']}] {item['content']}"
+            for item in remembers
+        ) or "无"
+        resources = []
+        for item in capability_payload.get("skills") or []:
+            resources.append(f"- skill:{item['name']} — {item.get('description', '')}")
+        for item in capability_payload.get("mcps") or []:
+            resources.append(
+                f"- mcp:{item['key'].split(':', 1)[-1]} — {item.get('description', '')}"
+            )
+        for item in capability_payload.get("apis") or []:
+            resources.append(f"- api:{item['name']} — {item.get('description', '')}")
+        resource_lines = "\n".join(resources) or "无（用户尚未在能力列表启用）"
+        admin_text = "是" if is_admin else "否（需要管理员权限时会触发 UAC；正式使用建议用 start-admin.ps1 启动服务）"
+        persona_block = (
+            "\n# 当前联系人专属人设\n"
+            f"{contact_persona.strip()}\n"
+            "（人设只影响说话语气和称呼；当它与 Operator 的任务执行、"
+            "工具调用、结果汇报冲突时，以 Operator 职责为准。"
+            "执行任务时可以多说几句，把工具和结果讲清楚。）\n"
+            if contact_persona.strip()
+            else ""
+        )
+        if unlimited:
+            limit_text = (
+                f"不限制；系统仍保留 {MAX_SAFETY_STEPS} 步 / "
+                f"{MAX_TASK_SECONDS // 60} 分钟的安全上限，防止死循环"
+            )
+        else:
+            limit_text = f"最多 {max_steps} 步"
+        if channel == "wechat":
+            channel_text = (
+                "你正在微信私聊里回复管理员。最终答复要像真人发微信："
+                "自然的中文短段落，不要 Markdown 表格、代码块或超长清单。"
+                "工具调用进度会由系统自动同步给管理员；"
+                "任务执行中继续发消息会插入当前任务，发「停止」或「取消」可以打断。"
+                "不需要调用 send_contact_message 把 final 再发一遍，系统会自动发送。"
+            )
+        else:
+            channel_text = (
+                "你在群伴后台的 Agent 对话中。可以使用 Markdown，"
+                "但保持简洁、可执行，优先说结果和下一步。"
+            )
+        return f"""你是「群伴 Operator」，一个能直接操作本机、持续自我迭代的中文 Agent。
+你不是只会聊天的客服：你可以读写文件、执行 PowerShell、调用外部 HTTP、创建技能、创建任务，并在真实系统里完成多步任务。
+
+# 当前通道
+{channel_text}
+
+# 工作区
+{workspace}
+技能目录：{workspace}\\skills
+项目目录：{workspace}\\projects
+脚本目录：{workspace}\\scripts
+当前进程管理员权限：{admin_text}
+
+# 工作方式（参考 opencode / Codex 的 agent loop）
+1. 先理解目标、约束和成功标准；信息不够时先做最小必要探查，不要凭空猜测。
+2. 简单任务直接执行；复杂任务在 thought 里维护一个很短的 1/2/3 计划，并在关键节点更新。
+3. 每一步只做一个动作：先想清楚要验证什么，再调用工具；拿到 OBSERVATION 后判断是否真的推进了任务。
+4. 不要因为一个工具成功就急着收尾。只有目标已经达成、或遇到无法自行解决的阻塞时才输出 final。
+5. 工具失败后先阅读错误、换参数或换方案；不要原样重试。相同工具 + 相同参数连续失败 3 次，或连续 5 次返回相同结果，系统会自动打断。
+6. 用户中途插入新要求时，把它合并进当前任务继续做；除非新要求明确要求推翻原任务，否则不要从头再来。
+7. 只有确实需要用户做决定时才提问；能自己判断的默认值就直接选，并在 final 里说明。
+8. 删除、覆盖、停服务、发消息、发布内容等有副作用的操作，先确认目标和影响；不要执行与任务无关的破坏性操作。
+9. 最终答复必须基于真实 OBSERVATION：说明做了什么、结果是什么、哪些没成功、下一步建议。不要假装执行过工具。
+
+# 进度可见性
+- 你每次调用工具前的 thought 会作为进度同步给管理员，所以 thought 要写成一句简短、具体的中文，例如「先读取配置文件确认端口」。
+- 如果任务较长，保持 thought 里的计划可读；不要在 thought 里写长篇推理或敏感信息。
+- 管理员可以在任务执行中继续发消息；系统会把新消息作为「中途插入的新要求」交给你。
+
+# 能力边界
+- 文件读写和 PowerShell 会影响真实系统。执行删除、覆盖、服务/进程操作前，先在 thought 里确认目标路径和影响。
+- 需要管理员权限的命令，把 admin=true 传给 run_powershell；会弹 UAC。
+- 自我迭代不是改主程序源码：优先在 skills/、projects/、scripts/ 下创建可复用能力；需要长期任务时用 create_task 记录。
+- 外部接口用 web_request，只允许 http/https。
+- 不要把密钥、密码、Token 写入普通文件或记忆；只记录“配置在哪里”。
+
+# 长期记忆（自动注入，供参考）
+{memory_lines}
+{persona_block}
+# 已启用的技能 / MCP / 接口
+{resource_lines}
+
+# 可用工具（JSON，只有这里列出的才能调用）
+{catalog}
+
+# 输出协议
+每次只输出一个 JSON 对象，不要 Markdown：
+{{"thought":"一句中文进度/判断","action":"工具名","args":{{...}}}}
+或
+{{"thought":"一句中文总结","final":"给用户的最终答复"}}
+- thought 必填，且要能让管理员看懂你正在做什么。
+- 只输出一个完整的 JSON 对象，结尾不要多写右花括号，也不要在 JSON 前后加解释。
+- 步数限制：{limit_text}。
+- 工具结果会以 OBSERVATION 形式返回；只有拿到 OBSERVATION 才能说完成。
+- 文件路径可以是绝对路径，也可以是相对工作区的路径。
+- 如果用户只是聊天或问题已经回答完，直接 final。"""
+
+    async def chat(
+        self,
+        message: str,
+        *,
+        session_id: str = "main",
+        scope: str = "assistant",
+        kind: str = "text",
+        media_path: str = "",
+        temperature: float | None = None,
+        persona: str = "",
+        channel: str = "dashboard",
+        progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        store_user: bool = True,
+        store_assistant: bool = True,
+        emit_final: bool = True,
+        followup_depth: int = 0,
+    ) -> dict[str, Any]:
+        message = str(message or "").strip()
+        if not message:
+            raise ValueError("消息不能为空")
+
+        # A task is already running for this session: queue the message instead
+        # of cancelling the task. The running loop drains it as an inserted
+        # requirement, similar to opencode's session prompt queue.
+        if session_id in _ACTIVE_SESSIONS:
+            enqueue_session_message(session_id, message)
+            await _store(
+                session_id,
+                "user",
+                message,
+                kind=kind,
+                media_path=media_path,
+            )
+            return {
+                "queued": True,
+                "reply": "",
+                "trace": [],
+                "model": "",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "admin": assistant_tools.is_admin(),
+            }
+
+        async with SessionLocal() as db:
+            settings = await get_settings(db)
+        if not settings.get("llm_api_key"):
+            raise RuntimeError("请先在设置里配置 API Key，Operator 才能规划工具调用")
+        account_key = str(
+            (self.runtime.account or {}).get("wxid") if self.runtime else ""
+        )
+        remembers = await search_memories(
+            query=message,
+            group_id=None,
+            account_key=account_key,
+            limit=8,
+        )
+        rows = await history(session_id, limit=30)
+        transcript = []
+        used = 0
+        for row in reversed(rows):
+            line = f"{row['role'].upper()}：{_clip(row['content'], 1200)}"
+            if used + len(line) > MAX_HISTORY_CHARS:
+                break
+            transcript.append(line)
+            used += len(line) + 1
+        transcript.reverse()
+
+        configured_steps = int(settings.get("assistant_max_steps") or 0)
+        unlimited = configured_steps <= 0
+        max_steps = (
+            MAX_SAFETY_STEPS
+            if unlimited
+            else max(1, min(MAX_SAFETY_STEPS, configured_steps))
+        )
+        max_tokens = max(128, min(3000, int(settings.get("assistant_max_tokens") or 900)))
+        limit_text = "不限制" if unlimited else f"最多 {max_steps} 步"
+
+        async def emit(event: dict[str, Any]) -> None:
+            if progress is None:
+                return
+            try:
+                await progress(event)
+            except Exception:
+                pass
+
+        await emit(
+            {
+                "phase": "start",
+                "max_steps": max_steps,
+                "unlimited": unlimited,
+                "message": (
+                    "开始处理，步数不限（安全上限 "
+                    f"{MAX_SAFETY_STEPS} 步 / {MAX_TASK_SECONDS // 60} 分钟）"
+                    if unlimited
+                    else f"开始处理，最多 {max_steps} 步"
+                ),
+            }
+        )
+        capability_payload = await catalog_for_scope(scope)
+        system_prompt = self._system_prompt(
+            settings=settings,
+            remembers=remembers,
+            is_admin=assistant_tools.is_admin(),
+            capability_payload=capability_payload,
+            contact_persona=persona,
+            max_steps=max_steps,
+            unlimited=unlimited,
+            channel=channel,
+        )
+        observations: list[str] = []
+        trace: list[dict[str, Any]] = []
+        insertions: list[str] = _drain_inbox(session_id)
+        if kind == "image":
+            message = (
+                "【这是一条图片消息，OCR 文本已经附在下面。"
+                "请直接根据图片/OCR 回答；除非用户明确要求操作文件、屏幕或外部系统，"
+                "否则不要调用 read_file、search_files、read_skill，也不要展开无关代码。】\n"
+                + message
+            )
+        if store_user:
+            await _store(
+                session_id,
+                "user",
+                message,
+                kind=kind,
+                media_path=media_path,
+            )
+
+        _ACTIVE_SESSIONS.add(session_id)
+        cancel_event = asyncio.Event()
+        _CANCEL_EVENTS[session_id] = cancel_event
+        started_at = time.monotonic()
+        final = ""
+        cancelled = False
+        timed_out = False
+        failure_counts: dict[str, int] = {}
+        repeat_counts: dict[str, int] = {}
+        last_outputs: dict[str, str] = {}
+
+        def signature(action_name: str, action_args: dict[str, Any]) -> str:
+            try:
+                raw = json.dumps(
+                    action_args,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+            except Exception:
+                raw = str(action_args)
+            return f"{action_name}|{raw[:1500]}"
+
+        async def take_insertions(step: int) -> None:
+            new_items = _drain_inbox(session_id)
+            if not new_items:
+                return
+            insertions.extend(new_items)
+            await emit(
+                {
+                    "phase": "queued",
+                    "step": step,
+                    "max_steps": max_steps,
+                    "unlimited": unlimited,
+                    "message": "收到新要求，已插入当前任务",
+                }
+            )
+
+        pending_followup: list[str] = []
+        try:
+            for step in range(1, max_steps + 1):
+                if cancel_event.is_set():
+                    cancelled = True
+                    final = "已按你的要求停止当前任务。"
+                    break
+                if time.monotonic() - started_at > MAX_TASK_SECONDS:
+                    timed_out = True
+                    final = (
+                        f"任务已运行超过 {MAX_TASK_SECONDS // 60} 分钟，我先停下来，"
+                        "避免无限循环。你可以发「继续」让我接着做。"
+                    )
+                    break
+                await take_insertions(step)
+
+                observation_text = "\n".join(observations[-8:]) or "无"
+                if len(observation_text) > 12000:
+                    observation_text = (
+                        "…（较早的工具结果已省略）\n" + observation_text[-12000:]
+                    )
+                inserted_text = "\n".join(f"- {item}" for item in insertions) or "无"
+                user_prompt = f"""最近对话：
+{chr(10).join(transcript) or '无'}
+
+用户最新消息：
+{message}
+
+用户中途插入的新要求（必须一起考虑，不要忽略）：
+{inserted_text}
+
+当前进度：第 {step} 步 / {limit_text}
+
+已执行工具结果（按执行顺序，较早的已省略）：
+{observation_text}
+
+请决定下一步，输出 JSON。如果目标已经完成，输出 final。"""
+                await emit(
+                    {
+                        "phase": "thinking",
+                        "step": step,
+                        "max_steps": max_steps,
+                        "unlimited": unlimited,
+                    }
+                )
+                try:
+                    result = await self.llm.complete(
+                        base_url=str(settings.get("llm_base_url") or ""),
+                        api_key=str(settings.get("llm_api_key") or ""),
+                        model=str(settings.get("llm_model") or ""),
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        temperature=temperature
+                        if temperature is not None
+                        else 0.25,
+                        max_tokens=max_tokens,
+                        json_mode=True,
+                    )
+                except LLMError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                content = result.get("content") or ""
+                parsed = parse_json_object(content)
+                if not isinstance(parsed, dict):
+                    late = _drain_inbox(session_id)
+                    if late:
+                        insertions.extend(late)
+                        await emit(
+                            {
+                                "phase": "queued",
+                                "step": step,
+                                "max_steps": max_steps,
+                                "unlimited": unlimited,
+                                "message": "收到新要求，已插入当前任务",
+                            }
+                        )
+                        continue
+                    # Never show the internal protocol JSON as a user-facing
+                    # answer. Recover the final field when possible, otherwise
+                    # show a short format error.
+                    recovered = _extract_json_string_field(content, "final")
+                    if recovered:
+                        final = recovered
+                    elif content.lstrip().startswith("{") and (
+                        '"thought"' in content
+                        or '"action"' in content
+                        or '"final"' in content
+                    ):
+                        final = (
+                            "模型返回格式异常，我已拦截原始 JSON。"
+                            "请重试一次，或把任务拆小一点。"
+                        )
+                    else:
+                        final = content.strip()
+                    break
+                thought = str(parsed.get("thought") or "").strip()
+                final_text = parsed.get("final")
+                action = str(parsed.get("action") or "").strip()
+                args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
+                if final_text is not None and not action:
+                    late = _drain_inbox(session_id)
+                    if late:
+                        insertions.extend(late)
+                        await emit(
+                            {
+                                "phase": "queued",
+                                "step": step,
+                                "max_steps": max_steps,
+                                "unlimited": unlimited,
+                                "message": "收到新要求，已插入当前任务",
+                            }
+                        )
+                        continue
+                    final = str(final_text).strip()
+                    break
+                if not action:
+                    late = _drain_inbox(session_id)
+                    if late:
+                        insertions.extend(late)
+                        await emit(
+                            {
+                                "phase": "queued",
+                                "step": step,
+                                "max_steps": max_steps,
+                                "unlimited": unlimited,
+                                "message": "收到新要求，已插入当前任务",
+                            }
+                        )
+                        continue
+                    final = str(final_text or "").strip()
+                    if not final:
+                        final = (
+                            "模型没有给出最终答复，我已拦截内部 thought。"
+                            "请重试一次，或把任务拆小一点。"
+                        )
+                    break
+                started = time.time()
+                await emit(
+                    {
+                        "phase": "tool",
+                        "step": step,
+                        "max_steps": max_steps,
+                        "unlimited": unlimited,
+                        "tool": action,
+                        "args": args,
+                        "thought": thought,
+                    }
+                )
+                try:
+                    output = await self._tool_result(
+                        action,
+                        args,
+                        session_id=session_id,
+                        settings=settings,
+                        account_key=account_key,
+                        scope=scope,
+                    )
+                    if isinstance(output, (dict, list)):
+                        output_text = json.dumps(output, ensure_ascii=False, default=str)
+                    else:
+                        output_text = str(output)
+                    await _store(
+                        session_id,
+                        "tool",
+                        output_text[:MAX_OBSERVATION_CHARS],
+                        tool_name=action,
+                        tool_input=args,
+                        tool_output=output_text[:MAX_OBSERVATION_CHARS],
+                    )
+                except Exception as exc:
+                    output_text = f"ERROR: {exc}"
+                    await _store(
+                        session_id,
+                        "tool",
+                        output_text,
+                        tool_name=action,
+                        tool_input=args,
+                        tool_output=output_text,
+                    )
+                failed = output_text.startswith("ERROR")
+                trace.append(
+                    {
+                        "tool": action,
+                        "args": args,
+                        "output": _clip(output_text, 1200),
+                        "seconds": round(time.time() - started, 2),
+                    }
+                )
+                if len(trace) > 200:
+                    trace = trace[-200:]
+                observations.append(
+                    f"<{action}> {_clip(output_text, MAX_OBSERVATION_CHARS)}"
+                )
+                if len(observations) > 12:
+                    observations = observations[-12:]
+                sig = signature(action, args)
+                if failed:
+                    failure_counts[sig] = failure_counts.get(sig, 0) + 1
+                    repeat_counts.pop(sig, None)
+                else:
+                    failure_counts.pop(sig, None)
+                    snapshot = _clip(output_text, 1000)
+                    if last_outputs.get(sig) == snapshot:
+                        repeat_counts[sig] = repeat_counts.get(sig, 0) + 1
+                    else:
+                        repeat_counts[sig] = 1
+                    last_outputs[sig] = snapshot
+                await emit(
+                    {
+                        "phase": "tool_result",
+                        "step": step,
+                        "max_steps": max_steps,
+                        "unlimited": unlimited,
+                        "tool": action,
+                        "ok": not failed,
+                        "message": _clip(output_text, 220),
+                    }
+                )
+                if failed and failure_counts[sig] >= 3:
+                    final = (
+                        f"同一个工具用相同参数连续失败 {failure_counts[sig]} 次，"
+                        "我先自行停止，避免继续空转。最后错误：\n"
+                        + _clip(output_text, 800)
+                    )
+                    break
+                if not failed and repeat_counts[sig] >= 5:
+                    final = (
+                        "同一个工具用相同参数连续 5 次返回相同结果，"
+                        "我已经自行停止，避免无限重复。最后结果：\n"
+                        + _clip(output_text, 800)
+                    )
+                    break
+        finally:
+            cleanup_session(session_id)
+            pending_followup = take_session_inbox(session_id)
+        if not final:
+            if cancelled:
+                final = "已按你的要求停止当前任务。"
+            elif timed_out:
+                final = (
+                    f"任务已运行超过 {MAX_TASK_SECONDS // 60} 分钟，我先停下来。"
+                    "你可以发「继续」让我接着做。"
+                )
+            elif observations:
+                final = (
+                    f"已达到 {max_steps} 步安全上限，下面是最后一步的真实结果；"
+                    "如果要继续，我可以接着做：\n\n"
+                    + _clip(observations[-1], 2000)
+                )
+            else:
+                final = "模型没有返回最终答复，请重试或把任务拆小一点。"
+        if pending_followup and followup_depth < 2:
+            # A message may arrive in the tiny window between the loop's final
+            # drain and cleanup. Do not lose it: process it as a follow-up in
+            # the same request, with a small depth cap.
+            followup = await self.chat(
+                "\n".join(pending_followup),
+                session_id=session_id,
+                scope=scope,
+                kind="text",
+                temperature=temperature,
+                persona=persona,
+                channel=channel,
+                progress=progress,
+                store_user=False,
+                store_assistant=False,
+                emit_final=False,
+                followup_depth=followup_depth + 1,
+            )
+            followup_reply = str(followup.get("reply") or "").strip()
+            if followup_reply:
+                final = f"{final}\n\n{followup_reply}".strip()
+            trace.extend(followup.get("trace") or [])
+        display_urls: list[str] = []
+        image_tools = {"display_image", "screen_capture", "run_mcp", "call_interface"}
+        for item in trace:
+            if item.get("tool") not in image_tools:
+                continue
+            match = re.search(
+                r"/media/assistant/[^\s\"',}]+", str(item.get("output") or "")
+            )
+            if match and match.group(0) not in display_urls:
+                display_urls.append(match.group(0))
+        for match in re.finditer(r"/media/assistant/[^\s\"',}]+", final):
+            if match.group(0) not in display_urls:
+                display_urls.append(match.group(0))
+        for url in display_urls:
+            if f"]({url})" in final:
+                continue
+            markdown = f"![图片]({url})"
+            if url in final:
+                final = final.replace(url, markdown)
+            else:
+                final += f"\n\n{markdown}"
+        final = _dedupe_image_markdown(final)
+        if emit_final:
+            await emit({"phase": "final", "message": "任务完成"})
+        if store_assistant:
+            await _store(session_id, "assistant", final)
+        return {
+            "reply": final,
+            "trace": trace,
+            "model": result.get("model") if "result" in locals() else "",
+            "prompt_tokens": result.get("prompt_tokens", 0) if "result" in locals() else 0,
+            "completion_tokens": result.get("completion_tokens", 0) if "result" in locals() else 0,
+            "admin": assistant_tools.is_admin(),
+        }

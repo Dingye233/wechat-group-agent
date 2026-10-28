@@ -1,0 +1,10 @@
+# Bilibili account automation + ASR + knowledge base.
+# Install:
+#   .\.venv312\Scripts\python.exe -m pip install -r requirements-bilibili.txt
+bilibili-api-python>=17.4.2
+# Audio transcription (faster-whisper uses PyAV 13; newer PyAV changes the API)
+faster-whisper>=1.2.1
+av==13.1.0
+# Local vector knowledge base (ChromaDB) + Chinese embeddings (fastembed)
+chromadb>=1.5.9
+fastembed>=0.9.1

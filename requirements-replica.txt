@@ -1,0 +1,4 @@
+# WeChat 4.x adapter (wechatauto-replica)
+# Requires Windows 10/11, 64-bit Python, and WeChat/Weixin 4.1.12+.
+wechatauto-replica==1.2.8.1
+pypinyin>=0.48.0

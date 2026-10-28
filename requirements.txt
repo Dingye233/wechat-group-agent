@@ -1,0 +1,11 @@
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+sqlalchemy[asyncio]>=2.0.36
+aiosqlite>=0.20.0
+pydantic>=2.10.4
+pydantic-settings>=2.7.0
+python-multipart>=0.0.20
+httpx>=0.28.1
+pillow>=11.1.0
+qrcode>=8.0
+tzdata>=2024.2

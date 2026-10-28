@@ -1,0 +1,10 @@
+# Optional high-accuracy OCR backend.
+# RapidOCR (https://github.com/RapidAI/RapidOCR, ~8k GitHub stars) runs the
+# PaddleOCR PP-OCR models on ONNX Runtime, fully offline on CPU.
+# Install this to make RapidOCR the preferred backend:
+#   pip install -r requirements-ocr.txt
+rapidocr>=3.10.0
+onnxruntime>=1.20.0
+
+# Optional: PaddleOCR (heavier; used when RapidOCR is unavailable).
+#   pip install paddleocr>=3.0 paddlepaddle>=3.0

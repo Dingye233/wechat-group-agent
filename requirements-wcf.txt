@@ -1,0 +1,7 @@
+# Windows 微信 PC 协议适配器（WeChatFerry）额外依赖
+# 注意：
+#   1. 需要安装微信 PC 3.9.12.51（WeChatFerry v39.5.2 配套版本）
+#   2. 微信 4.x 不支持
+#   3. 建议使用 Python 3.11 / 3.12，最新版 Python 可能缺少 wcferry 原生依赖
+wcferry==39.5.2.0
+pywin32>=308

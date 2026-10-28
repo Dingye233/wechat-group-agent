@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>群伴 · WeChat Group Agent</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%2307c160'/%3E%3Cstop offset='1' stop-color='%2300d4ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%23081511'/%3E%3Cpath d='M18 22c0-4 4-7 9-7h10c5 0 9 3 9 7v8c0 4-4 7-9 7h-5l-7 6v-6c-4-1-7-4-7-7z' fill='url(%23g)'/%3E%3Ccircle cx='27' cy='26' r='2.4' fill='%23081511'/%3E%3Ccircle cx='38' cy='26' r='2.4' fill='%23081511'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css?v=20261028-24">
+</head>
+<body>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <!-- ============================== LOGIN ============================== -->
+  <div id="login-view" class="login-view">
+    <div class="login-orbs"><span></span><span></span><span></span></div>
+    <div class="login-shell">
+      <section class="login-hero">
+        <div class="brand brand-lg">
+          <span class="brand-mark" data-icon="logo"></span>
+          <div>
+            <strong>群伴</strong>
+            <span>WeChat Group Agent</span>
+          </div>
+        </div>
+        <div class="hero-eyebrow"><span class="live-dot"></span> 可拓展的微信群聊智能体</div>
+        <h1>让群里多一个<br><em>懂气氛的 AI 搭子</em></h1>
+        <p class="hero-copy">扫码接入微信，实时读取群聊与昵称；按人设接话、整理待办，还能在合适的时候丢一个表情包。</p>
+        <ul class="hero-features">
+          <li><span class="feature-icon" data-icon="chat"></span><div><strong>实时群聊</strong><small>WebSocket 推送消息、成员与登录状态</small></div></li>
+          <li><span class="feature-icon" data-icon="sparkles"></span><div><strong>Agent 可编排</strong><small>@ 提及 / 关键词 / 全量触发，按群配置人设</small></div></li>
+          <li><span class="feature-icon" data-icon="smile"></span><div><strong>会发表情包</strong><small>本地表情库 + 模型按语境自动选择</small></div></li>
+          <li><span class="feature-icon" data-icon="layers"></span><div><strong>适配器架构</strong><small>演示 / 界面自动化 / WeChatFerry 可切换</small></div></li>
+        </ul>
+        <div class="hero-note"><span data-icon="shield"></span> 默认仅监听 127.0.0.1。个人微信自动化存在风控风险，建议先用小号体验。</div>
+      </section>
+
+      <section class="login-card">
+        <div class="login-card-head">
+          <div>
+            <span class="eyebrow">CONNECT</span>
+            <h2>连接你的微信</h2>
+          </div>
+          <span id="login-status-pill" class="status-pill"><i></i><span>未连接</span></span>
+        </div>
+
+        <div class="adapter-picker" id="login-adapters"></div>
+        <div class="adapter-note" id="wcf-note" hidden></div>
+
+        <div class="qr-stage" id="qr-stage">
+          <div class="qr-frame">
+            <img id="qr-image" alt="微信登录二维码" hidden>
+            <div id="qr-placeholder" class="qr-placeholder">
+              <span data-icon="qr"></span>
+              <small>二维码将在这里出现</small>
+            </div>
+            <span id="qr-badge" class="qr-badge" hidden>等待扫码</span>
+          </div>
+          <div class="qr-side">
+            <span class="eyebrow">STATUS</span>
+            <h3 id="login-state-title">尚未连接</h3>
+            <p id="login-state-text">选择一种接入方式，然后开始登录。</p>
+            <div id="login-error" class="login-error" hidden></div>
+            <button id="login-btn" class="btn btn-primary btn-wide">开始扫码登录</button>
+            <p class="login-adapter-help" id="login-adapter-help">演示模式无需微信，适合先体验完整流程。</p>
+          </div>
+        </div>
+
+        <div class="login-steps">
+          <div><b>01</b><span>选择适配器</span></div>
+          <div class="step-line"></div>
+          <div><b>02</b><span>手机微信扫码</span></div>
+          <div class="step-line"></div>
+          <div><b>03</b><span>Agent 后台运行</span></div>
+        </div>
+        <div class="login-foot">
+          <span data-icon="lock"></span> 登录态仅保存在本机 data/ 目录
+          <a href="/api/docs" target="_blank" rel="noreferrer">API 文档</a>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================== APP ============================== -->
+  <div id="main-view" class="main-view" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" data-icon="logo"></span>
+        <div><strong>群伴</strong><span>Group Agent</span></div>
+      </div>
+      <nav class="main-nav" aria-label="主导航">
+        <button class="nav-tab active" data-tab="chats"><span data-icon="chat"></span>会话</button>
+        <button class="nav-tab" data-tab="assistant"><span data-icon="sparkles"></span>助手</button>
+        <button class="nav-tab" data-tab="stickers"><span data-icon="smile"></span>表情包</button>
+        <button class="nav-tab" data-tab="settings"><span data-icon="settings"></span>设置</button>
+      </nav>
+      <div class="topbar-right">
+        <span class="ws-pill" id="ws-pill"><i></i><span id="ws-text">实时连接中</span></span>
+        <div class="account-chip" id="account-chip">
+          <span class="avatar avatar-sm" id="account-avatar">A</span>
+          <span id="account-name">微信助手</span>
+        </div>
+        <button id="logout-btn" class="icon-btn" title="退出登录"><span data-icon="logout"></span></button>
+      </div>
+    </header>
+
+    <main class="main-body">
+      <!-- CHATS -->
+      <section class="tab-panel" id="tab-chats">
+        <div class="workspace">
+          <aside class="group-sidebar surface">
+            <div class="sidebar-head">
+              <div>
+                <span class="eyebrow">WORKSPACE</span>
+                <h2>会话</h2>
+              </div>
+              <button id="refresh-groups" class="icon-btn" title="刷新会话"><span data-icon="refresh"></span></button>
+            </div>
+            <div class="sidebar-mode" id="sidebar-mode">
+              <button type="button" class="active" data-sidebar-mode="groups">群聊</button>
+              <button type="button" data-sidebar-mode="contacts">联系人</button>
+            </div>
+            <label class="search-box">
+              <span data-icon="search"></span>
+              <input id="group-search" placeholder="搜索群聊" autocomplete="off">
+            </label>
+            <div class="group-list" id="group-list"></div>
+            <div class="sidebar-foot">
+              <span class="status-dot" id="sidebar-status-dot"></span>
+              <div><strong id="sidebar-status-text">等待连接</strong><small id="sidebar-status-sub">Adapter</small></div>
+            </div>
+          </aside>
+
+          <section class="chat-panel surface" id="chat-panel">
+            <div class="chat-empty" id="chat-empty">
+              <div class="empty-orb"><span data-icon="chat"></span></div>
+              <h3>选择一个群聊</h3>
+              <p>左侧会实时显示群消息、成员昵称和 Agent 状态。</p>
+            </div>
+            <div class="chat-active" id="chat-active" hidden>
+              <header class="chat-head">
+                <div class="chat-title">
+                  <span class="avatar avatar-md" id="chat-avatar">群</span>
+                  <div>
+                    <div class="chat-name-row"><h2 id="chat-name">群聊</h2><span class="agent-chip" id="chat-agent-badge" hidden>Agent</span></div>
+                    <p id="chat-meta">0 位成员 · 未同步</p>
+                  </div>
+                </div>
+                <div class="chat-actions">
+                  <button class="icon-btn" id="chat-pin-btn" title="置顶当前聊天（只允许一个）"><span data-icon="pin"></span></button>
+                  <button class="icon-btn" id="chat-tools-btn" title="当前会话的微信能力"><span data-icon="layers"></span></button>
+                  <button class="icon-btn" id="members-refresh" title="同步群成员"><span data-icon="users"></span></button>
+                  <div class="chat-toggle read" title="读取本群消息；关闭后不读取、不自动回复">
+                    <span>读取</span>
+                    <label class="switch switch-sm"><input type="checkbox" id="chat-read-toggle"><span></span></label>
+                  </div>
+                  <div class="chat-toggle reply" title="自动回复；需要先开启读取">
+                    <span>回复</span>
+                    <label class="switch switch-sm"><input type="checkbox" id="chat-agent-toggle"><span></span></label>
+                  </div>
+                  <button class="icon-btn inspector-toggle" id="inspector-toggle" title="Agent 设置"><span data-icon="sliders"></span></button>
+                </div>
+              </header>
+
+              <div class="message-area" id="message-area">
+                <button id="load-more" class="load-more" hidden>加载更早消息</button>
+                <div class="message-list" id="message-list"></div>
+                <div class="typing-indicator" id="typing-indicator" hidden>
+                  <span class="typing-dots"><i></i><i></i><i></i></span>
+                  <span id="typing-name">小助手</span> 正在输入
+                </div>
+              </div>
+
+              <footer class="composer-wrap">
+                <div class="sticker-popover" id="sticker-popover" hidden>
+                  <div class="popover-head"><strong>快捷表情</strong><span id="popover-sticker-count"></span></div>
+                  <div class="sticker-popover-grid" id="sticker-popover-grid"></div>
+                </div>
+                <div class="composer">
+                  <button class="composer-btn" id="attachment-btn" title="发送图片 / 文件"><span data-icon="upload"></span></button>
+                  <input type="file" id="attachment-input" hidden>
+                  <button class="composer-btn" id="sticker-pick-btn" title="发送表情包"><span data-icon="smile"></span></button>
+                  <textarea id="composer-input" rows="1" placeholder="以账号身份发送消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+                  <button class="btn btn-primary send-btn" id="send-btn">发送</button>
+                </div>
+                <div class="composer-foot">
+                  <span id="composer-offline">消息会实时同步到微信群</span>
+                  <span class="privacy-hint"><span data-icon="sparkles"></span> Agent 自动回复受冷却与频率限制</span>
+                </div>
+              </footer>
+            </div>
+          </section>
+
+          <aside class="inspector surface" id="inspector">
+            <div class="inspector-head">
+              <div><span class="eyebrow">AGENT</span><h2>群聊控制台</h2></div>
+              <button class="icon-btn inspector-close" id="inspector-close" title="关闭"><span data-icon="close"></span></button>
+            </div>
+            <div class="inspector-scroll">
+              <div class="agent-summary" id="agent-summary">
+                <div class="agent-orb"><span data-icon="sparkles"></span></div>
+                <div><strong id="config-group-name">未选择群聊</strong><p id="config-mode-hint">选择群聊后可配置</p></div>
+              </div>
+
+              <div class="config-section">
+                <div class="switch-row">
+                  <div><strong>读取群消息</strong><small>关闭后不读取该群新消息，也不会自动回复</small></div>
+                  <label class="switch"><input type="checkbox" id="cfg-read"><span></span></label>
+                </div>
+                <label class="field">
+                  <span>读取间隔（秒） <small>每个群独立计时；0 使用全局默认</small></span>
+                  <input type="number" id="cfg-read-interval" min="0" max="3600" step="1" value="0">
+                </label>
+                <div class="switch-row">
+                  <div><strong>启用 Agent 自动回复</strong><small>开启后才会回复；必须先开启读取，否则为只读</small></div>
+                  <label class="switch"><input type="checkbox" id="cfg-enabled"><span></span></label>
+                </div>
+                <label class="field">
+                  <span>触发方式</span>
+                  <select id="cfg-trigger">
+                    <option value="mention">@ 提及时回复</option>
+                    <option value="keyword">命中关键词时回复</option>
+                    <option value="all">每条消息都参与</option>
+                  </select>
+                </label>
+                <label class="field" id="cfg-keywords-wrap">
+                  <span>关键词 <small>逗号分隔</small></span>
+                  <input id="cfg-keywords" placeholder="例如：总结, 待办, 帮忙看看">
+                </label>
+                <label class="field">
+                  <span>触发概率 <b id="cfg-probability-value">100%</b></span>
+                  <input type="range" id="cfg-probability" min="0" max="100" step="5" value="100">
+                </label>
+                <div class="field-row">
+                  <label class="field"><span>冷却秒数</span><input type="number" id="cfg-cooldown" min="0" max="3600" value="30"></label>
+                  <label class="field"><span>每小时上限</span><input type="number" id="cfg-max" min="1" max="500" value="30"></label>
+                </div>
+                <div class="field-row">
+                  <label class="field"><span>静默开始</span><input type="time" id="cfg-quiet-start"></label>
+                  <label class="field"><span>静默结束</span><input type="time" id="cfg-quiet-end"></label>
+                </div>
+                <label class="check-row"><input type="checkbox" id="cfg-stickers"><span>允许 Agent 选择表情包</span></label>
+                <label class="check-row"><input type="checkbox" id="cfg-multi-message"><span>允许连续发送多条消息</span></label>
+                <label class="field"><span>最多消息条数 <small>2–6</small></span><input type="number" id="cfg-max-messages" min="2" max="6" value="3"></label>
+                <label class="check-row"><input type="checkbox" id="cfg-proactive"><span>允许 Agent 在群里安静后主动发起话题</span></label>
+                <label class="field"><span>主动发起间隔（分钟）</span><input type="number" id="cfg-proactive-interval" min="10" max="1440" value="90"></label>
+                <label class="check-row"><input type="checkbox" id="cfg-mention"><span>回复时 @ 消息发送者</span></label>
+                <label class="field">
+                  <span>本群人设 <small>留空使用全局人设</small></span>
+                  <textarea id="cfg-persona" rows="4" placeholder="例如：你是群里的资深产品经理，说话简短、务实，偶尔冷幽默。"></textarea>
+                </label>
+                <label class="field">
+                  <span>模型覆盖 <small>留空使用全局模型</small></span>
+                  <input id="cfg-model" placeholder="例如 deepseek-chat">
+                </label>
+                <button class="btn btn-primary btn-wide" id="save-config-btn">保存本群配置</button>
+              </div>
+
+              <div class="config-section logs-section">
+                <div class="section-title"><span>Agent 动态</span><button class="text-btn" id="refresh-logs">刷新</button></div>
+                <div class="config-logs" id="config-logs"><p class="muted">暂无运行记录</p></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ASSISTANT / OPERATOR -->
+      <section class="tab-panel" id="tab-assistant" hidden>
+        <div class="page assistant-page">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">OPERATOR</span>
+              <h1>Agent 助手</h1>
+              <p>直接指挥群伴：读写文件、执行 PowerShell、调用接口、创建技能、自我迭代和整理群聊记忆。</p>
+            </div>
+            <div class="page-actions">
+              <span class="status-pill" id="assistant-admin-pill"><i></i><span>检测权限中</span></span>
+              <button class="btn btn-ghost" id="assistant-admin-restart">以管理员重启</button>
+              <button class="btn btn-ghost" id="assistant-clear">清空对话</button>
+            </div>
+          </div>
+
+          <div class="assistant-layout">
+            <section class="surface assistant-chat">
+              <div class="assistant-chat-head">
+                <div><strong>操作对话</strong><small id="assistant-model-hint">读取模型状态中…</small></div>
+                <label class="assistant-step-control" title="每次任务最多连续调用工具的次数；0 = 不限制，仍有 500 步 / 30 分钟安全上限">
+                  <span>最大步数 <small>0 = 不限</small></span>
+                  <input type="number" id="assistant-max-steps" min="0" max="500" step="1" value="0">
+                </label>
+                <span class="pill-soft" id="assistant-task-count">0 个任务</span>
+              </div>
+              <div class="assistant-progress" id="assistant-progress" hidden></div>
+              <div class="assistant-messages" id="assistant-messages">
+                <div class="assistant-empty">
+                  <span data-icon="sparkles" data-icon-size="26"></span>
+                  <h3>可以直接下命令</h3>
+                  <p>例如：“在工作区创建一个 Flask MCP 项目并运行测试”“写一个 skill 定时整理群聊纪要”“列出 D 盘根目录并找大于 1GB 的文件”。</p>
+                </div>
+              </div>
+              <div class="assistant-quick" id="assistant-quick">
+                <button type="button" data-assistant-prompt="检查当前工作区、技能和任务状态，告诉我下一步可以做什么">检查工作区</button>
+                <button type="button" data-assistant-prompt="创建一个技能，用于把启用读取的群聊消息总结成重要/次要记忆">创建记忆技能</button>
+                <button type="button" data-assistant-prompt="帮我写一个最小的 MCP 项目，放在 projects 目录，并运行起来">生成 MCP 示例</button>
+                <button type="button" data-assistant-prompt="列出当前工作区的文件结构">查看文件</button>
+              </div>
+              <div class="assistant-composer">
+                <button class="composer-btn" id="assistant-attach" title="发送图片给 Agent（自动 OCR）"><span data-icon="upload"></span></button>
+                <input type="file" id="assistant-attach-input" accept="image/*" hidden>
+                <textarea id="assistant-input" rows="2" placeholder="告诉 Agent 要做什么…（执行中也可以继续发送，会插入当前任务）"></textarea>
+                <button class="btn btn-ghost" id="assistant-stop" hidden>停止</button>
+                <button class="btn btn-primary" id="assistant-send">发送</button>
+              </div>
+            </section>
+
+            <aside class="surface assistant-side">
+              <div class="assistant-side-tabs">
+                <button class="active" data-assistant-panel="workspace">工作区</button>
+                <button data-assistant-panel="terminal">终端</button>
+                <button data-assistant-panel="skills">技能</button>
+                <button data-assistant-panel="memory">记忆</button>
+                <button data-assistant-panel="tasks">任务</button>
+                <button data-assistant-panel="contacts">联系人</button>
+                <button data-assistant-panel="bili">B站</button>
+                <button data-assistant-panel="capabilities">能力</button>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="workspace">
+                <div class="assistant-section-head"><strong>工作区</strong><button class="text-btn" id="assistant-refresh-files">刷新</button></div>
+                <p class="field-hint" id="assistant-workspace-path">读取中…</p>
+                <div class="assistant-inline">
+                  <input id="assistant-file-path" placeholder="相对路径或绝对路径">
+                  <button class="btn btn-ghost" id="assistant-open-file">打开</button>
+                </div>
+                <div class="assistant-file-list" id="assistant-file-list"></div>
+                <textarea class="assistant-editor" id="assistant-file-content" rows="8" placeholder="文件内容…"></textarea>
+                <div class="assistant-inline">
+                  <button class="btn btn-primary" id="assistant-save-file">保存</button>
+                  <button class="btn btn-ghost" id="assistant-new-file">新建</button>
+                  <button class="btn btn-ghost" id="assistant-delete-file">删除</button>
+                </div>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="terminal" hidden>
+                <div class="assistant-section-head"><strong>PowerShell</strong><span class="tool-meta" id="assistant-shell-mode">普通权限</span></div>
+                <textarea class="assistant-editor" id="assistant-shell-command" rows="5" placeholder="Get-ChildItem -Force"></textarea>
+                <label class="check-row"><input type="checkbox" id="assistant-shell-admin"><span>以管理员运行（会弹 UAC）</span></label>
+                <div class="assistant-inline">
+                  <button class="btn btn-primary" id="assistant-run-shell">运行</button>
+                  <button class="text-btn" id="assistant-clear-shell">清空输出</button>
+                </div>
+                <pre class="assistant-output" id="assistant-shell-output">等待命令…</pre>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="skills" hidden>
+                <div class="assistant-section-head"><strong>技能</strong><button class="text-btn" id="assistant-refresh-skills">刷新</button></div>
+                <div class="assistant-file-list" id="assistant-skill-list"></div>
+                <div class="assistant-inline">
+                  <input id="assistant-skill-name" placeholder="技能名">
+                  <button class="btn btn-ghost" id="assistant-run-skill">运行</button>
+                </div>
+                <textarea class="assistant-editor" id="assistant-skill-content" rows="8" placeholder="# SKILL.md"></textarea>
+                <button class="btn btn-primary" id="assistant-save-skill">保存技能</button>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="memory" hidden>
+                <div class="assistant-section-head"><strong>长期记忆</strong><button class="text-btn" id="assistant-refresh-memory">刷新</button></div>
+                <div class="assistant-inline">
+                  <button class="btn btn-ghost" id="assistant-summarize-memory">总结已读群聊</button>
+                  <input id="assistant-memory-query" placeholder="搜索记忆">
+                </div>
+                <div class="assistant-memory-list" id="assistant-memory-list"></div>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="tasks" hidden>
+                <div class="assistant-section-head"><strong>自我迭代任务</strong><button class="text-btn" id="assistant-refresh-tasks">刷新</button></div>
+                <div class="assistant-memory-list" id="assistant-task-list"></div>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="contacts" hidden>
+                <div class="assistant-section-head"><strong>联系人 Agent</strong><button class="text-btn" id="assistant-contacts-refresh">刷新</button></div>
+                <p class="field-hint">只有管理员会进入 Agent 自动回复链路；普通联系人只展示私聊。这里可设置触发方式、关键词、温度和人设。</p>
+                <input id="assistant-contact-search" placeholder="搜索联系人">
+                <div class="assistant-file-list" id="assistant-contact-list"></div>
+                <div id="assistant-contact-config" hidden>
+                  <div class="assistant-contact-title">
+                    <strong id="assistant-contact-name">联系人</strong>
+                    <span class="tool-meta" id="assistant-contact-wxid"></span>
+                  </div>
+                  <label class="check-row"><input type="checkbox" id="assistant-contact-admin"><span>管理员（最高权限，开启后自动回复）</span></label>
+                  <label class="field"><span>触发方式</span>
+                    <select id="assistant-contact-trigger">
+                      <option value="all">所有消息</option>
+                      <option value="keyword">仅关键词</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>关键词（逗号分隔）</span><input id="assistant-contact-keywords" placeholder="例如：报价, 地址"></label>
+                  <label class="field"><span>温度 <b id="assistant-contact-temperature-value">0.30</b></span><input type="range" id="assistant-contact-temperature" min="0" max="2" step="0.05" value="0.3"></label>
+                  <label class="field"><span>专属人设</span><textarea id="assistant-contact-persona" rows="4" placeholder="可选：和这个联系人聊天时的身份/语气"></textarea></label>
+                  <div class="assistant-inline">
+                    <button class="btn btn-primary" id="assistant-contact-save">保存设置</button>
+                    <button class="btn btn-ghost" id="assistant-contact-open">打开聊天</button>
+                  </div>
+                  <div class="assistant-section-head assistant-contact-chat-head"><strong>私聊</strong><span class="tool-meta" id="assistant-contact-source">微信</span></div>
+                  <div class="contact-messages assistant-contact-messages" id="assistant-contact-messages"></div>
+                  <div class="contact-composer assistant-contact-composer">
+                    <textarea id="assistant-contact-input" rows="2" placeholder="以账号身份发送消息…"></textarea>
+                    <button class="btn btn-primary" id="assistant-contact-send">发送</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="bili" hidden>
+                <div class="assistant-section-head"><strong>B站</strong><button class="text-btn" id="bili-refresh">刷新</button></div>
+                <p class="field-hint" id="bili-status-line">未登录</p>
+                <div class="assistant-inline">
+                  <button class="btn btn-primary" id="bili-qr-start">扫码登录</button>
+                  <button class="btn btn-ghost" id="bili-logout">退出</button>
+                </div>
+                <div id="bili-qr-box" hidden>
+                  <img class="bili-qr" id="bili-qr-image" alt="B站登录二维码">
+                  <p class="field-hint" id="bili-qr-status">等待扫码…</p>
+                </div>
+                <details class="bili-advanced">
+                  <summary>Cookie 登录（高级）</summary>
+                  <input id="bili-sessdata" placeholder="SESSDATA">
+                  <input id="bili-jct" placeholder="bili_jct">
+                  <input id="bili-buvid3" placeholder="buvid3（可选）">
+                  <input id="bili-dedeuserid" placeholder="DedeUserID（可选）">
+                  <button class="btn btn-ghost" id="bili-cookie-save">保存 Cookie</button>
+                </details>
+                <details class="bili-advanced">
+                  <summary>账号密码登录（需极验）</summary>
+                  <input id="bili-username" placeholder="手机号 / 邮箱">
+                  <input id="bili-password" type="password" placeholder="密码">
+                  <button class="btn btn-ghost" id="bili-password-start">打开极验验证</button>
+                  <a class="text-btn" id="bili-captcha-link" target="_blank" rel="noreferrer" hidden>打开验证页面</a>
+                  <button class="btn btn-ghost" id="bili-password-finish">完成登录</button>
+                  <p class="field-hint" id="bili-password-status"></p>
+                </details>
+                <div class="assistant-section-head"><strong>刷视频</strong></div>
+                <div class="assistant-inline">
+                  <input id="bili-search-input" placeholder="搜索关键词">
+                  <button class="btn btn-ghost" id="bili-search-btn">搜索</button>
+                </div>
+                <div class="assistant-file-list" id="bili-video-list"></div>
+                <button class="btn btn-primary btn-wide" id="bili-feed-btn">刷一个推荐视频</button>
+
+                <div class="assistant-section-head bili-auto-head"><strong>自动刷 B站</strong><span class="tool-meta" id="bili-auto-state">已关闭</span></div>
+                <p class="field-hint">开启后 Agent 会自行选视频、转写、理解，并按自己的判断决定是否点赞/收藏/评论/回复；不要求每个视频都互动。</p>
+                <label class="check-row"><input type="checkbox" id="bili-auto-enabled"><span>开启 Agent 自动刷 B站</span></label>
+                <div class="field-row">
+                  <label class="field"><span>间隔（分钟）</span><input type="number" id="bili-auto-interval" min="10" max="1440" step="10" value="60"></label>
+                  <label class="field"><span>兴趣关键词 <small>留空 = Agent 自选</small></span><input id="bili-auto-topics" placeholder="留空由 Agent 按自己的喜好选择"></label>
+                </div>
+                <label class="field"><span>音频转写模型</span>
+                  <select id="bili-auto-asr">
+                    <option value="base">base（快，精度一般）</option>
+                    <option value="small" selected>small（推荐）</option>
+                    <option value="medium">medium（更准，CPU 很慢）</option>
+                  </select>
+                </label>
+                <div class="bili-auto-actions">
+                  <label class="check-row"><input type="checkbox" id="bili-auto-like"><span>允许点赞</span></label>
+                  <label class="check-row"><input type="checkbox" id="bili-auto-favorite"><span>允许收藏</span></label>
+                  <label class="check-row"><input type="checkbox" id="bili-auto-comment"><span>允许评论</span></label>
+                  <label class="check-row"><input type="checkbox" id="bili-auto-reply"><span>允许回复评论</span></label>
+                </div>
+                <p class="field-hint">以上只是权限上限；具体做哪几个、是否全部不做，由 Agent 根据视频内容自行判断。</p>
+                <label class="field"><span>转发到群聊</span><select id="bili-auto-group"><option value="">不转发</option></select></label>
+                <label class="field"><span>转发到联系人</span><select id="bili-auto-contact"><option value="">不转发</option></select></label>
+                <div class="assistant-inline">
+                  <button class="btn btn-primary" id="bili-auto-save">保存自动刷配置</button>
+                  <button class="btn btn-ghost" id="bili-auto-run">立即刷一次</button>
+                </div>
+                <div class="bili-auto-log" id="bili-auto-log"></div>
+                <div class="assistant-section-head"><strong>已刷视频 / 知识库</strong><button class="text-btn" id="bili-auto-refresh">刷新</button></div>
+                <div class="assistant-file-list" id="bili-auto-history"></div>
+              </div>
+
+              <div class="assistant-panel" data-assistant-panel-body="capabilities" hidden>
+                <div class="assistant-section-head"><strong>能力开关</strong><button class="text-btn" id="assistant-refresh-capabilities">重新识别</button></div>
+                <p class="field-hint">左：用户与 Agent 直接对话可用；右：群聊 Agent 可用。技能、MCP、接口会从工作区自动识别。</p>
+                <div class="capability-legend"><span>助手</span><span>群聊</span></div>
+                <div class="capability-list" id="assistant-capability-list"></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- STICKERS -->
+      <section class="tab-panel" id="tab-stickers" hidden>
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">STICKER LIBRARY</span>
+              <h1>表情包库</h1>
+              <p>上传 PNG / GIF / JPG，打上情绪标签。模型会在合适的时候自己挑一个。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost" id="seed-stickers-btn"><span data-icon="sparkles"></span>补齐内置示例</button>
+              <button class="btn btn-primary" id="upload-sticker-btn"><span data-icon="plus"></span>上传表情包</button>
+            </div>
+          </div>
+          <div class="library-toolbar">
+            <label class="search-box search-box-wide"><span data-icon="search"></span><input id="sticker-search" placeholder="搜索名称或标签"></label>
+            <div class="tag-row" id="sticker-tags"></div>
+            <span class="library-count" id="sticker-count">0 个表情</span>
+          </div>
+          <div class="sticker-grid" id="sticker-grid"></div>
+          <div class="empty-state" id="sticker-empty" hidden>
+            <span data-icon="smile"></span>
+            <h3>还没有表情包</h3>
+            <p>上传几张常用表情，Agent 就能在聊天里用它们接梗了。</p>
+            <button class="btn btn-primary" id="sticker-empty-upload">上传第一张</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- WECHAT 4.X TOOLS (opened from the current conversation) -->
+      <dialog class="modal chat-tools-modal" id="chat-tools-dialog">
+        <div class="modal-card chat-tools-card">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">WECHATAUTO-REPLICA</span>
+              <h1>当前会话的微信能力</h1>
+              <p>媒体、朋友圈、标签、转发、备注与联系人操作全部走 wechatauto-replica。</p>
+            </div>
+            <div class="page-actions">
+              <span class="status-pill" id="tools-adapter"><i></i><span>未连接</span></span>
+              <button type="button" class="icon-btn" data-close-dialog="chat-tools-dialog" title="关闭"><span data-icon="close"></span></button>
+            </div>
+          </div>
+
+          <div class="settings-grid tool-grid">
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">DIAGNOSTICS</span><h2>运行与数据</h2></div></div>
+              <div class="inline-actions">
+                <button class="btn btn-ghost" id="tool-doctor">运行体检</button>
+                <button class="btn btn-ghost" id="tool-accounts">账号列表</button>
+                <button class="btn btn-ghost" id="tool-image-key">检测图片密钥</button>
+              </div>
+              <pre class="tool-output" id="tool-output">尚未运行诊断。</pre>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">CURRENT CHAT</span><h2>当前群操作</h2></div></div>
+              <p class="field-hint" id="tool-current-group">请先在「会话」中选择一个群聊。</p>
+              <div class="form-grid">
+                <label class="field"><span>导出条数 <small>留空导出全部</small></span><input type="number" id="tool-export-limit" min="1" max="200000" placeholder="500"></label>
+                <div class="inline-actions field-span">
+                  <button class="btn btn-ghost" id="tool-export-json">导出 JSON</button>
+                  <button class="btn btn-ghost" id="tool-export-sqlite">导出 SQLite</button>
+                </div>
+                <label class="field field-span"><span>发送文件 / 图片</span><input type="file" id="tool-send-file"></label>
+                <div class="inline-actions field-span">
+                  <button class="btn btn-ghost" id="tool-send-file-btn">作为文件发送</button>
+                  <button class="btn btn-ghost" id="tool-send-image-btn">作为图片发送</button>
+                </div>
+                <label class="field"><span>@ 成员 <small>昵称，逗号分隔</small></span><input id="tool-at-members" placeholder="张三"></label>
+                <label class="field"><span>@ 内容</span><input id="tool-at-text" placeholder="晚上开会"></label>
+                <button class="btn btn-primary field-span" id="tool-at-btn">发送 @ 消息</button>
+                <label class="field field-span"><span>引用目标 <small>留空引用最近一条</small></span><input id="tool-quote-target" placeholder="要引用的原文"></label>
+                <label class="field field-span"><span>回复内容</span><input id="tool-quote-text" placeholder="收到"></label>
+                <button class="btn btn-primary field-span" id="tool-quote-btn">引用发送</button>
+                <div class="inline-actions field-span">
+                  <button class="btn btn-ghost" id="tool-poke">拍一拍</button>
+                  <button class="btn btn-ghost" id="tool-recall">撤回最后一条</button>
+                  <button class="btn btn-ghost" id="tool-chat-info">当前聊天信息</button>
+                </div>
+                <label class="field"><span>转发目标 <small>群名 / 昵称，逗号分隔</small></span><input id="tool-forward-to" placeholder="文件传输助手"></label>
+                <label class="field"><span>转发关键词 <small>留空=最近一条</small></span><input id="tool-forward-match" placeholder="消息里的文字"></label>
+                <button class="btn btn-primary field-span" id="tool-forward-btn">转发消息</button>
+              </div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">MOMENTS</span><h2>朋友圈</h2></div><button class="icon-btn" id="tool-moments-refresh" title="刷新"><span data-icon="refresh"></span></button></div>
+              <div class="tool-list" id="tool-moments-list"><p class="muted">点击右上角刷新读取朋友圈。</p></div>
+              <div class="inline-actions"><button class="btn btn-ghost" id="tool-interactions">读取互动消息</button></div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">LABELS</span><h2>标签</h2></div><button class="icon-btn" id="tool-labels-refresh" title="刷新"><span data-icon="refresh"></span></button></div>
+              <div class="form-grid">
+                <label class="field"><span>新标签名</span><input id="tool-label-name" placeholder="客户 / 同事"></label>
+                <button class="btn btn-ghost" id="tool-label-create">创建标签</button>
+                <label class="field"><span>发送到标签</span><input id="tool-label-send-name" placeholder="标签名"></label>
+                <label class="field"><span>消息内容</span><input id="tool-label-send-text" placeholder="今晚八点开会"></label>
+                <button class="btn btn-primary field-span" id="tool-label-send">发送到标签</button>
+              </div>
+              <div class="tool-list" id="tool-labels-list"><p class="muted">尚未读取标签。</p></div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">CONTACTS</span><h2>联系人与备注</h2></div></div>
+              <div class="form-grid">
+                <label class="field field-span"><span>搜索昵称 / 备注 / 微信号</span><input id="tool-contact-query" placeholder="输入关键词"></label>
+                <button class="btn btn-ghost field-span" id="tool-contact-search">搜索联系人</button>
+                <label class="field"><span>备注对象</span><input id="tool-remark-who" placeholder="昵称或 wxid"></label>
+                <label class="field"><span>新备注</span><input id="tool-remark-text" placeholder="留空并勾选清除"></label>
+                <label class="check-row field-span"><input type="checkbox" id="tool-remark-clear"><span>清除备注</span></label>
+                <button class="btn btn-primary field-span" id="tool-remark-btn">修改备注</button>
+                <label class="field"><span>群名</span><input id="tool-friend-group" placeholder="群聊名称"></label>
+                <label class="field"><span>成员</span><input id="tool-friend-member" placeholder="群成员昵称"></label>
+                <button class="btn btn-primary field-span" id="tool-friend-btn">发送好友申请</button>
+              </div>
+              <div class="tool-list" id="tool-contacts-list"></div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">ADVANCED</span><h2>高级操作</h2></div></div>
+              <div class="inline-actions">
+                <button class="btn btn-ghost" id="tool-voice">语音通话</button>
+                <button class="btn btn-ghost" id="tool-video">视频通话</button>
+                <button class="btn btn-ghost" id="tool-probe-labels">标签流程探测</button>
+                <button class="btn btn-ghost" id="tool-probe-remark">备注流程探测</button>
+              </div>
+              <p class="field-hint">语音/视频通话会直接拨给当前群或联系人，请确认后再点。</p>
+            </section>
+          </div>
+        </div>
+      </dialog>
+
+      <!-- SETTINGS -->
+      <section class="tab-panel" id="tab-settings" hidden>
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">SETTINGS</span>
+              <h1>运行设置</h1>
+              <p>模型、触发默认值、时区和接入方式都保存在本机数据库。</p>
+            </div>
+            <div class="page-actions"><span class="status-pill" id="settings-adapter"><i></i><span>未连接</span></span></div>
+          </div>
+
+          <div class="demo-banner" id="demo-banner" hidden>
+            <span data-icon="sparkles"></span>
+            <div><strong>当前是演示回复模式</strong><p>填写 API Key 并保存后，Agent 会调用真实大模型。现在也能体验完整的触发、消息与表情包流程。</p></div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">MODEL</span><h2>模型接入</h2></div><span class="pill-soft">OpenAI Compatible</span></div>
+              <div class="form-grid">
+                <label class="field field-span"><span>API Base URL</span><input id="set-base-url" placeholder="https://api.deepseek.com/v1" autocomplete="off"></label>
+                <label class="field"><span>模型名称</span><input id="set-model" placeholder="deepseek-chat" autocomplete="off"></label>
+                <label class="field"><span>API Key</span><input id="set-api-key" type="password" placeholder="留空表示不修改" autocomplete="new-password"><small class="field-hint" id="set-key-hint">未配置 Key</small></label>
+                <label class="field"><span>温度 <b id="set-temperature-value">0.8</b></span><input type="range" id="set-temperature" min="0" max="2" step="0.1" value="0.8"></label>
+                <label class="field"><span>最大输出 tokens</span><input type="number" id="set-max-tokens" min="64" max="2000" value="300"></label>
+                <label class="check-row field-span"><input type="checkbox" id="set-json-mode"><span>要求模型输出 JSON（推荐，失败时会自动降级重试）</span></label>
+                <div class="inline-actions field-span">
+                  <button class="btn btn-ghost" id="test-llm-btn">测试连接</button>
+                  <button class="text-btn" id="clear-key-btn">清除已保存的 Key</button>
+                  <span class="inline-result" id="llm-test-result"></span>
+                </div>
+                <label class="field field-span"><span>默认人设 <small>群聊没有单独设置时使用</small></span><textarea id="set-persona" rows="6"></textarea></label>
+              </div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">BEHAVIOR</span><h2>运行行为</h2></div></div>
+              <div class="form-grid">
+                <label class="field"><span>默认触发方式</span><select id="set-default-trigger">
+                  <option value="mention">@ 提及</option><option value="keyword">关键词</option><option value="all">所有消息</option>
+                </select></label>
+                <label class="field"><span>上下文消息条数</span><input type="number" id="set-context" min="4" max="50" value="18"></label>
+                <label class="field"><span>回复前基础延迟（秒）</span><input type="number" id="set-delay" min="0" max="10" step="0.1" value="2.5"></label>
+                <label class="field"><span>随机追加延迟（0–N 秒）</span><input type="number" id="set-delay-random" min="0" max="30" step="0.1" value="4"></label>
+                <label class="field"><span>跨群最小回复间隔（秒）</span><input type="number" id="set-global-interval" min="0" max="300" step="1" value="8"></label>
+                <label class="field"><span>额外随机冷却（秒）</span><input type="number" id="set-cooldown-jitter" min="0" max="300" step="1" value="20"></label>
+                <label class="field"><span>默认读取间隔（秒）</span><input type="number" id="set-poll-interval" min="1" max="300" step="1" value="5"></label>
+                <label class="field field-span" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-media-download"><span>尝试下载图片/表情包（会短暂打开微信图片预览）</span></label>
+                <label class="field"><span>时区</span><select id="set-timezone"></select></label>
+                <label class="field field-span"><span>Bot 别名 <small>用于识别 @ 提及，逗号分隔</small></span><input id="set-aliases" placeholder="小助手, 助手, 群管家"></label>
+                <label class="field"><span>启动时自动登录</span><select id="set-auto-login">
+                  <option value="">不自动登录</option><option value="replica">微信 PC 4.x（wechatauto-replica）</option><option value="wcf">微信 PC（WeChatFerry）</option><option value="mock">演示模式</option>
+                </select></label>
+                <label class="field field-span"><span>微信 4.x Weixin.exe 路径 <small>留空自动查找</small></span><input id="set-replica-exe" placeholder="D:\Weixin\Weixin.exe"></label>
+                <label class="field field-span"><span>微信 4.x 数据目录 <small>留空自动检测，通常为 ...\xwechat_files</small></span><input id="set-replica-db-dir" placeholder="C:\Users\...\Documents\xwechat_files"></label>
+                <label class="field field-span"><span>微信 3.9 WeChat.exe 路径 <small>旧版界面自动化 / WeChatFerry 使用</small></span><input id="set-wcf-exe" placeholder="C:\Program Files\Tencent\WeChat\WeChat.exe"></label>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>推荐使用「微信 PC 4.x（wechatauto-replica）」+ 微信 4.1.12 以上（本机已验证 4.1.15.13）。消息从本地数据库读取，微信在后台或最小化也能实时收消息；发送时短暂唤起微信，检测到你操作鼠标会自动暂停。旧版界面自动化需要微信 3.9.x，WeChatFerry 仅匹配 3.9.12.51。</p></div>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>回复节奏：基础延迟 + 随机追加延迟；连续触发会合并为最新一条；跨群发送有最小间隔；每次回复后额外随机冷却；接近每小时上限时会随机降频。</p></div>
+                <div class="inline-actions field-span"><button class="btn btn-primary" id="save-settings-btn">保存全部设置</button><span class="inline-result" id="settings-save-result"></span></div>
+              </div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">OPERATOR MEMORY</span><h2>Agent 记忆</h2></div></div>
+              <div class="form-grid">
+                <label class="check-row field-span"><input type="checkbox" id="set-memory-enabled"><span>开启自动记忆（LLM 总结）</span></label>
+                <label class="field"><span>单次总结最大输入字符</span><input type="number" id="set-memory-input" min="1000" max="30000" step="500" value="6000"></label>
+                <label class="field"><span>单次总结最大 tokens</span><input type="number" id="set-memory-tokens" min="100" max="2000" step="50" value="500"></label>
+                <label class="field"><span>单次总结最多记忆条数</span><input type="number" id="set-memory-items" min="1" max="12" step="1" value="5"></label>
+                <label class="field"><span>注入上下文的记忆条数</span><input type="number" id="set-memory-context-items" min="1" max="30" step="1" value="8"></label>
+                <label class="field"><span>注入上下文最大字符数</span><input type="number" id="set-memory-context-chars" min="200" max="8000" step="100" value="1800"></label>
+                <label class="field"><span>Operator 最大步数 <small>0 = 不限制（安全上限 500 步 / 30 分钟）</small></span><input type="number" id="set-assistant-steps" min="0" max="500" step="1" value="0"></label>
+                <label class="field"><span>Operator 最大 tokens</span><input type="number" id="set-assistant-tokens" min="128" max="3000" step="64" value="900"></label>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>记忆按 1–5 星重要度筛选并自动去重；建议每次总结保留 4–5 条、上下文注入 8 条左右。</p></div>
+              </div>
+            </section>
+
+            <section class="surface form-card stats-card">
+              <div class="card-head"><div><span class="eyebrow">OVERVIEW</span><h2>数据概览</h2></div><button class="icon-btn" id="refresh-stats" title="刷新"><span data-icon="refresh"></span></button></div>
+              <div class="stat-grid">
+                <div class="stat"><span id="stat-groups">0</span><small>群聊</small></div>
+                <div class="stat"><span id="stat-messages">0</span><small>消息</small></div>
+                <div class="stat"><span id="stat-stickers">0</span><small>表情包</small></div>
+                <div class="stat"><span id="stat-replies">0</span><small>Agent 回复</small></div>
+              </div>
+              <div class="stat-row"><span>本地数据库</span><b id="stat-db">—</b></div>
+              <div class="stat-row"><span>当前适配器</span><b id="settings-state">—</b></div>
+              <div class="stat-row"><span>账号</span><b id="settings-account">—</b></div>
+            </section>
+
+            <section class="surface notice-card">
+              <div class="notice-icon"><span data-icon="shield"></span></div>
+              <div>
+                <h2>使用边界</h2>
+                <p>本项目用于个人学习与效率工具。微信个人号自动化可能触发平台风控，请使用小号测试，并控制发送频率。生产场景建议接入企业微信或公众号官方 API。</p>
+                <p class="muted">默认绑定 <code>127.0.0.1</code>，不要在没有鉴权的情况下暴露到公网。</p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============================== DIALOGS ============================== -->
+  <dialog class="modal" id="contact-chat-dialog">
+    <div class="modal-card contact-chat-card">
+      <div class="modal-head contact-chat-head">
+        <div class="contact-chat-title">
+          <span class="avatar avatar-md" id="contact-avatar">联</span>
+          <div>
+            <h2 id="contact-name">联系人</h2>
+            <p id="contact-meta">普通联系人</p>
+          </div>
+        </div>
+        <div class="contact-chat-actions">
+          <label class="contact-admin-toggle" title="管理员可以直接与 Agent 助手对话，并拥有最高权限">
+            <input type="checkbox" id="contact-admin-toggle">
+            <span>管理员</span>
+          </label>
+          <button type="button" class="text-btn" id="contact-agent-settings">Agent 设置</button>
+          <button type="button" class="icon-btn" data-close-dialog="contact-chat-dialog"><span data-icon="close"></span></button>
+        </div>
+      </div>
+      <div class="contact-messages" id="contact-messages"></div>
+      <div class="contact-composer">
+        <textarea id="contact-input" rows="2" placeholder="以账号身份发送消息…"></textarea>
+        <button class="btn btn-primary" id="contact-send">发送</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="detached-dialog">
+    <div class="modal-card modal-card-sm detach-card">
+      <div class="detach-icon"><span data-icon="alert"></span></div>
+      <span class="eyebrow">AUTOMATION PAUSED</span>
+      <h2>群伴已脱离控制</h2>
+      <p class="detach-reason" id="detached-reason">检测到你在使用鼠标或键盘，自动操作已暂停。</p>
+      <p class="detach-hint">为不抢占鼠标，群伴已停止读取和自动回复。确认暂时不需要操作微信后，再点击下方按钮恢复。</p>
+      <button class="btn btn-primary btn-wide" id="reattach-btn">重新接管</button>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="upload-dialog">
+    <form method="dialog" class="modal-card" id="upload-form">
+      <div class="modal-head"><div><span class="eyebrow">UPLOAD</span><h2>上传表情包</h2></div><button type="button" class="icon-btn" data-close-dialog="upload-dialog"><span data-icon="close"></span></button></div>
+      <label class="dropzone" id="upload-drop">
+        <input type="file" id="upload-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <img id="upload-preview" alt="预览" hidden>
+        <span data-icon="upload"></span>
+        <strong>点击选择，或拖拽图片到这里</strong>
+        <small>PNG / JPG / GIF / WEBP，最大 5MB</small>
+      </label>
+      <div class="form-grid">
+        <label class="field field-span"><span>名称</span><input id="upload-name" placeholder="例如：收到"></label>
+        <label class="field field-span"><span>标签 <small>逗号分隔，方便模型匹配</small></span><input id="upload-tags" placeholder="收到, OK, 好的"></label>
+        <label class="field field-span"><span>描述</span><input id="upload-desc" placeholder="这个表情表达什么情绪？"></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close-dialog="upload-dialog">取消</button><button type="submit" class="btn btn-primary" id="upload-submit">上传</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal" id="edit-dialog">
+    <form method="dialog" class="modal-card" id="edit-form">
+      <div class="modal-head"><div><span class="eyebrow">EDIT</span><h2>编辑表情包</h2></div><button type="button" class="icon-btn" data-close-dialog="edit-dialog"><span data-icon="close"></span></button></div>
+      <input type="hidden" id="edit-id">
+      <div class="form-grid">
+        <label class="field field-span"><span>名称</span><input id="edit-name"></label>
+        <label class="field field-span"><span>标签</span><input id="edit-tags"></label>
+        <label class="field field-span"><span>描述</span><input id="edit-desc"></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close-dialog="edit-dialog">取消</button><button type="submit" class="btn btn-primary">保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal" id="send-dialog">
+    <form method="dialog" class="modal-card modal-card-sm" id="send-form">
+      <div class="modal-head"><div><span class="eyebrow">SEND</span><h2>发送表情包</h2></div><button type="button" class="icon-btn" data-close-dialog="send-dialog"><span data-icon="close"></span></button></div>
+      <img id="send-preview" class="send-preview" alt="表情包预览" hidden>
+      <input type="hidden" id="send-sticker-id">
+      <label class="field"><span>选择群聊</span><select id="send-group"></select></label>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" data-close-dialog="send-dialog">取消</button><button type="submit" class="btn btn-primary">发送</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal" id="members-dialog">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div><span class="eyebrow">MEMBERS</span><h2 id="members-title">群成员</h2></div>
+        <button type="button" class="icon-btn" data-close-dialog="members-dialog"><span data-icon="close"></span></button>
+      </div>
+      <div class="member-list" id="members-list"></div>
+      <div class="modal-actions">
+        <span class="inline-result" id="members-count"></span>
+        <button type="button" class="btn btn-ghost" id="members-dialog-refresh"><span data-icon="refresh"></span>刷新成员</button>
+        <button type="button" class="btn btn-primary" data-close-dialog="members-dialog">完成</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/app.js?v=20261028-24" defer></script>
+</body>
+</html>

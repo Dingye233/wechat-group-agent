@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings as app_settings
+from app.models import Setting
+
+PUBLIC_KEYS = {
+    "llm_base_url",
+    "llm_model",
+    "llm_temperature",
+    "llm_max_tokens",
+    "llm_json_mode",
+    "llm_api_key",
+    "default_persona",
+    "default_trigger_mode",
+    "default_keywords",
+    "context_messages",
+    "reply_delay_seconds",
+    "reply_delay_random_seconds",
+    "reply_cooldown_jitter_seconds",
+    "reply_global_interval_seconds",
+    "read_poll_interval_seconds",
+    "read_media_download_enabled",
+    "pinned_group_id",
+    "memory_enabled",
+    "memory_summary_max_input_chars",
+    "memory_summary_max_tokens",
+    "memory_summary_max_items",
+    "memory_context_items",
+    "memory_context_max_chars",
+    "assistant_workspace",
+    "assistant_max_steps",
+    "assistant_max_tokens",
+    "assistant_shell_timeout",
+    "timezone",
+    "bot_aliases",
+    "wcf_wechat_exe",
+    "replica_wechat_exe",
+    "replica_db_dir",
+    "auto_login",
+    "seed_sample_stickers",
+}
+
+DEFAULT_PERSONA = (
+    "你是「小助手」，是群聊里的一位真实朋友，而不是客服机器人。\n"
+    "说话自然、简短、有温度，像群成员一样接话；通常 1-2 句，不超过 80 字。\n"
+    "不要使用 Markdown，不要列长清单，不要自称 AI 或语言模型。\n"
+    "别人问你的身份时可以轻松带过；不确定的信息不要编造。\n"
+    "可以偶尔配一个合适的表情包让聊天更生动，但不要每条消息都发。"
+)
+
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "llm_base_url": app_settings.llm_base_url,
+    "llm_model": app_settings.llm_model,
+    "llm_api_key": app_settings.llm_api_key,
+    "llm_temperature": 0.8,
+    "llm_max_tokens": 300,
+    "llm_json_mode": True,
+    "default_persona": DEFAULT_PERSONA,
+    "default_trigger_mode": "mention",
+    "default_keywords": [],
+    "context_messages": 18,
+    "reply_delay_seconds": 2.5,
+    "reply_delay_random_seconds": 4.0,
+    "reply_cooldown_jitter_seconds": 20.0,
+    "reply_global_interval_seconds": 8.0,
+    # Database polling is cheap; keep the default responsive. Per-group
+    # read_interval_seconds can still override this.
+    "read_poll_interval_seconds": 1.0,
+    # Image/sticker download is intentionally opt-in: it opens WeChat preview
+    # windows and is slower than text extraction.
+    "read_media_download_enabled": False,
+    "pinned_group_id": 0,
+    "memory_enabled": True,
+    "memory_summary_max_input_chars": 6000,
+    "memory_summary_max_tokens": 500,
+    "memory_summary_max_items": 5,
+    "memory_context_items": 8,
+    "memory_context_max_chars": 1800,
+    "assistant_workspace": "data/agent_workspace",
+    # 0 means unlimited; the loop still enforces a 500-step / 30-minute safety cap.
+    "assistant_max_steps": 0,
+    "assistant_max_tokens": 900,
+    "assistant_shell_timeout": 60,
+    "timezone": "Asia/Shanghai",
+    "bot_aliases": "",
+    "wcf_wechat_exe": "",
+    "replica_wechat_exe": "",
+    "replica_db_dir": "",
+    "auto_login": app_settings.auto_login or "",
+    "seed_sample_stickers": app_settings.seed_sample_stickers,
+}
+
+VALID_TRIGGER_MODES = {"mention", "keyword", "all"}
+VALID_ADAPTERS = {"", "mock", "replica", "wcf"}
+MAX_STRING = 2000
+
+_TIMEZONES: dict[str, str] = {
+    "Asia/Shanghai": "北京时间 (UTC+8)",
+    "Asia/Tokyo": "东京 (UTC+9)",
+    "Asia/Singapore": "新加坡 (UTC+8)",
+    "UTC": "UTC",
+}
+
+
+async def get_settings(db: AsyncSession) -> dict[str, Any]:
+    merged = dict(DEFAULT_SETTINGS)
+    rows = (await db.execute(select(Setting))).scalars().all()
+    for row in rows:
+        if row.key in PUBLIC_KEYS:
+            merged[row.key] = row.value
+    return merged
+
+
+async def get_setting(db: AsyncSession, key: str, default: Any = None) -> Any:
+    data = await get_settings(db)
+    return data.get(key, default)
+
+
+def public_settings(data: dict[str, Any]) -> dict[str, Any]:
+    result = {key: data.get(key) for key in PUBLIC_KEYS if key != "llm_api_key"}
+    key = str(data.get("llm_api_key") or "")
+    result["llm_configured"] = bool(key)
+    result["llm_api_key_set"] = bool(key)
+    result["llm_api_key_hint"] = f"••••{key[-4:]}" if len(key) >= 4 else ""
+    result["demo_mode"] = not bool(key)
+    result["timezone_options"] = [
+        {"value": value, "label": label} for value, label in _TIMEZONES.items()
+    ]
+    return result
+
+
+def _clean_str(value: Any, key: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{key} 必须是字符串")
+    value = value.strip()
+    if len(value) > MAX_STRING:
+        raise ValueError(f"{key} 内容过长")
+    return value
+
+
+async def update_settings(
+    db: AsyncSession, payload: dict[str, Any]
+) -> dict[str, Any]:
+    current = await get_settings(db)
+    updates: dict[str, Any] = {}
+
+    for key in (
+        "llm_base_url",
+        "llm_model",
+        "default_persona",
+        "timezone",
+        "bot_aliases",
+        "wcf_wechat_exe",
+        "replica_wechat_exe",
+        "replica_db_dir",
+        "assistant_workspace",
+        "auto_login",
+        "default_trigger_mode",
+    ):
+        if key in payload and payload[key] is not None:
+            updates[key] = _clean_str(payload[key], key)
+
+    if "llm_base_url" in updates:
+        url = updates["llm_base_url"]
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise ValueError("API Base URL 必须以 http:// 或 https:// 开头")
+    if "llm_model" in updates and not updates["llm_model"]:
+        raise ValueError("模型名称不能为空")
+    if "timezone" in updates:
+        try:
+            ZoneInfo(updates["timezone"])
+        except Exception as exc:
+            raise ValueError(f"无效时区：{updates['timezone']}") from exc
+    if "auto_login" in updates and updates["auto_login"] not in VALID_ADAPTERS:
+        raise ValueError("auto_login 只能是 mock、replica、wcf 或留空")
+    if "default_trigger_mode" in updates:
+        if updates["default_trigger_mode"] not in VALID_TRIGGER_MODES:
+            raise ValueError("默认触发方式无效")
+
+    if "llm_api_key" in payload and payload["llm_api_key"] is not None:
+        key = _clean_str(payload["llm_api_key"], "llm_api_key")
+        if key:
+            updates["llm_api_key"] = key
+    if payload.get("clear_api_key"):
+        updates["llm_api_key"] = ""
+
+    number_rules = {
+        "llm_temperature": (0.0, 2.0, float),
+        "llm_max_tokens": (64, 2000, int),
+        "context_messages": (4, 50, int),
+        "reply_delay_seconds": (0.0, 10.0, float),
+        "reply_delay_random_seconds": (0.0, 30.0, float),
+        "reply_cooldown_jitter_seconds": (0.0, 300.0, float),
+        "reply_global_interval_seconds": (0.0, 300.0, float),
+        "read_poll_interval_seconds": (1.0, 300.0, float),
+        "memory_summary_max_input_chars": (1000, 30000, int),
+        "memory_summary_max_tokens": (100, 2000, int),
+        "memory_summary_max_items": (1, 12, int),
+        "memory_context_items": (1, 30, int),
+        "memory_context_max_chars": (200, 8000, int),
+        "assistant_max_steps": (0, 500, int),
+        "assistant_max_tokens": (128, 3000, int),
+        "assistant_shell_timeout": (5, 600, int),
+    }
+    for key, (low, high, caster) in number_rules.items():
+        if key in payload and payload[key] is not None:
+            try:
+                value = caster(payload[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} 必须是数字") from exc
+            if not low <= value <= high:
+                raise ValueError(f"{key} 需在 {low} 到 {high} 之间")
+            updates[key] = value
+
+    if "llm_json_mode" in payload and payload["llm_json_mode"] is not None:
+        updates["llm_json_mode"] = bool(payload["llm_json_mode"])
+    if "seed_sample_stickers" in payload and payload["seed_sample_stickers"] is not None:
+        updates["seed_sample_stickers"] = bool(payload["seed_sample_stickers"])
+    if (
+        "read_media_download_enabled" in payload
+        and payload["read_media_download_enabled"] is not None
+    ):
+        updates["read_media_download_enabled"] = bool(
+            payload["read_media_download_enabled"]
+        )
+    if "default_keywords" in payload and payload["default_keywords"] is not None:
+        value = payload["default_keywords"]
+        if not isinstance(value, list):
+            raise ValueError("default_keywords 必须是数组")
+        keywords = [str(item).strip() for item in value if str(item).strip()]
+        updates["default_keywords"] = keywords[:30]
+
+    for key, value in updates.items():
+        row = await db.get(Setting, key)
+        if row is None:
+            db.add(Setting(key=key, value=value))
+        else:
+            row.value = value
+    await db.commit()
+
+    merged = dict(current)
+    merged.update(updates)
+    return merged
+
+
+def now_in_timezone(timezone: str) -> datetime:
+    try:
+        return datetime.now(ZoneInfo(timezone))
+    except Exception:
+        return datetime.now(ZoneInfo("Asia/Shanghai"))

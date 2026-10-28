@@ -1,0 +1,38 @@
+# Python virtual environments / caches
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime data: WeChat databases, messages, media, B站 cookies, logs
+data/
+wechatauto_logs/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+bili_qr_*.png
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dependencies / frontend
+node_modules/
