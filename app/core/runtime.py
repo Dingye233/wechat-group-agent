@@ -1560,21 +1560,51 @@ class RuntimeManager:
         paths: list[Path] = []
         seen: set[str] = set()
         image_tools = {"display_image", "screen_capture", "run_mcp", "call_interface"}
+
+        def _normalize_tool(value: Any) -> str:
+            tool = str(value or "")
+            for prefix in ("mcp__qunban__", "qunban_qunban_", "qunban_"):
+                tool = tool.removeprefix(prefix)
+            return tool.replace("qunban_", "")
+
+        def _flatten(node: Any, depth: int = 0) -> list[dict[str, Any]]:
+            # Tool output is often a wrapper dict whose "stdout" holds another
+            # JSON document (qunban_run_mcp), so walk nested JSON strings.
+            found: list[dict[str, Any]] = []
+            if depth > 4:
+                return found
+            if isinstance(node, dict):
+                found.append(node)
+                for value in node.values():
+                    if isinstance(value, (dict, list)):
+                        found.extend(_flatten(value, depth + 1))
+                    elif isinstance(value, str) and value.lstrip()[:1] in "{[":
+                        try:
+                            found.extend(_flatten(json.loads(value), depth + 1))
+                        except Exception:
+                            continue
+            elif isinstance(node, list):
+                for value in node:
+                    found.extend(_flatten(value, depth + 1))
+            return found
+
         for item in trace:
-            if item.get("tool") not in image_tools:
+            if _normalize_tool(item.get("tool")) not in image_tools:
                 continue
             raw = str(item.get("output") or "")
             url = ""
             path_text = ""
             try:
-                data = json.loads(raw)
+                data: Any = json.loads(raw)
             except Exception:
                 data = None
-            if isinstance(data, dict):
-                url = str(data.get("url") or "")
-                path_text = str(data.get("path") or "")
-            else:
-                match = re.search(r"/media/assistant/[^\s\"',}]+", raw)
+            for node in _flatten(data):
+                if not path_text and str(node.get("path") or ""):
+                    path_text = str(node.get("path"))
+                if not url and str(node.get("url") or "").startswith("/media/"):
+                    url = str(node.get("url"))
+            if not path_text and not url:
+                match = re.search(r"/media/assistant/[^\s\"',}\\\]+", raw)
                 if match:
                     url = match.group(0)
             candidates: list[Path] = []
