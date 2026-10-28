@@ -85,6 +85,7 @@ const state = {
   biliQrTimer: null,
   biliPasswordTimer: null,
   biliPasswordSession: '',
+  chatTasks: [],
   detached: false,
   detachReason: '',
   unread: new Map(),
@@ -1242,10 +1243,13 @@ async function selectGroup(groupId) {
   state.messages = [];
   state.members = [];
   state.logs = [];
+  state.chatTasks = [];
   state.hasMoreMessages = false;
   state.loadingMore = false;
   updateLoadMoreButton();
   renderLogs();
+  renderChatTasks();
+  loadChatTasks(groupId).catch(() => {});
   try {
     const [messages, logs] = await Promise.all([
       api(`/groups/${groupId}/messages?limit=80`),
@@ -1970,6 +1974,46 @@ async function toggleGroupAgent(enabled) {
   } catch {
     const toggle = $('#chat-agent-toggle');
     if (toggle) toggle.checked = Boolean(currentGroup()?.agent?.agent_enabled);
+  }
+}
+
+async function loadChatTasks(groupId) {
+  try {
+    const data = await api(`/groups/${groupId}/tasks?limit=30`);
+    if (state.selectedGroupId !== groupId) return;
+    state.chatTasks = data.tasks || [];
+    renderChatTasks();
+  } catch {
+    /* ignore */
+  }
+}
+
+const CHAT_TASK_LABELS = {
+  pending: '排队中',
+  running: '处理中',
+  done: '已完成',
+  error: '失败',
+  cancelled: '已取消',
+};
+
+function renderChatTasks() {
+  const container = $('#chat-task-list');
+  if (!container) return;
+  container.replaceChildren();
+  if (!state.chatTasks.length) {
+    container.appendChild(el('p', 'muted', '暂无任务；需要查资料时会自动挂到这里的后台执行。'));
+    return;
+  }
+  for (const task of state.chatTasks.slice(0, 10)) {
+    const item = el('div', `chat-task-item ${task.status || 'pending'}`);
+    const head = el('div', 'chat-task-head');
+    head.appendChild(el('strong', null, `#${task.id} ${task.user_name || '群友'}`));
+    head.appendChild(el('span', `chat-task-status ${task.status || 'pending'}`, CHAT_TASK_LABELS[task.status] || task.status));
+    item.appendChild(head);
+    item.appendChild(el('p', 'chat-task-query', task.query || ''));
+    if (task.result) item.appendChild(el('p', 'chat-task-result', `结果：${task.result.slice(0, 180)}`));
+    if (task.error) item.appendChild(el('p', 'chat-task-error', task.error.slice(0, 180)));
+    container.appendChild(item);
   }
 }
 
@@ -4947,6 +4991,17 @@ function handleWsEvent(event) {
         if (data.level === 'error') toast(`Agent：${data.detail}`, 'warn', 4500);
       }
       break;
+    case 'chat_task.updated':
+      if (state.selectedGroupId === data.group_id) {
+        const index = state.chatTasks.findIndex((item) => item.id === data.id);
+        if (index >= 0) state.chatTasks[index] = data;
+        else state.chatTasks.unshift(data);
+        state.chatTasks = state.chatTasks.slice(0, 30);
+        renderChatTasks();
+        if (data.status === 'done' && data.result) toast(`任务 #${data.id} 已完成`, 'ok', 2500);
+        if (data.status === 'error') toast(`任务 #${data.id} 失败：${data.error || ''}`, 'warn', 4000);
+      }
+      break;
     case 'adapter.detached':
       applyDetachedState(true, data.reason || '检测到用户接管鼠标');
       break;
@@ -5098,6 +5153,9 @@ function bindEvents() {
   $('#save-config-btn')?.addEventListener('click', saveGroupConfig);
   $('#refresh-logs')?.addEventListener('click', () => {
     if (state.selectedGroupId) loadLogs(state.selectedGroupId);
+  });
+  $('#refresh-chat-tasks')?.addEventListener('click', () => {
+    if (state.selectedGroupId) loadChatTasks(state.selectedGroupId);
   });
 
   $('#composer-input')?.addEventListener('input', autoResizeComposer);

@@ -324,6 +324,62 @@ class AgentMemory(Base):
     use_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class UserImpression(Base):
+    """Per-group emotional/relationship memory for one interacting member."""
+
+    __tablename__ = "user_impressions"
+    __table_args__ = (
+        UniqueConstraint(
+            "group_id", "user_wxid", "account_key", name="uq_user_impression"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    account_key: Mapped[str] = mapped_column(String(160), default="", index=True)
+    user_wxid: Mapped[str] = mapped_column(String(128), default="")
+    display_name: Mapped[str] = mapped_column(String(160), default="")
+    sentiment: Mapped[float] = mapped_column(Float, default=0.0)
+    last_emotion: Mapped[str] = mapped_column(String(32), default="neutral")
+    emotion_intensity: Mapped[float] = mapped_column(Float, default=0.0)
+    emotion_counts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    traits: Mapped[list[str]] = mapped_column(JSON, default=list)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    interaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChatTask(Base):
+    """A background group-chat task created by the intent router."""
+
+    __tablename__ = "chat_tasks"
+    __table_args__ = (
+        Index("ix_chat_tasks_group_status", "group_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    account_key: Mapped[str] = mapped_column(String(160), default="", index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_wxid: Mapped[str] = mapped_column(String(128), default="")
+    user_name: Mapped[str] = mapped_column(String(160), default="")
+    intent: Mapped[str] = mapped_column(String(32), default="task")
+    query: Mapped[str] = mapped_column(Text, default="")
+    plan: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    result: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AgentTask(Base):
     __tablename__ = "agent_tasks"
 

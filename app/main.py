@@ -16,6 +16,7 @@ from app.api import (
     assistant,
     auth,
     bilibili,
+    chat_tasks,
     contacts,
     groups,
     opencode,
@@ -126,6 +127,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(status.router, prefix="/api", tags=["system"])
 app.include_router(groups.router, prefix="/api", tags=["groups"])
+app.include_router(chat_tasks.router, prefix="/api", tags=["groups"])
 app.include_router(outbox.router, prefix="/api", tags=["outbox"])
 app.include_router(contacts.router, prefix="/api", tags=["contacts"])
 app.include_router(replica_tools.router, prefix="/api", tags=["replica"])

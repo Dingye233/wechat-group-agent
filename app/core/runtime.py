@@ -73,57 +73,56 @@ _CANCEL_WORDS = {
     "cancel",
 }
 
-_TOOL_LABELS = {
-    "tool": "群伴工具",
-    "send_message": "发送消息",
-    "read_group": "读取群消息",
-    "bili_knowledge": "检索 B站知识库",
-    "memory_save": "写入记忆",
-    "memory_search": "检索记忆",
-    "read": "读取文件",
-    "grep": "搜索内容",
-    "glob": "查找文件",
-    "webfetch": "读取网页",
-    "websearch": "搜索网页",
-    "read_file": "读取文件",
-    "write_file": "写入文件",
-    "list_dir": "查看目录",
-    "search_files": "搜索文件",
-    "run_powershell": "执行 PowerShell",
-    "web_request": "请求网页",
-    "screen_capture": "截屏",
-    "display_image": "显示图片",
-    "read_image": "识别图片",
-    "save_memory": "写入记忆",
-    "search_memories": "检索记忆",
-    "create_task": "创建任务",
-    "update_task": "更新任务",
-    "list_tasks": "查看任务",
-    "list_groups": "读取群聊",
-    "send_group_message": "发送群消息",
-    "read_group_messages": "读取群消息",
-    "send_contact_message": "发送私聊消息",
-    "send_contact_image": "发送私聊图片",
-    "send_image": "发送图片",
-    "list_capabilities": "查看能力",
-    "discover_capabilities": "发现能力",
-    "run_mcp": "运行 MCP",
-    "call_interface": "调用接口",
-    "bili_search": "搜索 B站",
-    "bili_feed": "刷 B站推荐",
-    "bili_recommend": "读取 B站推荐",
-    "bili_status": "查看 B站账号",
-    "bili_video_info": "读取 B站视频信息",
-    "bili_transcribe": "转写 B站视频",
-    "bili_watch": "观看 B站视频",
-    "bili_like": "点赞 B站视频",
-    "bili_favorite": "收藏 B站视频",
-    "bili_comment": "评论 B站视频",
-    "bili_comments": "读取 B站评论",
-    "bili_reply_comment": "回复 B站评论",
-    "bili_knowledge_search": "检索 B站知识库",
-    "bili_knowledge_add": "记录 B站视频到知识库",
-    "bili_last_opinion": "读取 B站最近看法",
+_TOOL_ACKS = {
+    "send_message": "我先把消息发出去",
+    "send_group_message": "我先把群消息发出去",
+    "read_group": "我先看看群里的消息",
+    "read_group_messages": "我先看看群里的消息",
+    "memory_save": "我记一下",
+    "save_memory": "我记一下",
+    "memory_search": "我翻翻之前记下的东西",
+    "search_memories": "我翻翻之前记下的东西",
+    "read": "我先翻一下资料",
+    "read_file": "我先翻一下资料",
+    "grep": "我先翻一下资料",
+    "glob": "我先找找相关文件",
+    "search_files": "我先找找相关文件",
+    "list_dir": "我先看看目录里有什么",
+    "webfetch": "我去网上看看",
+    "websearch": "我去网上查查",
+    "web_request": "我去查一下",
+    "write_file": "我整理一下再写下来",
+    "run_powershell": "我处理一下这个操作",
+    "screen_capture": "我先看一眼屏幕",
+    "display_image": "我把图片打开看看",
+    "read_image": "我看看这张图",
+    "create_task": "我先记一下这件事",
+    "update_task": "我更新一下进度",
+    "list_tasks": "我看看任务列表",
+    "list_groups": "我先看看群聊",
+    "send_contact_message": "我先把私聊消息发出去",
+    "send_contact_image": "我先把图片发过去",
+    "send_image": "我把图片发过去",
+    "list_capabilities": "我先看看手头有什么能力",
+    "discover_capabilities": "我先找找有没有合适的办法",
+    "run_mcp": "我先接一下手头的工具",
+    "call_interface": "我去查一下",
+    "bili_search": "我去 B站搜搜",
+    "bili_feed": "我去 B站逛逛",
+    "bili_recommend": "我去 B站看看推荐",
+    "bili_status": "我先看看 B站账号",
+    "bili_video_info": "我去看看这个视频",
+    "bili_transcribe": "我听听这个视频在讲什么",
+    "bili_watch": "我去看看这个视频",
+    "bili_like": "我点个赞",
+    "bili_favorite": "我收藏一下",
+    "bili_comment": "我去留个言",
+    "bili_comments": "我翻翻评论区",
+    "bili_reply_comment": "我去回个评论",
+    "bili_knowledge": "我去 B站知识库翻翻",
+    "bili_knowledge_search": "我去 B站知识库翻翻",
+    "bili_knowledge_add": "我把这个视频记进知识库",
+    "bili_last_opinion": "我翻翻之前看过的看法",
 }
 
 
@@ -182,6 +181,7 @@ class RuntimeManager:
         self._hotkey_text = ""
         self._outbox_task: asyncio.Task | None = None
         self._outbox_lock: asyncio.Lock | None = None
+        self._chat_tasks_recovered = False
 
     # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -341,6 +341,8 @@ class RuntimeManager:
 
     async def close(self) -> None:
         with contextlib.suppress(Exception):
+            await self.agent.close()
+        with contextlib.suppress(Exception):
             self._hotkey.stop()
         if self._outbox_task and not self._outbox_task.done():
             self._outbox_task.cancel()
@@ -434,6 +436,11 @@ class RuntimeManager:
                 # Give the adapter a few seconds to finish its initial sync,
                 # then verify and retry messages that never reached WeChat.
                 self._schedule_outbox_retry(6.0)
+                if not self._chat_tasks_recovered:
+                    self._chat_tasks_recovered = True
+                    asyncio.create_task(
+                        self._recover_chat_tasks(), name="recover-chat-tasks"
+                    )
         elif event.type == "qr":
             encoded = event.data.get("image_b64") or ""
             try:
@@ -1455,28 +1462,23 @@ class RuntimeManager:
                 .removeprefix("qunban_")
                 .replace("qunban_", "")
             )
-            label = _TOOL_LABELS.get(normalized, _TOOL_LABELS.get(tool, normalized))
-            thought = str(event.get("thought") or "").strip().replace("\n", " ")
-            if thought:
-                return f"🔧 {label}：{thought[:140]}"
-            return f"🔧 正在{label}"
+            ack = _TOOL_ACKS.get(normalized) or _TOOL_ACKS.get(tool) or "我处理一下"
+            return ack + random.choice(
+                ["，稍等～", "，马上回来", "，我看一眼就回"]
+            )
         if phase == "tool_result" and event.get("ok") is False:
             sent = int(state.get("sent") or 0)
             if sent >= int(state.get("max") or 6) + 3:
                 return ""
             state["sent"] = sent + 1
             state["last_sent"] = time.monotonic()
-            tool = str(event.get("tool") or "工具")
-            normalized = (
-                tool.removeprefix("qunban_qunban_")
-                .removeprefix("qunban_")
-                .replace("qunban_", "")
+            return random.choice(
+                [
+                    "刚才那步没成功，我换个办法再试试",
+                    "这边卡了一下，我换个方式再来",
+                    "没查到想要的结果，我再试试别的路子",
+                ]
             )
-            label = _TOOL_LABELS.get(normalized, _TOOL_LABELS.get(tool, normalized))
-            message = str(event.get("message") or "").strip().replace("\n", " ")
-            if message:
-                return f"⚠ {label}失败：{message[:180]}"
-            return f"⚠ {label}失败"
         return ""
 
     async def _send_admin_notice(
@@ -1957,6 +1959,10 @@ class RuntimeManager:
         image_paths = RuntimeManager._image_paths_from_trace(
             meta.get("tool_trace") or []
         )
+        # Tool traces belong to logs/dashboard, not to chat message metadata.
+        persist_meta = {
+            key: value for key, value in meta.items() if key != "tool_trace"
+        }
         if image_paths:
             text = RuntimeManager._strip_inline_images(text)
 
@@ -1972,7 +1978,7 @@ class RuntimeManager:
                     kind="text",
                     content=text.strip(),
                     is_from_agent=True,
-                    meta=meta,
+                    meta=persist_meta,
                     account=account,
                     error=str(exc),
                 )
@@ -1982,7 +1988,7 @@ class RuntimeManager:
                 kind="text",
                 content=text.strip(),
                 is_from_agent=True,
-                meta=meta,
+                meta=persist_meta,
                 account=account,
             )
             sent_any = True
@@ -1993,7 +1999,7 @@ class RuntimeManager:
             allow = getattr(self.adapter, "allow_ui_action", None)
             if callable(allow):
                 allow(120.0)
-            image_meta = {**meta, "source": "agent-image"}
+            image_meta = {**persist_meta, "source": "agent-image"}
             try:
                 self._ensure_attached()
                 await self.adapter.send_image(group.external_id, path)
@@ -2025,7 +2031,7 @@ class RuntimeManager:
             from app.services.stickers import sticker_path
 
             path = await sticker_path(sticker)
-            sticker_meta = {**meta, "sticker_id": sticker.id}
+            sticker_meta = {**persist_meta, "sticker_id": sticker.id}
             try:
                 self._ensure_attached()
                 await self._adapter_send_sticker(
@@ -2425,6 +2431,16 @@ class RuntimeManager:
         self.broadcast("status", self.status_dict())
         return {"detached": True, "reason": reason}
 
+    async def _recover_chat_tasks(self) -> None:
+        """Resume pending group tasks once, after the adapter is online."""
+
+        try:
+            await self.agent.recover_chat_tasks()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("恢复群聊任务失败")
+
     # ------------------------------------------------------------ send outbox
     def _schedule_outbox_retry(self, delay: float = 0.0) -> bool:
         if self._outbox_task and not self._outbox_task.done():
@@ -2537,10 +2553,10 @@ class RuntimeManager:
             unconfirmed = any(
                 marker in error_text
                 for marker in (
-                    "????????????",
-                    "???????????",
-                    "?????",
-                    "??????",
+                    "发送后未在微信数据库确认",
+                    "已尝试发送但结果未确认",
+                    "结果未确认",
+                    "数据库未确认",
                 )
             )
             record_meta = dict(meta or {})

@@ -14,8 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
-from app.models import AgentLog, Group, GroupConfig, GroupMember, Message, Sticker
+from app.models import AgentLog, ChatTask, Group, GroupConfig, GroupMember, Message, Sticker
 from app.services.capabilities import catalog_for_scope, execute_capability
+from app.services.impressions import (
+    get_impression,
+    impression_prompt,
+    update_impression,
+)
 from app.services.llm import LLMError, LLMService
 from app.services.serializers import agent_log_dict
 from app.services.settings import get_settings
@@ -51,6 +56,7 @@ class AgentEngine:
         self._global_next_reply = 0.0
         self._processed: deque[int] = deque(maxlen=3000)
         self._processed_set: set[int] = set()
+        self._task_jobs: set[asyncio.Task] = set()
 
     async def handle_message(self, group_id: int, message_id: int) -> None:
         if not self._mark_processed(message_id):
@@ -77,6 +83,421 @@ class AgentEngine:
         self._processed.append(message_id)
         self._processed_set.add(message_id)
         return True
+
+    # ------------------------------------------------------------ intent router
+    async def _plan_intent(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+        impression: dict[str, Any],
+        tool_payload: dict[str, Any],
+        bili_context: str = "",
+    ) -> dict[str, Any]:
+        """Fast intent/emotion analysis before choosing a reply agent."""
+
+        tools = tool_payload.get("tools") or []
+        tool_lines = [
+            f"- {item['name']}: {item.get('desc', '')} args={json.dumps(item.get('args') or {}, ensure_ascii=False)}"
+            for item in tools
+        ]
+        system_prompt = """你是群聊意图分析器，不负责回复用户，只输出一个 JSON。
+分析最后一条消息，判断：
+1. 是否值得你参与（should_reply）；
+2. 用户意图（intent）：chat/question/task/emotional/complaint/privacy/spam；
+3. 是否需要调用工具（need_tools），只能从给定工具列表选择；
+4. 用户当前情绪（user_emotion）和强度（0-1）；
+5. 最合适的回复语气（tone）；
+6. 如果需要工具，给一句自然过渡语（ack），例如“我去看看”“我查一下”；
+7. 对这个用户的简短新印象（impression_note）和性格/偏好标签（traits）。
+
+规则：
+- 拿不准时 should_reply=true。
+- 被叫到名字、@、提问、求助、任务、明显情绪表达，should_reply=true。
+- 群友之间互相聊天且不需要你参与、纯灌水，可以 should_reply=false。
+- 不因消息短就跳过。
+- 涉及查询/泄露他人个人信息、手机号、住址等隐私，intent=privacy，need_tools=false。
+- 普通闲聊不要调用工具；只有需要外部事实/动作时才 need_tools=true。
+- 不要输出任何解释，只输出 JSON：
+{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":""}"""
+        user_prompt = f"""# 群聊
+- 群名：{group.name or '未知'}
+- 机器人：{self.runtime.bot_name or '小助手'}
+- 触发方式：{config.trigger_mode}
+- 最后消息发送者：{message.sender_name or '未知'}（{message.sender_wxid or ''}）
+- 最后消息：{message.content or ''}
+
+# 最近上下文
+{chr(10).join(context[-10:])}
+
+# 长期记忆
+{(memory_text or '无')[:1000]}
+
+# 对这个人的印象
+{impression_prompt(impression)}
+
+# 最近看过的B站内容
+{(bili_context or '无')[:800]}
+
+# 可用工具
+{chr(10).join(tool_lines) or '无'}"""
+        model = (config.model or settings.get("llm_model") or "").strip()
+        try:
+            data, _ = await self.llm.complete_json(
+                base_url=str(settings.get("llm_base_url") or ""),
+                api_key=str(settings.get("llm_api_key") or ""),
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.1,
+                max_tokens=260,
+                json_mode=True,
+            )
+        except LLMError:
+            return self._fallback_plan(message, config, tools)
+        except Exception:
+            return self._fallback_plan(message, config, tools)
+
+        allowed_tools = {str(item.get("name") or "") for item in tools}
+        intent = str(data.get("intent") or "chat").strip().lower()
+        if intent not in {
+            "chat",
+            "question",
+            "task",
+            "emotional",
+            "complaint",
+            "privacy",
+            "spam",
+        }:
+            intent = "chat"
+        requested = data.get("tools")
+        if not isinstance(requested, list):
+            requested = []
+        selected = [
+            str(item).strip()
+            for item in requested
+            if str(item).strip() in allowed_tools
+        ][:3]
+        need_tools = bool(data.get("need_tools")) and bool(selected)
+        if intent == "privacy":
+            need_tools = False
+            selected = []
+        if intent == "spam":
+            need_tools = False
+            selected = []
+        should_reply = data.get("should_reply")
+        if not isinstance(should_reply, bool):
+            should_reply = True
+        emotion = str(data.get("user_emotion") or "neutral").strip().lower()
+        try:
+            intensity = max(0.0, min(1.0, float(data.get("emotion_intensity") or 0)))
+        except (TypeError, ValueError):
+            intensity = 0.0
+        traits = data.get("traits")
+        if not isinstance(traits, list):
+            traits = []
+        ack = str(data.get("ack") or "").strip()
+        if need_tools and not ack:
+            ack = random.choice(
+                ["我去看看，稍等～", "我查一下，等我一下", "我去确认一下"]
+            )
+        return {
+            "should_reply": should_reply,
+            "intent": intent,
+            "need_tools": need_tools,
+            "tools": selected,
+            "user_emotion": emotion,
+            "emotion_intensity": intensity,
+            "tone": str(data.get("tone") or "warm"),
+            "ack": ack,
+            "traits": [str(item)[:30] for item in traits[:6]],
+            "impression_note": str(data.get("impression_note") or "")[:240],
+            "source": "planner",
+        }
+
+    def _fallback_plan(
+        self, message: Message, config: GroupConfig, tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        text = str(message.content or "").lower()
+        allowed = {str(item.get("name") or "") for item in tools}
+        task_words = (
+            "查",
+            "搜索",
+            "天气",
+            "新闻",
+            "视频",
+            "推荐",
+            "知识库",
+            "帮我",
+            "看一下",
+            "找一下",
+            "翻译",
+            "总结",
+        )
+        privacy_words = ("个人信息", "手机号", "住址", "身份证", "查人")
+        emotion_words = {
+            "生气": "angry",
+            "烦": "frustrated",
+            "焦虑": "anxious",
+            "难过": "sad",
+            "开心": "happy",
+            "笑死": "playful",
+            "急": "anxious",
+        }
+        intent = "chat"
+        if any(word in text for word in privacy_words):
+            intent = "privacy"
+        elif any(word in text for word in task_words):
+            intent = "task"
+        elif any(word in text for word in emotion_words):
+            intent = "emotional"
+        need_tools = intent not in {"privacy", "spam"} and any(
+            name in allowed
+            for name in ("call_interface", "bili_search", "bili_knowledge_search")
+        ) and any(word in text for word in task_words)
+        selected = []
+        if need_tools:
+            if "天气" in text and "call_interface" in allowed:
+                selected = ["call_interface"]
+            elif "视频" in text and "bili_knowledge_search" in allowed:
+                selected = ["bili_knowledge_search"]
+        emotion = next(
+            (value for word, value in emotion_words.items() if word in text),
+            "neutral",
+        )
+        return {
+            "should_reply": bool(str(message.content or "").strip()),
+            "intent": intent,
+            "need_tools": bool(selected),
+            "tools": selected,
+            "user_emotion": emotion,
+            "emotion_intensity": 0.5,
+            "tone": "warm",
+            "ack": "我去看看，稍等～" if selected else "",
+            "traits": [],
+            "impression_note": "",
+            "source": "fallback",
+        }
+
+    # -------------------------------------------------------------- chat tasks
+    async def _create_chat_task(
+        self,
+        *,
+        group: Group,
+        message: Message,
+        plan: dict[str, Any],
+        account_key: str,
+    ) -> dict[str, Any]:
+        async with SessionLocal() as db:
+            row = ChatTask(
+                group_id=group.id,
+                account_key=account_key,
+                message_id=message.id,
+                user_wxid=str(message.sender_wxid or ""),
+                user_name=str(message.sender_name or ""),
+                intent=str(plan.get("intent") or "task"),
+                query=str(message.content or ""),
+                plan=plan,
+                status="pending",
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+            payload = self._chat_task_dict(row)
+        self.runtime.broadcast("chat_task.updated", payload)
+        return payload
+
+    def _chat_task_dict(self, row: ChatTask) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "group_id": row.group_id,
+            "message_id": row.message_id,
+            "user_wxid": row.user_wxid,
+            "user_name": row.user_name,
+            "intent": row.intent,
+            "query": row.query,
+            "status": row.status,
+            "result": row.result,
+            "error": row.error,
+            "created_at": row.created_at.isoformat() + "Z"
+            if row.created_at
+            else "",
+            "updated_at": row.updated_at.isoformat() + "Z"
+            if row.updated_at
+            else "",
+            "finished_at": row.finished_at.isoformat() + "Z"
+            if row.finished_at
+            else "",
+        }
+
+    async def _update_chat_task(
+        self, task_id: int, status: str, *, result: str = "", error: str = ""
+    ) -> dict[str, Any] | None:
+        async with SessionLocal() as db:
+            row = await db.get(ChatTask, task_id)
+            if row is None:
+                return None
+            row.status = status
+            if result:
+                row.result = result[:8000]
+            if error:
+                row.error = error[:2000]
+            if status in {"done", "error", "cancelled"}:
+                row.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+            await db.refresh(row)
+            payload = self._chat_task_dict(row)
+        self.runtime.broadcast("chat_task.updated", payload)
+        return payload
+
+    def _start_chat_task(self, task_id: int) -> None:
+        job = asyncio.create_task(
+            self._run_chat_task(task_id), name=f"chat-task-{task_id}"
+        )
+        self._task_jobs.add(job)
+        job.add_done_callback(self._task_jobs.discard)
+
+    async def recover_chat_tasks(self) -> None:
+        """Resume queued tasks after a restart; mark interrupted ones."""
+
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(ChatTask)
+                    .where(ChatTask.status.in_(("pending", "running")))
+                    .order_by(ChatTask.id.asc())
+                    .limit(20)
+                )
+            ).scalars().all()
+        for row in rows:
+            if row.status == "running":
+                await self._update_chat_task(
+                    row.id, "error", error="服务重启中断，请重新发起"
+                )
+            else:
+                self._start_chat_task(row.id)
+
+    async def close(self) -> None:
+        jobs = list(self._task_jobs)
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
+        self._task_jobs.clear()
+
+    async def _run_chat_task(self, task_id: int) -> None:
+        async with SessionLocal() as db:
+            task = await db.get(ChatTask, task_id)
+            if task is None or task.status not in {"pending", "running"}:
+                return
+            group = await db.get(Group, task.group_id)
+            config = await db.get(GroupConfig, task.group_id)
+            settings = await get_settings(db)
+            message = (
+                await db.get(Message, task.message_id)
+                if task.message_id
+                else None
+            )
+            if group is None or config is None:
+                await self._update_chat_task(task_id, "error", error="群聊不存在")
+                return
+            plan = dict(task.plan or {})
+            context, members = await self._build_context(db, group.id, settings)
+            memory_text = await self._load_memory_context(
+                db, group.id, settings, message
+            )
+            stickers = await self._load_sticker_catalog(db, config)
+            impression = await get_impression(
+                group.id,
+                str(task.user_wxid or ""),
+                self.runtime.account_key or str(task.account_key or ""),
+            )
+        if message is None:
+            message = Message(
+                id=int(task.message_id or 0),
+                group_id=group.id,
+                sender_wxid=task.user_wxid,
+                sender_name=task.user_name,
+                content=task.query,
+                is_self=False,
+                kind="text",
+            )
+        await self._update_chat_task(task_id, "running")
+
+        # Natural acknowledgement first, under the send lock only.
+        ack = str(plan.get("ack") or "我去看看，稍等～")
+        if ack and not self.runtime.detached and self.runtime.is_online:
+            lock = self._locks.setdefault(group.id, asyncio.Lock())
+            async with lock:
+                try:
+                    await self.runtime.send_agent_message(
+                        group.id,
+                        text=ack,
+                        meta={
+                            "source": "llm",
+                            "task_id": task_id,
+                            "task_ack": True,
+                        },
+                    )
+                except Exception:
+                    pass
+
+        try:
+            reply_data, meta = await self._generate_llm(
+                message,
+                group,
+                config,
+                settings,
+                context,
+                members,
+                stickers,
+                memory_text,
+                plan=plan,
+                impression=impression,
+                force_tools=True,
+            )
+        except Exception as exc:
+            await self._update_chat_task(task_id, "error", error=str(exc))
+            return
+        if reply_data is None:
+            await self._update_chat_task(task_id, "done", result="没有生成回复")
+            return
+        async with SessionLocal() as db:
+            segments = await self._build_segments(db, config, reply_data)
+        if not segments:
+            await self._update_chat_task(task_id, "done", result="没有生成回复")
+            return
+        lock = self._locks.setdefault(group.id, asyncio.Lock())
+        sent_text = ""
+        async with lock:
+            for index, segment in enumerate(segments):
+                if index:
+                    await asyncio.sleep(random.uniform(0.5, 1.1))
+                text = str(segment.get("text") or "")
+                try:
+                    await self.runtime.send_agent_message(
+                        group.id,
+                        text=text,
+                        sticker=segment.get("sticker"),
+                        meta={
+                            **meta,
+                            "source": "llm",
+                            "task_id": task_id,
+                            "segment": index + 1,
+                            "segment_count": len(segments),
+                        },
+                        reuse_chat=index > 0,
+                    )
+                    sent_text += text
+                except Exception as exc:
+                    await self._update_chat_task(task_id, "error", error=str(exc))
+                    return
+        await self._update_chat_task(
+            task_id, "done", result=(sent_text or "仅表情")[:4000]
+        )
 
     async def _handle(self, group_id: int, message_id: int) -> None:
         if self.runtime.detached:
@@ -134,8 +555,66 @@ class AgentEngine:
                 )
                 stickers = await self._load_sticker_catalog(db, config)
                 message = await db.get(Message, message_id)
+                if message is not None:
+                    tool_payload = await catalog_for_scope("group")
+                    bili_context = await self._load_bili_context()
+                    impression = await get_impression(
+                        group_id,
+                        str(message.sender_wxid or ""),
+                        self.runtime.account_key or "",
+                    )
+                    plan = await self._plan_intent(
+                        message,
+                        group,
+                        config,
+                        settings,
+                        context,
+                        memory_text,
+                        impression,
+                        tool_payload,
+                        bili_context,
+                    )
+                    if not settings.get("llm_api_key"):
+                        plan["need_tools"] = False
+                        plan["tools"] = []
+                        plan["ack"] = ""
+                    await update_impression(
+                        group_id=group_id,
+                        user_wxid=str(message.sender_wxid or ""),
+                        display_name=str(message.sender_name or ""),
+                        account_key=self.runtime.account_key or "",
+                        emotion=str(plan.get("user_emotion") or "neutral"),
+                        intensity=float(plan.get("emotion_intensity") or 0),
+                        traits=list(plan.get("traits") or []),
+                        note=str(plan.get("impression_note") or ""),
+                    )
+                else:
+                    plan = {}
 
             if message is None or self.runtime.detached:
+                return
+            if not plan.get("should_reply", True):
+                await self._log(
+                    group_id,
+                    "skip",
+                    f"意图={plan.get('intent', 'chat')}，情绪={plan.get('user_emotion', 'neutral')}，"
+                    "本轮不参与",
+                )
+                return
+            if plan.get("need_tools"):
+                task = await self._create_chat_task(
+                    group=group,
+                    message=message,
+                    plan=plan,
+                    account_key=self.runtime.account_key or "",
+                )
+                await self._log(
+                    group_id,
+                    "task",
+                    f"挂载任务 #{task['id']}：{plan.get('intent', 'task')} "
+                    f"{str(message.content or '')[:80]}",
+                )
+                self._start_chat_task(int(task["id"]))
                 return
             self.runtime.emit_typing(group_id)
             base_delay = float(settings.get("reply_delay_seconds") or 0)
@@ -170,6 +649,8 @@ class AgentEngine:
                         members,
                         stickers,
                         memory_text,
+                        plan=plan,
+                        impression=impression,
                     )
                 else:
                     reply_data, meta = self._generate_demo(
@@ -716,6 +1197,10 @@ class AgentEngine:
         members: list[str],
         stickers: list[Sticker],
         memory_text: str = "",
+        *,
+        plan: dict[str, Any] | None = None,
+        impression: dict[str, Any] | None = None,
+        force_tools: bool = False,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         persona = (config.persona or settings.get("default_persona") or "").strip()
         trigger_label = TRIGGER_LABELS.get(config.trigger_mode, config.trigger_mode)
@@ -727,8 +1212,21 @@ class AgentEngine:
         now_local = datetime.now(
             ZoneInfo(str(settings.get("timezone") or "Asia/Shanghai"))
         ).strftime("%Y-%m-%d %H:%M")
+        plan = plan or {
+            "should_reply": True,
+            "intent": "chat",
+            "need_tools": False,
+            "tools": [],
+            "user_emotion": "neutral",
+            "emotion_intensity": 0.0,
+            "tone": "warm",
+            "ack": "",
+            "traits": [],
+            "impression_note": "",
+        }
         tool_payload = await catalog_for_scope("group")
         group_tools = tool_payload.get("tools") or []
+        use_tools = bool(plan.get("need_tools") or force_tools) and bool(group_tools)
         tool_lines = []
         for item in group_tools:
             tool_lines.append(
@@ -761,7 +1259,7 @@ class AgentEngine:
                 )
             )
         tool_section = ""
-        if group_tools:
+        if use_tools:
             tool_names = {str(item.get("name") or "") for item in group_tools}
             tool_example = json.dumps(
                 {
@@ -790,6 +1288,7 @@ class AgentEngine:
 {tool_example}{api_example}
 工具结果会以 OBSERVATION 返回，然后你再决定回复或继续调用。
 参数键必须与工具列表完全一致；如果 OBSERVATION 以 ERROR 开头，先修正参数重试，不要编造结果。
+群聊里不要调用屏幕、鼠标、键盘、文件、终端、沙箱类工具；只做只读查询或群聊安全动作。
 不要假装调用过工具；没有拿到 OBSERVATION 就不能声称完成。{bili_hint}"""
         multi_rules = ""
         multi_format = '{"action": "reply", "reply": "要发送的文字，可为空", "sticker": 3}'
@@ -820,6 +1319,18 @@ class AgentEngine:
             if bili_context
             else ""
         )
+        intent_block = f"""# 本轮意图（内部参考，绝对不要直接复述）
+- 意图：{plan.get('intent', 'chat')}
+- 用户情绪：{plan.get('user_emotion', 'neutral')}（强度 {float(plan.get('emotion_intensity') or 0):.2f}）
+- 回复语气：{plan.get('tone', 'warm')}
+- 是否需要工具：{'是' if use_tools else '否'}
+- 对这个人的印象：
+{impression_prompt(impression or {})}
+
+# 输出风格（内部规则，不要复述）
+- 不要输出工具名、工具调用过程、OBSERVATION、🔧、JSON 字段名或分析过程。
+- 需要工具时，用“我去看看”“我查一下”这类自然话过渡；只给最终结果。
+- 像真人聊天，带一点符合当前情绪的语气，但不要夸张表演。"""
         extra_prompt = str(settings.get("group_prompt_extra") or "").strip()
         extra_block = (
             f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
@@ -842,6 +1353,7 @@ class AgentEngine:
 
 {memory_block}
 {bili_block}
+{intent_block}
 {extra_block}
 # 可用表情包
 {sticker_catalog}
@@ -855,6 +1367,7 @@ class AgentEngine:
 
 {memory_block}
 {bili_block}
+{intent_block}
 
 # 回复规则
 1. 你是在微信群里自然地接话，回复最新一条消息，不要像客服或机器人。
@@ -887,7 +1400,7 @@ class AgentEngine:
         # Allow a tool error to be corrected, a second lookup, and then the
         # final reply.  The old limit of 2 stopped right after the first tool
         # result, so a bad argument could never be retried.
-        max_steps = 4 if group_tools else 1
+        max_steps = 4 if use_tools else 1
         try:
             for _step in range(max_steps):
                 prompt = user_prompt
@@ -918,8 +1431,24 @@ class AgentEngine:
                         "prompt_tokens": total_prompt,
                         "completion_tokens": total_completion,
                         "tool_trace": tool_trace,
+                        "intent": plan.get("intent"),
+                        "emotion": plan.get("user_emotion"),
+                        "need_tools": use_tools,
                     }
                     return data, meta
+                if not use_tools:
+                    meta = {
+                        "model": result.get("model") or model,
+                        "latency_ms": result.get("latency_ms") or 0,
+                        "source": "llm",
+                        "prompt_tokens": total_prompt,
+                        "completion_tokens": total_completion,
+                        "tool_trace": tool_trace,
+                        "intent": plan.get("intent"),
+                        "emotion": plan.get("user_emotion"),
+                        "need_tools": False,
+                    }
+                    return {"action": "none"}, meta
                 tool_name = str(data.get("tool") or "").strip()
                 args = data.get("args") if isinstance(data.get("args"), dict) else {}
                 started = time.time()
@@ -963,6 +1492,9 @@ class AgentEngine:
                 "prompt_tokens": total_prompt,
                 "completion_tokens": total_completion,
                 "tool_trace": tool_trace,
+                "intent": plan.get("intent"),
+                "emotion": plan.get("user_emotion"),
+                "need_tools": use_tools,
             }
             return {"action": "none"}, meta
         except LLMError as exc:
@@ -1034,12 +1566,25 @@ class AgentEngine:
     def _clean_reply(value: Any) -> str:
         if value is None:
             return ""
-        text = str(value).strip()
+        original = str(value).strip()
+        text = original
         if text.startswith("```"):
             text = text.strip("`").strip()
         if text.lower().startswith("json"):
             text = text[4:].strip()
         text = text.strip().strip('"').strip()
+        # Models sometimes leak their tool narration into the final bubble.
+        # Keep the human-facing result, never the internal action log.
+        text = re.sub(
+            r"(?m)^\s*(?:🔧|🛠|工具调用|正在调用|调用工具|使用工具|"
+            r"读取|查询|搜索)\s*[^\n]{0,100}[：:][^\n]*\n?",
+            "",
+            text,
+        )
+        text = re.sub(r"(?m)^\s*(?:OBSERVATION|工具结果|Tool Result)\b.*$", "", text)
+        text = text.replace("OBSERVATION", "").replace("🔧", "").strip()
+        if original and not text:
+            text = "我去看看，稍等～"
         text = re.sub(r"\n{3,}", "\n\n", text)
         if len(text) > MAX_REPLY_CHARS:
             text = text[:MAX_REPLY_CHARS].rstrip() + "…"

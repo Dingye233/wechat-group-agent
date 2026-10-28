@@ -883,6 +883,18 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .log-item p { font-size: 10px; line-height: 1.55; color: #b5cabe; word-break: break-word; }
 .log-item time { display: block; font-size: 8.5px; color: var(--muted-2); margin-top: 3px; }
 .config-logs .muted { font-size: 10.5px; }
+.chat-task-list { display: flex; flex-direction: column; gap: 6px; }
+.chat-task-list .muted { font-size: 10.5px; line-height: 1.6; }
+.chat-task-item { padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, 0.02); }
+.chat-task-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.chat-task-head strong { font-size: 10px; color: var(--text); }
+.chat-task-status { font-size: 8.5px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.chat-task-status.running, .chat-task-status.pending { color: var(--amber); border-color: rgba(251, 191, 36, 0.35); }
+.chat-task-status.done { color: var(--green); border-color: rgba(52, 227, 161, 0.35); }
+.chat-task-status.error { color: var(--red); border-color: rgba(248, 113, 113, 0.35); }
+.chat-task-query { margin-top: 5px; font-size: 9.5px; line-height: 1.55; color: #b5cabe; word-break: break-word; }
+.chat-task-result { margin-top: 4px; font-size: 9px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+.chat-task-error { margin-top: 4px; font-size: 9px; line-height: 1.5; color: #ffb4b4; word-break: break-word; }
 
 /* ---------------------------------------------------------- sticker / settings pages */
 .page { max-width: 1280px; margin: 0 auto; padding: 30px 34px 50px; min-height: 100%; }

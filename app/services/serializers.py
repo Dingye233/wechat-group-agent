@@ -4,7 +4,15 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from app.models import AgentLog, DirectMessage, Group, GroupConfig, Message, Sticker
+from app.models import (
+    AgentLog,
+    ChatTask,
+    DirectMessage,
+    Group,
+    GroupConfig,
+    Message,
+    Sticker,
+)
 
 EMPTY_CONFIG = {
     "read_enabled": False,
@@ -92,6 +100,24 @@ def message_dict(message: Message) -> dict[str, Any]:
         "sticker_url": media if message.kind == "sticker" else "",
         "created_at": iso(message.created_at),
         "meta": message.meta or {},
+    }
+
+
+def chat_task_dict(task: ChatTask) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "group_id": task.group_id,
+        "message_id": task.message_id,
+        "user_wxid": task.user_wxid,
+        "user_name": task.user_name,
+        "intent": task.intent,
+        "query": task.query,
+        "status": task.status,
+        "result": task.result,
+        "error": task.error,
+        "created_at": iso(task.created_at),
+        "updated_at": iso(task.updated_at),
+        "finished_at": iso(task.finished_at) if task.finished_at else "",
     }
 
 

@@ -7,7 +7,7 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261028-51">
+  <link rel="stylesheet" href="/styles.css?v=20261028-52">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -255,6 +255,11 @@
                   <input id="cfg-model" placeholder="例如 deepseek-chat">
                 </label>
                 <button class="btn btn-primary btn-wide" id="save-config-btn">保存本群配置</button>
+              </div>
+
+              <div class="config-section logs-section">
+                <div class="section-title"><span>群聊任务</span><button class="text-btn" id="refresh-chat-tasks">刷新</button></div>
+                <div class="chat-task-list" id="chat-task-list"><p class="muted">暂无任务</p></div>
               </div>
 
               <div class="config-section logs-section">
@@ -889,6 +894,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-51" defer></script>
+  <script src="/app.js?v=20261028-52" defer></script>
 </body>
 </html>
