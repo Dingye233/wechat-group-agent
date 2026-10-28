@@ -163,7 +163,7 @@ class BiliAutopilot:
             if "topics" in payload:
                 topics = payload["topics"]
                 if isinstance(topics, str):
-                    topics = [item.strip() for item in topics.split(",")]
+                    topics = re.split(r"[,，;；\n]+", topics)
                 row.topics = [
                     str(item).strip()
                     for item in (topics or [])
@@ -234,7 +234,7 @@ class BiliAutopilot:
                 pass
 
     async def _maybe_run(self) -> None:
-        config = await self.get_config()
+        config = await self.get_config(self.runtime.account_key or "")
         if config is None or not config.enabled:
             return
         interval = max(10, int(config.interval_minutes or 60)) * 60
@@ -254,7 +254,7 @@ class BiliAutopilot:
 
     async def _run_cycle(self, force: bool = False) -> None:
         async with self.lock:
-            config = await self.get_config()
+            config = await self.get_config(self.runtime.account_key or "")
             payload = _config_payload(config)
             if not force and not payload["enabled"]:
                 return
@@ -310,11 +310,33 @@ class BiliAutopilot:
             videos = await bilibili.search_videos(topic, 12)
         else:
             topic = await self._pick_topic(settings, agent_context, topics)
+            if topic and topics:
+                matched = [
+                    keyword
+                    for keyword in topics
+                    if keyword.lower() in topic.lower()
+                ]
+                if len(matched) > 1:
+                    topic = random.choice(matched)
+                    await self._emit(
+                        "topic",
+                        f"关键词组合过于具体，使用其中一个：{topic}",
+                    )
+                elif not self._topic_related(topic, topics):
+                    fallback = random.choice(topics)
+                    await self._emit(
+                        "topic",
+                        f"Agent 自选偏离兴趣关键词，回退到：{fallback}",
+                    )
+                    topic = fallback
             if topic:
                 await self._emit(
                     "topic",
-                    f"Agent 自选主题：{topic}"
-                    + ("（用户关键词仅作参考）" if topics else ""),
+                    (
+                        f"Agent 在兴趣关键词基础上自选：{topic}"
+                        if topics
+                        else f"Agent 自选主题：{topic}"
+                    ),
                 )
                 videos = await bilibili.search_videos(topic, 12)
             elif topics:
@@ -569,6 +591,7 @@ class BiliAutopilot:
             config_row = (
                 await db.execute(
                     select(BiliAutopilotConfig)
+                    .where(BiliAutopilotConfig.account_key == account_key)
                     .order_by(BiliAutopilotConfig.id.desc())
                     .limit(1)
                 )
@@ -712,6 +735,26 @@ class BiliAutopilot:
             pass
         return "\n\n".join(parts)[:6000]
 
+    @staticmethod
+    def _topic_related(topic: str, keywords: list[str]) -> bool:
+        value = str(topic or "").lower().strip()
+        if not value:
+            return False
+        grams = {
+            value[index : index + 2]
+            for index in range(len(value) - 1)
+            if value[index : index + 2].strip()
+        }
+        for keyword in keywords:
+            key = str(keyword or "").lower().strip()
+            if not key:
+                continue
+            if key in value or value in key:
+                return True
+            if any(gram in key for gram in grams):
+                return True
+        return False
+
     async def _pick_topic(
         self,
         settings: dict[str, Any],
@@ -742,26 +785,43 @@ class BiliAutopilot:
                 model=str(settings.get("llm_model") or ""),
                 system_prompt=(
                     f"{context_block}"
-                    "你是一个有自己内容品味和独立判断的中文 B站用户，不是用户偏好的执行器。"
-                    "上面的 Agent 人设、长期记忆和最近对话只是参考；你可以喜欢、不喜欢、"
-                    "改变兴趣，也可以主动探索一个最近没接触过的新方向。"
-                    "用户可能给出兴趣关键词，但那只是建议，不是命令；"
-                    "你可以从中选择，也可以根据自己的判断换成更适合当前心情的主题。"
-                    "请结合你已有的视频历史和自己的判断，选择一个你真正想继续了解、"
+                    "你是一个有自己内容品味和独立判断的中文 B站用户。"
+                    "上面的 Agent 人设、长期记忆和最近对话是参考；你可以有自己的偏好，"
+                    "但如果用户给出了兴趣关键词，那些关键词是强偏好，不是普通建议。"
+                    "有关键词时，你必须优先从中选择一个，或选择与关键词直接相关的相邻主题；"
+                    "只有在关键词明显不适合时才允许扩展，并且必须保持在同一个领域。"
+                    "没有关键词时，才由你自主探索新方向。"
+                    "请结合已有的视频历史，选择一个你真正想继续了解、"
                     "且最近没有重复刷过的中文搜索主题。不要讨好式地永远选同一类。"
+                    "只输出一个简短中文搜索词（最多 12 个字）；优先直接使用一个候选关键词，"
+                    "不要拼接多个关键词。"
                     "只输出 JSON：{\"topic\":\"一个简短搜索词\"}"
                 ),
                 user_prompt=(
-                    f"用户提供的候选关键词（仅参考）：{candidate_text}\n\n"
+                    f"用户兴趣关键词（强偏好，优先选择或紧邻方向）：{candidate_text}\n\n"
                     f"最近刷过的视频：\n{history}\n\n"
-                    "请以你自己的品味给出本轮主题；可以沿用候选，也可以提出新方向。"
+                    "如果候选关键词非空，请优先直接使用其中一个；只有确实有更好理由时才扩展，"
+                    "并保持与关键词相关。只输出一个简短中文主题，不要拼接多个关键词。"
                 ),
                 temperature=0.9,
                 max_tokens=120,
                 json_mode=True,
             )
-            topic = str((data or {}).get("topic") or "").strip()
-            return topic[:50]
+            topic = str((data or {}).get("topic") or "").strip()[:50]
+            if candidate_topics and topic:
+                matched = [
+                    keyword
+                    for keyword in candidate_topics
+                    if keyword.lower() in topic.lower()
+                ]
+                if len(matched) > 1:
+                    # The model merged several keywords into one query; use a
+                    # single user keyword so B站 search does not become too
+                    # narrow.
+                    return random.choice(matched)
+                if not self._topic_related(topic, candidate_topics):
+                    return random.choice(candidate_topics)
+            return topic
         except Exception as exc:
             logger.warning("B站自选主题失败: %s", exc)
             return ""
@@ -788,8 +848,9 @@ class BiliAutopilot:
                 system_prompt=(
                     f"{context_block}"
                     "你是 B站刷视频 Agent，有自己的审美和判断。"
-                    "请从候选视频中选择你真正想看、适合完整观看和内容理解的一条。"
-                    "用户偏好只是参考，不需要迎合；可以选一个更能激发你兴趣的视频。"
+                    "本轮主题来自用户兴趣关键词或关键词相关方向，是强偏好。"
+                    "请优先从候选视频中选择与主题直接相关、适合完整观看和内容理解的一条；"
+                    "除非候选明显不相关，否则不要跑偏。"
                     "输出 JSON：{\"bvid\":\"BV...\",\"reason\":\"一句话理由\"}"
                 ),
                 user_prompt=(
@@ -858,6 +919,10 @@ class BiliAutopilot:
             row = (
                 await db.execute(
                     select(BiliAutopilotConfig)
+                    .where(
+                        BiliAutopilotConfig.account_key
+                        == (self.runtime.account_key or "")
+                    )
                     .order_by(BiliAutopilotConfig.id.desc())
                     .limit(1)
                 )
