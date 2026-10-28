@@ -43,6 +43,18 @@
 
 ---
 
+## 控制台长什么样
+
+<p>
+<img src="docs/assets/stickers-page.png" alt="表情包库：标签 + 情绪分类" width="49%">
+<img src="docs/assets/plugins-page.png" alt="插件管理：DSH 插件、技能、MCP" width="49%">
+</p>
+
+- **表情包库**：上传 PNG/GIF/JPG，打情绪标签，模型按人设和语境自己挑一张。
+- **插件管理**：DSH 内置插件、导入包、自己生成的插件统一在一个面板里开关。
+
+---
+
 ## 这个 Agent 能干什么
 
 | | 能力 | 说明 |
