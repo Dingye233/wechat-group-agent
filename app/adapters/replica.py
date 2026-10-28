@@ -1914,6 +1914,92 @@ class ReplicaAdapter(BaseAdapter):
             self._send_text_sync, room_id, text, reuse_chat
         )
 
+    @staticmethod
+    def _normalize_chat_name(value: Any) -> str:
+        text = re.sub(r"\s+", "", str(value or ""))
+        text = text.replace("\u200b", "").replace("\ufeff", "").strip()
+        return text.casefold()
+
+    def _chat_name_identities(self, display_name: str) -> set[str]:
+        """Return every wxid whose display name exactly matches ``display_name``."""
+        target = self._normalize_chat_name(display_name)
+        matches: set[str] = set()
+        if not target or self._db is None:
+            return matches
+        try:
+            hits = self._db.search_contact(display_name)
+        except Exception:
+            return matches
+        for hit in hits or []:
+            username = str((hit or {}).get("username") or "").strip()
+            if not username:
+                continue
+            if any(
+                self._normalize_chat_name((hit or {}).get(field) or "") == target
+                for field in ("nick_name", "remark")
+            ):
+                matches.add(username)
+        for info in self._groups.values():
+            if self._normalize_chat_name(getattr(info, "name", "")) != target:
+                continue
+            external = str(getattr(info, "external_id", "") or "")
+            username = (
+                external[len(GROUP_ID_PREFIX) :]
+                if external.startswith(GROUP_ID_PREFIX)
+                else external
+            )
+            if username:
+                matches.add(username)
+        return matches
+
+    def _assert_unique_chat_name(self, raw: str, display_name: str) -> None:
+        """Refuse to send when a display name points at more than one chat."""
+        matches = self._chat_name_identities(display_name)
+        if matches == {raw}:
+            return
+        if not matches:
+            raise RuntimeError(
+                f"无法在微信数据库中确认「{display_name}」的身份，已取消发送"
+            )
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"「{display_name}」匹配到 {len(matches)} 个同名会话，"
+                "已取消发送；请先给目标设置备注或改名区分"
+            )
+        found = next(iter(matches))
+        raise RuntimeError(
+            f"「{display_name}」在微信数据库中对应 {found}，"
+            f"与目标 {raw} 不一致，已取消发送"
+        )
+
+    def _live_chat_name(self, gui: Any) -> str:
+        try:
+            uia = gui._get_uia(refresh=True)
+            if uia is None:
+                return ""
+            return self._normalize_chat_name(uia.current_chat())
+        except Exception:
+            return ""
+
+    def _live_chat_matches(
+        self, raw: str, display_name: str, gui: Any
+    ) -> tuple[bool, str]:
+        target = self._normalize_chat_name(display_name)
+        current = self._live_chat_name(gui)
+        if not current:
+            return False, "无法读取微信当前打开的会话"
+        if current != target:
+            return False, f"当前打开的是「{current}」，不是「{target}」"
+        matches = self._chat_name_identities(display_name)
+        if matches == {raw}:
+            return True, ""
+        if len(matches) > 1:
+            return False, f"「{display_name}」存在 {len(matches)} 个同名会话，无法确认身份"
+        if matches:
+            found = next(iter(matches))
+            return False, f"「{display_name}」对应 {found}，与目标 {raw} 不一致"
+        return False, f"无法确认「{display_name}」的身份"
+
     def _prepare_send_gui(
         self, raw: str, name: str = "", reuse: bool = False
     ) -> Any:
@@ -1931,6 +2017,7 @@ class ReplicaAdapter(BaseAdapter):
             or "@chatroom" in display_name.lower()
         ):
             raise RuntimeError("没有可用的群名，已取消发送，避免用 chatroom ID 搜索")
+        self._assert_unique_chat_name(raw, display_name)
         if reuse:
             wx = self._wx
             gui = getattr(wx, "_gui", None) if wx is not None else None
@@ -1938,17 +2025,20 @@ class ReplicaAdapter(BaseAdapter):
                 wx is not None
                 and gui is not None
                 and str(getattr(wx, "_wxid", "") or "") == raw
-                and str(getattr(gui, "_current_chat", "") or "") == display_name
             ):
-                try:
-                    gui.ensure_visible()
-                except Exception:
-                    pass
-                try:
-                    if gui.get_input_box():
-                        return wx
-                except Exception:
-                    pass
+                matched, reason = self._live_chat_matches(raw, display_name, gui)
+                if matched:
+                    try:
+                        gui.ensure_visible()
+                    except Exception:
+                        pass
+                    try:
+                        if gui.get_input_box():
+                            return wx
+                    except Exception:
+                        pass
+                else:
+                    self.log(f"不复用已打开会话：{reason}", level="warn")
         hwnd = 0
         try:
             hwnd = self.recover_window()
@@ -2007,6 +2097,11 @@ class ReplicaAdapter(BaseAdapter):
             raise RuntimeError(
                 f"按群名「{display_name}」搜索后确认到 {resolved}，"
                 f"与目标 {raw} 不一致，已取消发送（可能同名群）"
+            )
+        matched, reason = self._live_chat_matches(raw, display_name, gui)
+        if not matched:
+            raise RuntimeError(
+                f"打开「{display_name}」后{reason}，已取消发送"
             )
         if gui is not None and not gui.get_input_box():
             raise RuntimeError(
