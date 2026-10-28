@@ -18,8 +18,12 @@
 - Agent：群伴只通过 OpenCode 的 `system` 参数注入人设、记忆、通道规则；
   工具调用、步骤、重试、压缩和会话历史都由 OpenCode 自己负责。
 - 群伴能力：`app/mcp_server.py` 作为本地 MCP server 启动，把微信、B站、
-  记忆、文件、终端工具暴露给 OpenCode。MCP 工具最终仍走群伴的
-  capability 权限网关。
+  记忆、文件、终端工具暴露给 OpenCode。每个群伴 tool 都会注册成独立 MCP
+  工具（如 `qunban_read_file`、`qunban_run_powershell`），同时保留通用入口
+  `qunban_tool(name, args)`。MCP 工具最终仍走群伴的 capability 权限网关。
+- 群伴 MCP 项目 / 技能 / 接口：分别通过 `qunban_run_mcp`、
+  `qunban_run_skill`、`qunban_call_interface` 调用；`qunban_capabilities`
+  会返回可直接使用的工具名、示例参数和 `call_tool` / `call_args` 提示。
 - 事件：群伴订阅 OpenCode 的 `/event`，把 `message.part.updated` 中的
   tool running/completed 事件同步到后台和微信管理员进度。
 - 停止：微信管理员发「停止」时，群伴调用 OpenCode 的

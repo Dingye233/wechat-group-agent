@@ -47,7 +47,7 @@
 「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 默认由 GitHub 官方 [OpenCode](https://github.com/anomalyco/opencode) 运行时执行，群伴不再复刻 agent loop：
 
 - **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。模型请求只使用群伴设置里每个用户自己的 Base URL / API Key / 模型，不读取 OpenCode 官方账号或内置 Key。
-- **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode；工具调用仍经过群伴的 capability 权限网关。
+- **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode，并注册为独立工具（如 `qunban_read_file`、`qunban_run_powershell`）；群伴 MCP 项目、技能和接口分别通过 `qunban_run_mcp`、`qunban_run_skill`、`qunban_call_interface` 调用。工具调用仍经过群伴的 capability 权限网关。
 - **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。
 
 

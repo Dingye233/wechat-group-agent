@@ -10,6 +10,7 @@ from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
 from app.services.assistant import AssistantService
+from app.services.capabilities import list_capabilities
 from app.services.opencode_agent import (
     OpenCodeError,
     get_opencode_runtime,
@@ -45,20 +46,84 @@ async def opencode_tools() -> dict:
     tools = await runtime.tools(settings)
     plugins = await runtime.plugins()
     mcp = await runtime.mcp_status()
-    mcp_tools = [
-        {"id": "qunban_tool", "description": "通用群伴工具网关（name + args）"},
-        {"id": "qunban_capabilities", "description": "列出群伴可用工具"},
-        {"id": "qunban_list_groups", "description": "列出微信群"},
-        {"id": "qunban_read_group", "description": "读取群消息"},
-        {"id": "qunban_send_message", "description": "发送群聊/私聊消息"},
-        {"id": "qunban_bili_search", "description": "搜索 B站视频"},
-        {"id": "qunban_bili_knowledge", "description": "检索 B站知识库"},
-        {"id": "qunban_memory_save", "description": "保存长期记忆"},
-        {"id": "qunban_memory_search", "description": "搜索长期记忆"},
-    ]
+    from app.services.assistant_tools import tool_catalog
+
+    capabilities = await list_capabilities()
+    qunban_projects = {
+        "mcps": [
+            {
+                "name": item["name"],
+                "key": item["key"],
+                "description": item.get("description", ""),
+                "risk": item.get("risk"),
+            }
+            for item in capabilities
+            if item.get("type") == "mcp"
+        ],
+        "skills": [
+            {
+                "name": item["name"],
+                "key": item["key"],
+                "description": item.get("description", ""),
+                "risk": item.get("risk"),
+            }
+            for item in capabilities
+            if item.get("type") == "skill"
+        ],
+        "apis": [
+            {
+                "name": item["name"],
+                "key": item["key"],
+                "description": item.get("description", ""),
+                "risk": item.get("risk"),
+            }
+            for item in capabilities
+            if item.get("type") == "api"
+        ],
+    }
+    mcp_tools: list[dict[str, Any]] = []
+    seen_mcp: set[str] = set()
+    for item in tool_catalog():
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen_mcp:
+            continue
+        seen_mcp.add(name)
+        mcp_tools.append(
+            {
+                "id": f"qunban_{name}",
+                "name": name,
+                "description": str(item.get("desc") or "群伴工具"),
+                "args_example": item.get("args") or {},
+                "source": "qunban-mcp",
+            }
+        )
+    for name, description in (
+        ("tool", "通用群伴工具网关（name + args）"),
+        ("capabilities", "列出群伴可用工具和示例参数"),
+        ("list_groups", "列出微信群"),
+        ("read_group", "读取群消息"),
+        ("send_message", "发送群聊/私聊消息"),
+        ("bili_knowledge", "检索 B站知识库"),
+        ("memory_save", "保存长期记忆"),
+        ("memory_search", "搜索长期记忆"),
+        ("run_mcp", "运行群伴 MCP 项目"),
+        ("call_interface", "调用群伴已登记接口"),
+    ):
+        if name in seen_mcp:
+            continue
+        seen_mcp.add(name)
+        mcp_tools.append(
+            {
+                "id": f"qunban_{name}",
+                "name": name,
+                "description": description,
+                "source": "qunban-mcp",
+            }
+        )
     return {
         "tools": tools,
         "mcp_tools": mcp_tools,
+        "qunban_projects": qunban_projects,
         "plugins": plugins,
         "mcp": mcp,
         "running": runtime.running,

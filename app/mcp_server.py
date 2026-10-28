@@ -105,13 +105,28 @@ def _messages(data: Any) -> list[dict[str, Any]]:
     return compact
 
 
+CURATED_TOOL_NAMES = {
+    "tool",
+    "capabilities",
+    "list_groups",
+    "read_group",
+    "send_message",
+    "bili_search",
+    "bili_knowledge",
+    "memory_save",
+    "memory_search",
+    "run_mcp",
+    "run_skill",
+    "call_interface",
+}
+DIRECT_ARG_TOOLS = {"bili_search", "run_mcp", "run_skill", "call_interface"}
+
+
 @server.tool(
-    name="qunban_tool",
+    name="tool",
     description=(
-        "调用群伴的微信/B站/记忆/文件/终端工具。"
-        "name 是工具名，例如 list_groups、read_group_messages、send_group_message、"
-        "bili_search、bili_knowledge_search、save_memory、search_memories、run_powershell。"
-        "args 是工具参数对象。不确定工具名时先调用 qunban_capabilities。"
+        "通用群伴工具入口。name 是工具名，args 是工具参数对象。"
+        "不确定工具名时先调用 capabilities；也可以直接调用下面注册的具体工具。"
     ),
 )
 async def qunban_tool(name: str, args: dict[str, Any] | None = None) -> str:
@@ -121,27 +136,66 @@ async def qunban_tool(name: str, args: dict[str, Any] | None = None) -> str:
 
 
 @server.tool(
-    name="qunban_capabilities",
-    description="列出群伴当前可用工具的名称、类型、风险和说明。",
+    name="capabilities",
+    description="列出群伴当前可用工具的名称、类型、风险、说明和示例参数。",
 )
 async def qunban_capabilities() -> str:
     data = await _call_json("list_capabilities", {})
     rows = data if isinstance(data, list) else (data or {}).get("capabilities", [])
-    compact = [
-        {
-            "name": row.get("name") or row.get("key"),
+    examples: dict[str, Any] = {}
+    try:
+        from app.services.assistant_tools import tool_catalog
+
+        for item in tool_catalog():
+            examples.setdefault(
+                str(item.get("name") or ""),
+                item.get("args") or {},
+            )
+    except Exception:
+        pass
+    compact = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or row.get("key") or "")
+        key = str(row.get("key") or "")
+        if key.startswith("tool:"):
+            name = key.split(":", 1)[1]
+        entry = {
+            "name": name,
+            "key": key,
             "type": row.get("type"),
             "risk": row.get("risk"),
-            "description": str(row.get("description") or "")[:160],
+            "description": str(row.get("description") or "")[:200],
+            "args_example": examples.get(name),
         }
-        for row in rows
-        if isinstance(row, dict)
-    ]
-    return json.dumps(compact[:120], ensure_ascii=False)
+        if key.startswith("mcp:"):
+            entry["call_tool"] = "qunban_run_mcp"
+            entry["call_args"] = {"name": key.split(":", 1)[1]}
+        elif key.startswith("skill:"):
+            entry["call_tool"] = "qunban_run_skill"
+            entry["call_args"] = {"name": key.split(":", 1)[1]}
+        elif key.startswith("api:"):
+            entry["call_tool"] = "qunban_call_interface"
+            entry["call_args"] = {"name": key.split(":", 1)[1]}
+        elif key.startswith("tool:"):
+            entry["call_tool"] = f"qunban_{name}"
+            example = examples.get(name) or {}
+            if name == "run_mcp":
+                example = {"name": "screen_control_mcp", "command": "..."}
+            elif name == "call_interface":
+                example = {"name": "api-name", "args": {}}
+            elif name == "run_skill":
+                example = {"name": "skill-name", "args": ""}
+            entry["call_args"] = (
+                example if name in DIRECT_ARG_TOOLS else {"args": example}
+            )
+        compact.append(entry)
+    return json.dumps(compact[:160], ensure_ascii=False)
 
 
 @server.tool(
-    name="qunban_send_message",
+    name="send_message",
     description=(
         "发送消息。group_id 用于群聊，contact_id 用于私聊；二者选一个。"
         "只允许在管理员授权的范围内发送。"
@@ -166,7 +220,7 @@ async def qunban_send_message(
 
 
 @server.tool(
-    name="qunban_read_group",
+    name="read_group",
     description="读取指定群最近消息。group_id 是群伴中的群数据库 ID。",
 )
 async def qunban_read_group(
@@ -182,7 +236,7 @@ async def qunban_read_group(
 
 
 @server.tool(
-    name="qunban_list_groups",
+    name="list_groups",
     description="列出已读取并纳入群伴的微信群，返回群 ID、名称和 Agent 开关。",
 )
 async def qunban_list_groups() -> str:
@@ -191,7 +245,7 @@ async def qunban_list_groups() -> str:
 
 
 @server.tool(
-    name="qunban_bili_search",
+    name="bili_search",
     description="搜索 B站视频，返回标题、作者、bvid 和链接。",
 )
 async def qunban_bili_search(keyword: str, limit: int = 10) -> str:
@@ -212,7 +266,7 @@ async def qunban_bili_search(keyword: str, limit: int = 10) -> str:
 
 
 @server.tool(
-    name="qunban_bili_knowledge",
+    name="bili_knowledge",
     description="检索已写入群伴知识库的 B站视频内容。",
 )
 async def qunban_bili_knowledge(query: str, limit: int = 5) -> str:
@@ -236,7 +290,7 @@ async def qunban_bili_knowledge(query: str, limit: int = 5) -> str:
 
 
 @server.tool(
-    name="qunban_memory_save",
+    name="memory_save",
     description="保存一条长期记忆。",
 )
 async def qunban_memory_save(
@@ -257,7 +311,7 @@ async def qunban_memory_save(
 
 
 @server.tool(
-    name="qunban_memory_search",
+    name="memory_search",
     description="搜索群伴长期记忆。",
 )
 async def qunban_memory_search(query: str, limit: int = 10) -> str:
@@ -276,6 +330,87 @@ async def qunban_memory_search(query: str, limit: int = 10) -> str:
             }
         )
     return json.dumps(compact, ensure_ascii=False)
+
+
+@server.tool(
+    name="run_mcp",
+    description=(
+        "运行已启用的群伴 MCP 项目。name 是项目名；command 可选，留空则使用 manifest 里的 run；"
+        "timeout 秒。返回 stdout/stderr/exit_code。"
+    ),
+)
+async def qunban_run_mcp(
+    name: str,
+    command: str = "",
+    timeout: int = 120,
+    admin: bool = False,
+) -> str:
+    return await _call(
+        "run_mcp",
+        {
+            "name": name,
+            "command": command,
+            "timeout": int(timeout),
+            "admin": bool(admin),
+        },
+    )
+
+
+@server.tool(
+    name="run_skill",
+    description="运行群伴技能。name 是技能名，args 是传给技能脚本的参数。",
+)
+async def qunban_run_skill(name: str, args: str = "") -> str:
+    return await _call("run_skill", {"name": name, "args": args})
+
+
+@server.tool(
+    name="call_interface",
+    description="调用群伴已登记的 HTTP 接口。name 是接口名，args 是 URL/请求参数对象。",
+)
+async def qunban_call_interface(
+    name: str, args: dict[str, Any] | None = None
+) -> str:
+    return await _call("call_interface", {"name": name, "args": args or {}})
+
+
+def _register_catalog_tools() -> None:
+    """Expose every Qunban capability as a first-class MCP tool."""
+    try:
+        from app.services.assistant_tools import tool_catalog
+    except Exception:
+        return
+    seen: set[str] = set()
+
+    def make_tool(tool_name: str):
+        async def run(args: dict[str, Any] | None = None) -> str:
+            return await _call(tool_name, args or {})
+
+        run.__name__ = f"qunban_{tool_name}"
+        return run
+
+    for item in tool_catalog():
+        name = str(item.get("name") or "").strip()
+        if not name or name in seen or name in CURATED_TOOL_NAMES:
+            continue
+        seen.add(name)
+        desc = str(item.get("desc") or "群伴工具")
+        example = item.get("args") or {}
+        try:
+            example_text = json.dumps(example, ensure_ascii=False)
+        except Exception:
+            example_text = "{}"
+        description = (
+            f"{desc}。参数示例：{example_text}。"
+            "参数放在 args 对象里；这是群伴自己的工具，由 OpenCode 原生调用。"
+        )
+
+        server.add_tool(
+            make_tool(name),
+            name=name,
+            description=description,
+        )
+_register_catalog_tools()
 
 
 def main() -> None:

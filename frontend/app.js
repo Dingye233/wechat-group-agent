@@ -3629,6 +3629,27 @@ async function loadOpenCode() {
         mcpRoot.appendChild(item);
       }
     }
+    const qunbanRoot = $('#opencode-qunban-projects');
+    if (qunbanRoot) {
+      qunbanRoot.replaceChildren();
+      const projects = data.qunban_projects || {};
+      const rows = [
+        ...(projects.mcps || []).map((item) => ({ ...item, kind: 'MCP' })),
+        ...(projects.skills || []).map((item) => ({ ...item, kind: '技能' })),
+        ...(projects.apis || []).map((item) => ({ ...item, kind: '接口' })),
+      ];
+      if (!rows.length) qunbanRoot.appendChild(el('p', 'muted', '尚未发现群伴 MCP / 技能 / 接口。'));
+      for (const item of rows) {
+        const row = el('div', 'opencode-tool-item');
+        row.append(
+          el('strong', null, `${item.kind} · ${item.name}`),
+          el('small', null, item.description || item.key || ''),
+        );
+        qunbanRoot.appendChild(row);
+      }
+      const count = $('#opencode-project-count');
+      if (count) count.textContent = String(rows.length);
+    }
   } catch (error) {
     if (statusLine) statusLine.textContent = `读取失败：${error.message}`;
     toast(error.message, 'error');

@@ -552,6 +552,21 @@ class AssistantService:
         )
         tools = capability_payload.get("tools") or []
         tool_names = "、".join(str(item.get("name")) for item in tools[:80]) or "无"
+        resources: list[str] = []
+        for item in capability_payload.get("skills") or []:
+            resources.append(
+                f"- skill:{item.get('name')} — {item.get('description', '')}"
+            )
+        for item in capability_payload.get("mcps") or []:
+            resources.append(
+                f"- mcp:{str(item.get('key', '')).split(':', 1)[-1]} — "
+                f"{item.get('description', '')}"
+            )
+        for item in capability_payload.get("apis") or []:
+            resources.append(
+                f"- api:{item.get('name')} — {item.get('description', '')}"
+            )
+        resource_block = "\n".join(resources) or "无"
         channel_text = (
             "你正在微信私聊里回复管理员。最终答复要像真人发微信：自然中文短段落，"
             "不要 Markdown 表格或代码块。工具调用进度由系统自动同步；"
@@ -563,9 +578,11 @@ class AssistantService:
 
 # 运行方式（官方 OpenCode）
 你现在由官方 OpenCode Agent 运行时执行，使用原生工具调用，不再输出 JSON 动作协议。
-- 需要微信/B站/记忆/文件/终端能力时，调用 MCP 工具 `qunban_tool`，参数为 name 和 args。
-- 不确定可用工具时先调用 `qunban_capabilities`，它会返回当前启用的工具名。
-- 也可以使用 OpenCode 自带的 read/grep/glob/webfetch 等工具。
+- 群伴自己的工具已经作为 MCP 工具注册到 OpenCode，名字形如 `qunban_list_groups`、`qunban_read_file`、`qunban_run_powershell`，可以直接调用。
+- 专用工具使用命名参数，例如 `qunban_read_group(group_id=211, limit=30)`。
+- 自动注册的通用工具使用 `args` 对象，例如 `qunban_read_file(args={{"path": "a.txt"}})`、`qunban_run_powershell(args={{"command": "Get-Date"}})`。
+- 不确定工具名或参数时先调用 `qunban_capabilities`，它会返回可直接使用的 `call_tool`、`call_args`、说明和示例参数；也可以用通用入口 `qunban_tool(name="工具名", args={{...}})`。
+- 也可以在需要时使用 OpenCode 自带的 read/grep/glob/webfetch 等工具。
 - 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
 - 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。
 - 发消息、删除、覆盖、停服务等有副作用的操作，先确认目标和影响。
@@ -586,14 +603,23 @@ class AssistantService:
 
 # 已启用的群伴工具名
 {tool_names}
+
+# 已启用的技能 / MCP / 接口
+{resource_block}
 {extra_block}
 
 # 常用工具示例
-- 列群：qunban_tool(name="list_groups", args={{}})
-- 读群：qunban_tool(name="read_group_messages", args={{"group_id": 211, "limit": 30}})
-- 发群：qunban_tool(name="send_group_message", args={{"group_id": 211, "text": "..."}})
-- B站搜索：qunban_tool(name="bili_search", args={{"keyword": "...", "limit": 10}})
-- 保存记忆：qunban_tool(name="save_memory", args={{"content": "...", "title": "..."}})
+- 列群：qunban_list_groups()
+- 读群：qunban_read_group(group_id=211, limit=30)
+- 发群：qunban_send_message(group_id=211, text="...")
+- 读文件：qunban_read_file(args={{"path": "data/agent_workspace/README.md"}})
+- 执行命令：qunban_run_powershell(args={{"command": "Get-Date"}})
+- B站搜索：qunban_bili_search(keyword="...", limit=10)
+- 保存记忆：qunban_memory_save(content="...", title="...")
+- 运行群伴 MCP：qunban_run_mcp(args={{"name": "screen_control_mcp", "command": "..."}})
+- 运行技能：qunban_run_skill(args={{"name": "skill-name", "args": ""}})
+- 调用已登记接口：qunban_call_interface(args={{"name": "api-name", "args": {{}}}})
+- 通用入口：qunban_tool(name="工具名", args={{...}})
 """
 
     async def _run_opencode(
