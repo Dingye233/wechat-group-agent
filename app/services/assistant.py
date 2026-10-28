@@ -575,6 +575,39 @@ class AssistantService:
 - 文件路径可以是绝对路径，也可以是相对工作区的路径。
 - 如果用户只是聊天或问题已经回答完，直接 final。"""
 
+    async def _repair_json_output(
+        self,
+        content: str,
+        *,
+        settings: dict[str, Any],
+        system_prompt: str,
+        temperature: float | None,
+        max_tokens: int,
+    ) -> dict[str, Any] | None:
+        """Ask the model once to turn a malformed reply into valid JSON."""
+        repair_prompt = f"""你上一条回复不是合法 JSON。原始内容如下：
+
+{_clip(content, 4000)}
+
+请只输出一个合法 JSON 对象，不要 Markdown，不要解释：
+{{"thought":"一句中文进度/判断","action":"工具名","args":{{...}}}}
+或
+{{"thought":"一句中文总结","final":"给用户的最终答复"}}"""
+        try:
+            result = await self.llm.complete(
+                base_url=str(settings.get("llm_base_url") or ""),
+                api_key=str(settings.get("llm_api_key") or ""),
+                model=str(settings.get("llm_model") or ""),
+                system_prompt=system_prompt,
+                user_prompt=repair_prompt,
+                temperature=0.0,
+                max_tokens=max_tokens,
+                json_mode=True,
+            )
+            return parse_json_object(result.get("content") or "")
+        except Exception:
+            return None
+
     async def chat(
         self,
         message: str,
@@ -846,24 +879,24 @@ class AssistantService:
                             }
                         )
                         continue
-                    # Never show the internal protocol JSON as a user-facing
-                    # answer. Recover the final field when possible, otherwise
-                    # show a short format error.
                     recovered = _extract_json_string_field(content, "final")
                     if recovered:
                         final = recovered
-                    elif content.lstrip().startswith("{") and (
-                        '"thought"' in content
-                        or '"action"' in content
-                        or '"final"' in content
-                    ):
-                        final = (
-                            "模型返回格式异常，我已拦截原始 JSON。"
-                            "请重试一次，或把任务拆小一点。"
-                        )
-                    else:
+                        break
+                    repaired = await self._repair_json_output(
+                        content,
+                        settings=settings,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if not isinstance(repaired, dict):
+                        # Interception removed: after one repair attempt, keep
+                        # the model's actual text instead of showing a generic
+                        # "format error" message.
                         final = content.strip()
-                    break
+                        break
+                    parsed = repaired
                 thought = str(parsed.get("thought") or "").strip()
                 final_text = parsed.get("final")
                 action = str(parsed.get("action") or "").strip()
@@ -898,12 +931,7 @@ class AssistantService:
                             }
                         )
                         continue
-                    final = str(final_text or "").strip()
-                    if not final:
-                        final = (
-                            "模型没有给出最终答复，我已拦截内部 thought。"
-                            "请重试一次，或把任务拆小一点。"
-                        )
+                    final = str(final_text or thought or content).strip()
                     break
                 started = time.time()
                 await emit(
@@ -1068,11 +1096,7 @@ class AssistantService:
             await emit({"phase": "final", "message": "任务完成"})
         if store_assistant:
             await _store(session_id, "assistant", final)
-        if (
-            store_assistant
-            and final
-            and not final.startswith("模型返回格式异常")
-        ):
+        if store_assistant and final:
             memory_meta = {
                 "scope": memory_scope,
                 "source": "assistant",
