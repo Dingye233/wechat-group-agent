@@ -49,6 +49,7 @@ PUBLIC_KEYS = {
     "assistant_max_steps",
     "assistant_max_tokens",
     "assistant_shell_timeout",
+    "opencode_enabled",
     "timezone",
     "bot_aliases",
     "wcf_wechat_exe",
@@ -117,6 +118,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "assistant_max_steps": 0,
     "assistant_max_tokens": 900,
     "assistant_shell_timeout": 60,
+    # Use the official OpenCode server for the Operator loop. The legacy
+    # in-process loop remains as a fallback when this is disabled.
+    "opencode_enabled": True,
     "timezone": "Asia/Shanghai",
     "bot_aliases": "",
     "wcf_wechat_exe": "",
@@ -291,6 +295,8 @@ async def update_settings(
         )
     if "seed_sample_stickers" in payload and payload["seed_sample_stickers"] is not None:
         updates["seed_sample_stickers"] = bool(payload["seed_sample_stickers"])
+    if "opencode_enabled" in payload and payload["opencode_enabled"] is not None:
+        updates["opencode_enabled"] = bool(payload["opencode_enabled"])
     if (
         "read_media_download_enabled" in payload
         and payload["read_media_download_enabled"] is not None

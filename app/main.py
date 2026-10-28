@@ -18,6 +18,7 @@ from app.api import (
     bilibili,
     contacts,
     groups,
+    opencode,
     replica_tools,
     settings as settings_api,
     status,
@@ -96,6 +97,10 @@ async def lifespan(app: FastAPI):
             with contextlib.suppress(asyncio.CancelledError):
                 await auto_task
         await bili_autopilot.stop()
+        with contextlib.suppress(Exception):
+            from app.services.opencode_agent import get_opencode_runtime
+
+            await get_opencode_runtime().stop()
         await runtime.close()
         await dispose_db()
         logger.info("服务已停止")
@@ -123,6 +128,7 @@ app.include_router(groups.router, prefix="/api", tags=["groups"])
 app.include_router(contacts.router, prefix="/api", tags=["contacts"])
 app.include_router(replica_tools.router, prefix="/api", tags=["replica"])
 app.include_router(assistant.router, prefix="/api", tags=["assistant"])
+app.include_router(opencode.router, prefix="/api", tags=["opencode"])
 app.include_router(bilibili.router, prefix="/api", tags=["bilibili"])
 app.include_router(stickers.router, prefix="/api", tags=["stickers"])
 app.include_router(settings_api.router, prefix="/api", tags=["settings"])

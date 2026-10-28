@@ -44,7 +44,12 @@
 
 ## 1.1 Agent 助手 / 能力开关 / 联系人管理员
 
-「助手」选项卡是一个可直接下命令的 Operator Agent：
+「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 默认由 GitHub 官方 [OpenCode](https://github.com/anomalyco/opencode) 运行时执行，群伴不再复刻 agent loop：
+
+- **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。
+- **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode；工具调用仍经过群伴的 capability 权限网关。
+- **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。
+
 
 - 文件读写、PowerShell（可选 UAC 管理员）、HTTP 接口、技能、MCP、自我迭代任务。
 - 能力列表分「助手 / 群聊」两列开关；技能、MCP、接口从工作区自动发现。
@@ -70,7 +75,7 @@
 
 - **任务进度**：助手执行高复杂度任务时，会通过 WebSocket 推送「第 N 步、正在调用哪个工具、成功/失败」等关键节点，显示在对话框上方；工具调用记录仍会持久化。管理员私聊会同步收到精简的微信进度。
 - **无人值守循环**：默认不限制步数，Agent 会持续「规划 → 调工具 → 看结果 → 继续」直到完成；用户可以随时点「停止」或在微信发「停止」打断，也可以在执行中继续发新要求，Agent 会合并处理。同一工具相同参数连续失败 3 次、或连续 5 次返回相同结果时，Agent 会自行停止并说明原因。
-- **架构参考**：工具循环、计划/观察/继续、上下文裁剪和中断语义参考了 [OpenCode](https://github.com/sst/opencode)、[OpenAI Codex](https://github.com/openai/codex) 等成熟 Agent 的「model → tool → observation → model」循环，而不是一次性问答。
+- **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。
 - **连续消息**：群配置新增「允许连续发送多条消息」和最多条数（2–6）。模型可以输出文字 + 表情包混合的多段回复，Agent 会按顺序逐条发送。
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
 - **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。
@@ -145,6 +150,8 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-replica.txt
 # 推荐的高精度离线 OCR：
 python -m pip install -r requirements-ocr.txt
+# 官方 OpenCode（从 GitHub Release 下载，首次安装一次）：
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-opencode.ps1
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 

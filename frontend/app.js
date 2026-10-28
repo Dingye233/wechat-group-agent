@@ -3551,6 +3551,87 @@ function switchAssistantPanel(name) {
   });
 }
 
+async function loadOpenCode() {
+  const statusLine = $('#opencode-status-line');
+  const toolRoot = $('#opencode-tool-list');
+  const pluginRoot = $('#opencode-plugin-list');
+  const mcpRoot = $('#opencode-mcp-list');
+  try {
+    const statusData = await api('/opencode/status');
+    const status = statusData.opencode || {};
+    if (!state.settings) {
+      try {
+        const settingsData = await api('/settings');
+        state.settings = settingsData.settings || {};
+      } catch {
+        /* ignore */
+      }
+    }
+    const enabled = $('#opencode-enabled');
+    if (enabled) enabled.checked = state.settings?.opencode_enabled !== false;
+    if (statusLine) {
+      const version = status.version ? `v${status.version}` : '版本未知';
+      statusLine.textContent = status.running
+        ? `运行中 · ${version} · 端口 ${status.port} · 会话 ${status.sessions ?? 0} 个`
+        : status.installed
+          ? `已安装 · ${version} · 当前未启动（首次对话会自动启动）`
+          : '未找到官方 OpenCode，请运行 scripts/setup-opencode.ps1';
+    }
+    const data = await api('/opencode/tools');
+    const tools = [
+      ...(data.tools || []),
+      ...(data.mcp_tools || []).map((tool) => ({ ...tool, source: 'qunban-mcp' })),
+    ];
+    if (toolRoot) {
+      toolRoot.replaceChildren();
+      if (!tools.length) {
+        toolRoot.appendChild(el('p', 'muted', status.running ? '暂无工具' : 'OpenCode 尚未启动，发一条消息后再刷新。'));
+      }
+      for (const tool of tools.slice(0, 120)) {
+        const item = el('div', 'opencode-tool-item');
+        item.append(
+          el('strong', null, tool.id || tool.name || 'tool'),
+          el('small', null, tool.description || 'OpenCode 工具'),
+        );
+        toolRoot.appendChild(item);
+      }
+    }
+    const toolCount = $('#opencode-tool-count');
+    if (toolCount) toolCount.textContent = String(tools.length);
+    const plugins = data.plugins || [];
+    if (pluginRoot) {
+      pluginRoot.replaceChildren();
+      if (!plugins.length) pluginRoot.appendChild(el('p', 'muted', '尚未加载插件；可放入 data/opencode/plugins。'));
+      for (const plugin of plugins) {
+        const item = el('div', 'opencode-tool-item');
+        item.append(
+          el('strong', null, plugin.id || plugin.path || 'plugin'),
+          el('small', null, plugin.source === 'local' ? '本地插件' : '配置插件'),
+        );
+        pluginRoot.appendChild(item);
+      }
+    }
+    const pluginCount = $('#opencode-plugin-count');
+    if (pluginCount) pluginCount.textContent = String(plugins.length);
+    if (mcpRoot) {
+      mcpRoot.replaceChildren();
+      const rows = Object.entries(data.mcp || {});
+      if (!rows.length) mcpRoot.appendChild(el('p', 'muted', '暂无 MCP 连接。'));
+      for (const [name, value] of rows) {
+        const item = el('div', 'opencode-tool-item');
+        item.append(
+          el('strong', null, name),
+          el('small', null, typeof value === 'object' ? value.status || JSON.stringify(value) : String(value)),
+        );
+        mcpRoot.appendChild(item);
+      }
+    }
+  } catch (error) {
+    if (statusLine) statusLine.textContent = `读取失败：${error.message}`;
+    toast(error.message, 'error');
+  }
+}
+
 async function loadAssistantFiles(path = '.') {
   const target = path || $('#assistant-file-path')?.value.trim() || '.';
   try {
@@ -4504,7 +4585,42 @@ function bindAssistantActions() {
         loadBiliAutopilot();
       }
       if (name === 'capabilities') loadAssistantCapabilities();
+      if (name === 'opencode') loadOpenCode();
     });
+  });
+  $('#opencode-refresh')?.addEventListener('click', loadOpenCode);
+  $('#opencode-restart')?.addEventListener('click', async () => {
+    try {
+      await api('/opencode/restart', { method: 'POST' });
+      toast('OpenCode 已重启');
+      loadOpenCode();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#opencode-reset')?.addEventListener('click', async () => {
+    try {
+      await api('/opencode/reset', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: 'main' }),
+      });
+      toast('当前 OpenCode 会话已重置');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#opencode-enabled')?.addEventListener('change', async (event) => {
+    try {
+      const data = await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ opencode_enabled: Boolean(event.target.checked) }),
+      });
+      state.settings = data.settings || state.settings;
+      toast(event.target.checked ? '已启用官方 OpenCode 引擎' : '已切回内置执行循环');
+    } catch (error) {
+      toast(error.message, 'error');
+      event.target.checked = !event.target.checked;
+    }
   });
   $('#assistant-contacts-refresh')?.addEventListener('click', () => loadAssistantContacts());
   $('#bili-refresh')?.addEventListener('click', () => loadBiliStatus());

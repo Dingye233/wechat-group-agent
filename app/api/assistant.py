@@ -240,7 +240,14 @@ async def assistant_history(
 async def assistant_clear(
     session_id: str = Query(default="main"),
 ) -> dict:
-    return {"deleted": await clear_history(session_id)}
+    deleted = await clear_history(session_id)
+    try:
+        from app.services.opencode_agent import get_opencode_runtime
+
+        await get_opencode_runtime().reset_session(session_id)
+    except Exception:
+        pass
+    return {"deleted": deleted}
 
 
 # ------------------------------------------------------------------- files

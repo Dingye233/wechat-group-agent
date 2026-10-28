@@ -40,6 +40,21 @@ foreach ($agentPid in $targets) {
 
 Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
 
+# The OpenCode sidecar is a child of the agent; taskkill /F above does not
+# always reap it. Stop only the PID we recorded for our own sidecar.
+$opencodePidFile = Join-Path $PSScriptRoot "data\opencode\server.pid"
+if (Test-Path $opencodePidFile) {
+    $opencodePid = (Get-Content $opencodePidFile | Select-Object -First 1)
+    if ($opencodePid) {
+        $opencodeProcess = Get-Process -Id ([int]$opencodePid) -ErrorAction SilentlyContinue
+        if ($opencodeProcess) {
+            Stop-Process -Id ([int]$opencodePid) -Force -ErrorAction SilentlyContinue
+            Write-Host "Stopped OpenCode sidecar (PID $opencodePid)."
+        }
+    }
+    Remove-Item $opencodePidFile -Force -ErrorAction SilentlyContinue
+}
+
 # Give Windows a moment to release the port.
 for ($i = 0; $i -lt 10; $i++) {
     $stillListening = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue

@@ -72,6 +72,17 @@ _CANCEL_WORDS = {
 }
 
 _TOOL_LABELS = {
+    "tool": "群伴工具",
+    "send_message": "发送消息",
+    "read_group": "读取群消息",
+    "bili_knowledge": "检索 B站知识库",
+    "memory_save": "写入记忆",
+    "memory_search": "检索记忆",
+    "read": "读取文件",
+    "grep": "搜索内容",
+    "glob": "查找文件",
+    "webfetch": "读取网页",
+    "websearch": "搜索网页",
     "read_file": "读取文件",
     "write_file": "写入文件",
     "list_dir": "查看目录",
@@ -1378,7 +1389,12 @@ class RuntimeManager:
             state["sent"] = sent + 1
             state["last_sent"] = now
             tool = str(event.get("tool") or "工具")
-            label = _TOOL_LABELS.get(tool, tool)
+            normalized = (
+                tool.removeprefix("qunban_qunban_")
+                .removeprefix("qunban_")
+                .replace("qunban_", "")
+            )
+            label = _TOOL_LABELS.get(normalized, _TOOL_LABELS.get(tool, normalized))
             thought = str(event.get("thought") or "").strip().replace("\n", " ")
             if thought:
                 return f"🔧 {label}：{thought[:140]}"
@@ -1390,7 +1406,12 @@ class RuntimeManager:
             state["sent"] = sent + 1
             state["last_sent"] = time.monotonic()
             tool = str(event.get("tool") or "工具")
-            label = _TOOL_LABELS.get(tool, tool)
+            normalized = (
+                tool.removeprefix("qunban_qunban_")
+                .removeprefix("qunban_")
+                .replace("qunban_", "")
+            )
+            label = _TOOL_LABELS.get(normalized, _TOOL_LABELS.get(tool, normalized))
             message = str(event.get("message") or "").strip().replace("\n", " ")
             if message:
                 return f"⚠ {label}失败：{message[:180]}"

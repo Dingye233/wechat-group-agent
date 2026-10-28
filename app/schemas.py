@@ -129,6 +129,7 @@ class SettingsUpdate(BaseModel):
     assistant_max_steps: int | None = Field(default=None, ge=0, le=500)
     assistant_max_tokens: int | None = Field(default=None, ge=128, le=3000)
     assistant_shell_timeout: int | None = Field(default=None, ge=5, le=600)
+    opencode_enabled: bool | None = None
     timezone: str | None = None
     bot_aliases: str | None = None
     wcf_wechat_exe: str | None = None

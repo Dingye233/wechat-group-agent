@@ -1251,6 +1251,9 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .bili-video-history strong { display: block; font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bili-video-history small { display: block; color: var(--muted-2); font-size: 8px; line-height: 1.5; margin-top: 2px; }
 .bili-video-history .bili-agent-opinion { color: var(--amber); font-style: italic; }
+.opencode-tool-item { padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.opencode-tool-item strong { display: block; font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opencode-tool-item small { display: block; color: var(--muted-2); font-size: 8px; line-height: 1.5; margin-top: 2px; }
 .assistant-contact-chat-head { margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--line); }
 .assistant-contact-messages { min-height: 120px; max-height: 230px; margin-top: 4px; padding: 4px 2px 8px; }
 .assistant-contact-composer { margin-top: 4px; padding-top: 7px; }

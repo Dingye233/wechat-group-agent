@@ -326,10 +326,11 @@ async def update_task(
 
 
 class AssistantService:
-    """A compact tool-using agent inspired by Open Interpreter / MemGPT.
+    """Operator service.
 
-    It deliberately keeps the execution loop local and auditable: every tool
-    call is persisted as a message before its result is shown to the model.
+    The default path delegates decisions to the official OpenCode server
+    (``opencode serve``).  The in-process JSON tool loop below is retained as
+    an auditable fallback when OpenCode is disabled or unavailable.
     """
 
     def __init__(self, llm: LLMService, runtime: Any = None) -> None:
@@ -421,6 +422,337 @@ class AssistantService:
         # File / PowerShell / skill / desktop tools are blocking; keep them off
         # the event loop. The capability gate is applied by execute_capability.
         return await execute_capability(name, args, scope)
+
+    async def _admin_group_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        settings: dict[str, Any],
+    ) -> Any:
+        """Group tools used by the Operator/OpenCode tool gateway."""
+        group_id = int(args.get("group_id") or 0)
+        if group_id <= 0:
+            raise ValueError("group_id 必须是正整数")
+        async with SessionLocal() as db:
+            group = await db.get(Group, group_id)
+            if group is None:
+                raise ValueError("群不存在")
+            if self.runtime is not None and self.runtime.account_key:
+                if group.account_key and group.account_key != self.runtime.account_key:
+                    raise ValueError("该群属于其他微信账号")
+        if name == "read_group_messages":
+            limit = max(1, min(200, int(args.get("limit") or 30)))
+            since_id = int(args.get("since_id") or 0)
+            async with SessionLocal() as db:
+                stmt = select(Message).where(Message.group_id == group_id)
+                if since_id:
+                    stmt = stmt.where(Message.id > since_id)
+                rows = list(
+                    (
+                        await db.execute(
+                            stmt.order_by(Message.id.desc()).limit(limit)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            rows.reverse()
+            return [
+                {
+                    "id": row.id,
+                    "sender": row.sender_name or row.sender_wxid or "",
+                    "content": row.content or "",
+                    "kind": row.kind,
+                    "is_agent": bool(row.is_from_agent),
+                    "created_at": row.created_at.isoformat()
+                    if row.created_at
+                    else None,
+                }
+                for row in rows
+            ]
+        if name == "send_group_message":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                raise ValueError("消息内容不能为空")
+            if self.runtime is None:
+                raise ValueError("运行时不可用")
+            sent = await self.runtime.send_agent_message(
+                group_id,
+                text=text,
+                meta={"source": "opencode"},
+            )
+            return {"ok": bool(sent), "group_id": group_id}
+        if name == "set_group_access":
+            enabled = bool(args.get("enabled", args.get("agent_enabled", True)))
+            async with SessionLocal() as db:
+                config = (
+                    await db.execute(
+                        select(GroupConfig).where(GroupConfig.group_id == group_id)
+                    )
+                ).scalar_one_or_none()
+                if config is None:
+                    config = GroupConfig(group_id=group_id)
+                    db.add(config)
+                config.agent_enabled = enabled
+                await db.commit()
+            return {"ok": True, "group_id": group_id, "agent_enabled": enabled}
+        if name == "pin_group":
+            if self.runtime is None:
+                raise ValueError("运行时不可用")
+            return await self.runtime.pin_group(group_id)
+        if name == "summarize_group":
+            from app.services.memory import summarize_group_memories
+
+            return await summarize_group_memories(
+                self.llm, group_id, settings
+            )
+        raise ValueError(f"未知群工具：{name}")
+
+    def _opencode_system_prompt(
+        self,
+        *,
+        settings: dict[str, Any],
+        remembers: list[dict[str, Any]],
+        capability_payload: dict[str, Any],
+        contact_persona: str = "",
+        channel: str = "dashboard",
+    ) -> str:
+        """Prompt for the native OpenCode loop (no JSON action protocol)."""
+        memory_template = str(
+            settings.get("memory_prompt_template") or DEFAULT_MEMORY_PROMPT_TEMPLATE
+        )
+        memory_lines = []
+        used = 0
+        limit = max(200, int(settings.get("memory_context_max_chars") or 1800))
+        for item in remembers:
+            line = format_memory_line(item, memory_template)
+            if used + len(line) > limit:
+                break
+            memory_lines.append(line)
+            used += len(line) + 1
+        persona_parts = []
+        global_persona = str(settings.get("operator_persona") or "").strip()
+        if global_persona:
+            persona_parts.append(global_persona)
+        if str(contact_persona or "").strip():
+            persona_parts.append(
+                "当前联系人专属人设（叠加在全局人设之上）：\n"
+                + str(contact_persona).strip()
+            )
+        persona_block = "\n\n".join(persona_parts) or "无"
+        core = str(settings.get("operator_system_prompt") or "").strip()
+        if not core:
+            core = (
+                "你是「群伴 Operator」，一个能直接操作本机、微信和 B站的执行型 Agent。"
+                "先理解目标，再动手；能自己判断的默认值直接选，不要反复追问。"
+            )
+        extra = str(settings.get("operator_prompt_extra") or "").strip()
+        extra_block = (
+            f"\n# 用户额外要求（高优先级）\n{extra}" if extra else ""
+        )
+        tools = capability_payload.get("tools") or []
+        tool_names = "、".join(str(item.get("name")) for item in tools[:80]) or "无"
+        channel_text = (
+            "你正在微信私聊里回复管理员。最终答复要像真人发微信：自然中文短段落，"
+            "不要 Markdown 表格或代码块。工具调用进度由系统自动同步；"
+            "不需要再调用发送工具把最终答复重复发一遍。"
+            if channel == "wechat"
+            else "你在群伴后台的 Agent 对话中，可以使用 Markdown，但保持简洁、可执行。"
+        )
+        return f"""{core}
+
+# 运行方式（官方 OpenCode）
+你现在由官方 OpenCode Agent 运行时执行，使用原生工具调用，不再输出 JSON 动作协议。
+- 需要微信/B站/记忆/文件/终端能力时，调用 MCP 工具 `qunban_tool`，参数为 name 和 args。
+- 不确定可用工具时先调用 `qunban_capabilities`，它会返回当前启用的工具名。
+- 也可以使用 OpenCode 自带的 read/grep/glob/webfetch 等工具。
+- 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
+- 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。
+- 发消息、删除、覆盖、停服务等有副作用的操作，先确认目标和影响。
+- 进度会自动显示给管理员；不要输出长篇思维过程或敏感信息。
+
+# 当前通道
+{channel_text}
+
+# 工作区
+{assistant_tools.workspace_root()}
+当前进程管理员权限：{"是" if assistant_tools.is_admin() else "否"}
+
+# 人设（每次对话自动注入）
+{persona_block}
+
+# 长期记忆（参考，不要机械复述）
+{chr(10).join(memory_lines) or "无"}
+
+# 已启用的群伴工具名
+{tool_names}
+{extra_block}
+
+# 常用工具示例
+- 列群：qunban_tool(name="list_groups", args={{}})
+- 读群：qunban_tool(name="read_group_messages", args={{"group_id": 211, "limit": 30}})
+- 发群：qunban_tool(name="send_group_message", args={{"group_id": 211, "text": "..."}})
+- B站搜索：qunban_tool(name="bili_search", args={{"keyword": "...", "limit": 10}})
+- 保存记忆：qunban_tool(name="save_memory", args={{"content": "...", "title": "..."}})
+"""
+
+    async def _run_opencode(
+        self,
+        *,
+        message: str,
+        session_id: str,
+        scope: str,
+        settings: dict[str, Any],
+        remembers: list[dict[str, Any]],
+        capability_payload: dict[str, Any],
+        persona: str,
+        channel: str,
+        temperature: float | None,
+        cancel_event: asyncio.Event,
+        emit: Callable[[dict[str, Any]], Awaitable[None]],
+        store_assistant: bool,
+        emit_final: bool,
+        followup_depth: int,
+        memory_scope: str,
+        memory_metadata: dict[str, Any] | None,
+        account_key: str,
+    ) -> dict[str, Any]:
+        from app.services.opencode_agent import (
+            OpenCodeError,
+            get_opencode_runtime,
+        )
+
+        system_prompt = self._opencode_system_prompt(
+            settings=settings,
+            remembers=remembers,
+            capability_payload=capability_payload,
+            contact_persona=persona,
+            channel=channel,
+        )
+        opencode = get_opencode_runtime()
+        result: dict[str, Any] = {}
+        final = ""
+        pending_followup: list[str] = []
+        await emit(
+            {
+                "phase": "start",
+                "engine": "opencode",
+                "unlimited": True,
+                "message": "官方 OpenCode 已接管，开始执行",
+            }
+        )
+        try:
+            result = await opencode.chat(
+                message,
+                session_id=session_id,
+                system_prompt=system_prompt,
+                settings=settings,
+                temperature=temperature,
+                progress=emit,
+                cancel_event=cancel_event,
+            )
+            final = str(result.get("reply") or "").strip()
+            trace = list(result.get("trace") or [])
+        except OpenCodeError as exc:
+            logger.warning("OpenCode 执行失败：%s", exc)
+            final = f"OpenCode 执行失败：{exc}"
+            trace = []
+        finally:
+            cleanup_session(session_id)
+            pending_followup = take_session_inbox(session_id)
+
+        if pending_followup and followup_depth < 2:
+            followup = await self.chat(
+                "\n".join(pending_followup),
+                session_id=session_id,
+                scope=scope,
+                kind="text",
+                temperature=temperature,
+                persona=persona,
+                channel=channel,
+                progress=emit,
+                store_user=False,
+                store_assistant=False,
+                emit_final=False,
+                followup_depth=followup_depth + 1,
+            )
+            followup_reply = str(followup.get("reply") or "").strip()
+            if followup_reply:
+                final = f"{final}\n\n{followup_reply}".strip()
+            trace.extend(followup.get("trace") or [])
+
+        # OpenCode events use `input`; Qunban's history/image helpers use `args`.
+        for item in trace:
+            if "args" not in item:
+                item["args"] = item.get("input") or {}
+        for item in trace:
+            tool = str(item.get("tool") or "tool")
+            output = str(item.get("output") or "")
+            try:
+                await _store(
+                    session_id,
+                    "tool",
+                    output,
+                    tool_name=tool,
+                    tool_input=item.get("args") or {},
+                    tool_output=output,
+                )
+            except Exception:
+                pass
+
+        display_urls: list[str] = []
+        image_tools = {"display_image", "screen_capture", "run_mcp", "call_interface"}
+        for item in trace:
+            if item.get("tool") not in image_tools:
+                continue
+            match = re.search(
+                r"/media/assistant/[^\s\"',}]+", str(item.get("output") or "")
+            )
+            if match and match.group(0) not in display_urls:
+                display_urls.append(match.group(0))
+        for match in re.finditer(r"/media/assistant/[^\s\"',}]+", final):
+            if match.group(0) not in display_urls:
+                display_urls.append(match.group(0))
+        for url in display_urls:
+            if f"]({url})" in final:
+                continue
+            markdown = f"![图片]({url})"
+            if url in final:
+                final = final.replace(url, markdown)
+            else:
+                final += f"\n\n{markdown}"
+        final = _dedupe_image_markdown(final)
+        if emit_final:
+            await emit({"phase": "final", "message": "任务完成"})
+        if store_assistant:
+            await _store(session_id, "assistant", final)
+            if final:
+                memory_meta = {
+                    "scope": memory_scope,
+                    "source": "opencode",
+                    "importance": 3,
+                    "category": "conversation",
+                    "title": "对话记忆",
+                }
+                memory_meta.update(memory_metadata or {})
+                mem0_memory.schedule_add_turn(
+                    settings,
+                    account_key=account_key,
+                    messages=[
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": final},
+                    ],
+                    metadata=memory_meta,
+                )
+        return {
+            "reply": final,
+            "trace": trace,
+            "model": str(settings.get("llm_model") or ""),
+            "prompt_tokens": int(result.get("prompt_tokens") or 0),
+            "completion_tokens": int(result.get("completion_tokens") or 0),
+            "admin": assistant_tools.is_admin(),
+            "engine": "opencode",
+        }
 
     def _system_prompt(
         self,
@@ -722,19 +1054,20 @@ class AssistantService:
             except Exception:
                 pass
 
-        await emit(
-            {
-                "phase": "start",
-                "max_steps": max_steps,
-                "unlimited": unlimited,
-                "message": (
-                    "开始处理，步数不限（安全上限 "
-                    f"{MAX_SAFETY_STEPS} 步 / {MAX_TASK_SECONDS // 60} 分钟）"
-                    if unlimited
-                    else f"开始处理，最多 {max_steps} 步"
-                ),
-            }
-        )
+        if not settings.get("opencode_enabled", True):
+            await emit(
+                {
+                    "phase": "start",
+                    "max_steps": max_steps,
+                    "unlimited": unlimited,
+                    "message": (
+                        "开始处理，步数不限（安全上限 "
+                        f"{MAX_SAFETY_STEPS} 步 / {MAX_TASK_SECONDS // 60} 分钟）"
+                        if unlimited
+                        else f"开始处理，最多 {max_steps} 步"
+                    ),
+                }
+            )
         capability_payload = await catalog_for_scope(scope)
         system_prompt = self._system_prompt(
             settings=settings,
@@ -768,6 +1101,26 @@ class AssistantService:
         _ACTIVE_SESSIONS.add(session_id)
         cancel_event = asyncio.Event()
         _CANCEL_EVENTS[session_id] = cancel_event
+        if settings.get("opencode_enabled", True):
+            return await self._run_opencode(
+                message=message,
+                session_id=session_id,
+                scope=scope,
+                settings=settings,
+                remembers=remembers,
+                capability_payload=capability_payload,
+                persona=persona,
+                channel=channel,
+                temperature=temperature,
+                cancel_event=cancel_event,
+                emit=emit,
+                store_assistant=store_assistant,
+                emit_final=emit_final,
+                followup_depth=followup_depth,
+                memory_scope=memory_scope,
+                memory_metadata=memory_metadata,
+                account_key=account_key,
+            )
         started_at = time.monotonic()
         final = ""
         cancelled = False
