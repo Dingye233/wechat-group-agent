@@ -851,8 +851,8 @@ class RuntimeManager:
                         pinned_id = 0
                 self.pinned_group_id = pinned_id
             default_interval = max(
-                0.5,
-                float(settings.get("read_poll_interval_seconds") or 0.5),
+                0.2,
+                float(settings.get("read_poll_interval_seconds") or 0.3),
             )
             poll_setter = getattr(adapter, "set_poll_interval", None)
             if callable(poll_setter):
@@ -2323,6 +2323,29 @@ class RuntimeManager:
     def account_key(self) -> str:
         """Stable key of the currently active WeChat account."""
         return str((self.account or {}).get("wxid") or "")
+
+    async def preflight_group(self, group_id: int) -> bool:
+        """Open the target chat while the model is thinking.
+
+        The first send used to spend 0.5–2s searching the group and opening the
+        conversation.  Doing that concurrently with the LLM turns the search
+        into free latency.
+        """
+        if not self.is_online or self.detached or self.adapter is None:
+            return False
+        adapter = self.adapter
+        preflight = getattr(adapter, "preflight", None)
+        if not callable(preflight):
+            return False
+        try:
+            group = await self._get_group(group_id)
+            result = await preflight(group.external_id)
+            return bool(isinstance(result, dict) and result.get("ok"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("发送前预打开会话失败: %s", exc)
+            return False
 
     async def _adapter_send_text(
         self, room_id: str, text: str, *, reuse_chat: bool = False

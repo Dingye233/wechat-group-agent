@@ -1310,7 +1310,7 @@ class AgentEngine:
         self._latest_trigger[trigger_key] = message_id
         # Short burst-coalescing window. The old 0.3-0.9s window was added on
         # top of the reply delay, so a normal group reply waited twice.
-        coalesce_wait = random.uniform(0.15, 0.4)
+        coalesce_wait = random.uniform(0.05, 0.18)
         await asyncio.sleep(coalesce_wait)
         if self._latest_trigger.get(trigger_key) != message_id:
             return
@@ -2085,6 +2085,16 @@ class AgentEngine:
         )
         service = get_dsh_primary_service()
         started = time.perf_counter()
+        # Pre-open the target chat while DSH is thinking; the send can then
+        # reuse the already-open conversation instead of searching again.
+        preflight: asyncio.Task | None = None
+        preflight_fn = getattr(self.runtime, "preflight_group", None)
+        if callable(preflight_fn):
+            preflight = asyncio.create_task(
+                preflight_fn(group.id),
+                name=f"preflight-{group.id}",
+            )
+        reuse_first = False
 
         async def on_update(event: dict[str, Any]) -> None:
             if event.get("phase") == "tool" and event.get("tool"):
@@ -2095,19 +2105,34 @@ class AgentEngine:
                     level="info",
                 )
 
-        result = await service.prompt(
-            f"group-{group.id}",
-            prompt,
-            settings=settings,
-            timeout=180.0,
-            on_update=on_update,
-        )
+        try:
+            result = await service.prompt(
+                f"group-{group.id}",
+                prompt,
+                settings=settings,
+                timeout=180.0,
+                on_update=on_update,
+            )
+        except Exception:
+            if preflight is not None:
+                preflight.cancel()
+            raise
         text = str(result.get("text") or "").strip()
+        if preflight is not None:
+            try:
+                reuse_first = bool(
+                    await asyncio.wait_for(asyncio.shield(preflight), timeout=0.08)
+                )
+            except (asyncio.TimeoutError, Exception):
+                preflight.cancel()
+                reuse_first = False
         data = parse_json_object(text)
         if not isinstance(data, dict):
             data = {"action": "reply", "reply": text}
         action = str(data.get("action") or "reply").lower()
         if action == "none":
+            if preflight is not None:
+                preflight.cancel()
             await self._log(
                 group.id,
                 "dsh_primary",
@@ -2120,6 +2145,8 @@ class AgentEngine:
                 data.get("ack") or "收到，我先按这个方向处理，稍后把结果发群里。"
             )
         if not data.get("messages") and not data.get("reply"):
+            if preflight is not None:
+                preflight.cancel()
             await self._log(
                 group.id,
                 "dsh_primary",
@@ -2135,6 +2162,7 @@ class AgentEngine:
             data,
             result,
             started,
+            reuse_first=reuse_first,
         )
         return True
 
@@ -2197,6 +2225,8 @@ class AgentEngine:
         data: dict[str, Any],
         result: dict[str, Any],
         started: float,
+        *,
+        reuse_first: bool = False,
     ) -> None:
         async with SessionLocal() as db:
             segments = await self._build_segments(db, config, data)
@@ -2223,6 +2253,7 @@ class AgentEngine:
             if not self._passes_limits(group.id, config, settings):
                 return
             sent_any = False
+            send_started = time.perf_counter()
             for index, segment in enumerate(segments):
                 if index:
                     await asyncio.sleep(random.uniform(0.7, 1.5))
@@ -2239,7 +2270,7 @@ class AgentEngine:
                             "segment": index + 1,
                             "segment_count": len(segments),
                         },
-                        reuse_chat=index > 0,
+                        reuse_chat=index > 0 or (index == 0 and reuse_first),
                     )
                 except Exception as exc:
                     await self._log(
@@ -2270,7 +2301,9 @@ class AgentEngine:
             group.id,
             "dsh_primary",
             f"DSH primary 回复｜{int((time.perf_counter() - started) * 1000)}ms"
-            f"｜{len(segments)} 段",
+            f"｜{len(segments)} 段"
+            f"｜发送 {int((time.perf_counter() - send_started) * 1000)}ms"
+            f"｜复用会话={'是' if reuse_first else '否'}",
             level="info",
         )
 

@@ -671,7 +671,7 @@ class ReplicaAdapter(BaseAdapter):
         self._readable_rooms: set[str] = set()
         self._read_schedule: dict[str, float] = {}
         self._next_check: dict[str, float] = {}
-        self._poll_interval = 0.5
+        self._poll_interval = 0.3
         self._pinned_room = ""
         self._history_done: set[str] = set()
         self._pending: dict[str, list[dict[str, Any]]] = {}
@@ -1446,7 +1446,7 @@ class ReplicaAdapter(BaseAdapter):
             # 0 means "use the global poll interval"; positive values keep the
             # per-group throttle requested by the user.
             self._read_schedule[str(room_id)] = (
-                max(0.5, value) if value > 0 else 0.0
+                max(0.2, value) if value > 0 else 0.0
             )
         removed = set(self._readable_rooms) - set(self._read_schedule)
         self._readable_rooms = set(self._read_schedule)
@@ -1480,7 +1480,7 @@ class ReplicaAdapter(BaseAdapter):
         configured = float(self._read_schedule.get(room_id) or 0)
         if configured > 0:
             return configured
-        return max(0.5, float(self._poll_interval))
+        return max(0.2, float(self._poll_interval))
 
     def _sync_history(self, room_id: str) -> None:
         if self._db is None:
@@ -1533,7 +1533,7 @@ class ReplicaAdapter(BaseAdapter):
             self._stop_scheduler.wait(0.1)
 
     def set_poll_interval(self, seconds: float) -> None:
-        self._poll_interval = max(0.5, float(seconds or 1.0))
+        self._poll_interval = max(0.2, float(seconds or 1.0))
         listener = self._listener
         if listener is not None:
             try:

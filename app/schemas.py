@@ -113,7 +113,7 @@ class SettingsUpdate(BaseModel):
     reply_delay_random_seconds: float | None = Field(default=None, ge=0, le=30)
     reply_cooldown_jitter_seconds: float | None = Field(default=None, ge=0, le=300)
     reply_global_interval_seconds: float | None = Field(default=None, ge=0, le=300)
-    read_poll_interval_seconds: float | None = Field(default=None, ge=0.5, le=300)
+    read_poll_interval_seconds: float | None = Field(default=None, ge=0.2, le=300)
     read_media_download_enabled: bool | None = None
     memory_enabled: bool | None = None
     memory_engine: Literal["auto", "mem0", "sqlite"] | None = None

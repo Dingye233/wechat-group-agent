@@ -105,10 +105,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "reply_delay_seconds": 0.8,
     "reply_delay_random_seconds": 1.5,
     "reply_cooldown_jitter_seconds": 20.0,
-    "reply_global_interval_seconds": 3.0,
+    "reply_global_interval_seconds": 1.2,
     # Database polling is cheap; keep the default responsive. Per-group
     # read_interval_seconds can still override this.
-    "read_poll_interval_seconds": 0.5,
+    "read_poll_interval_seconds": 0.3,
     # Image/sticker download is intentionally opt-in: it opens WeChat preview
     # windows and is slower than text extraction.
     "read_media_download_enabled": False,
@@ -323,7 +323,7 @@ async def update_settings(
         "reply_delay_random_seconds": (0.0, 30.0, float),
         "reply_cooldown_jitter_seconds": (0.0, 300.0, float),
         "reply_global_interval_seconds": (0.0, 300.0, float),
-        "read_poll_interval_seconds": (0.5, 300.0, float),
+        "read_poll_interval_seconds": (0.2, 300.0, float),
         "memory_search_timeout_seconds": (0.3, 8.0, float),
         "memory_summary_max_input_chars": (1000, 30000, int),
         "memory_summary_max_tokens": (100, 2000, int),
