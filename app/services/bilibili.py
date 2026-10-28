@@ -18,7 +18,7 @@ import qrcode
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import BiliAccount, utcnow
+from app.models import BiliAccount, BiliVideo, utcnow
 
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
@@ -926,15 +926,40 @@ async def record_video_to_knowledge(
     transcribed = await transcribe_video(bvid, model_size, account_key)
     from app.services import bili_knowledge
 
+    transcript = str(transcribed.get("text") or "")
+    title = str(info.get("title") or bvid)
+    author = str(info.get("author") or "")
+    url = str(info.get("url") or "")
     added = await bili_knowledge.add_video_async(
         bvid=str(bvid or "").strip(),
-        title=str(info.get("title") or bvid),
-        author=str(info.get("author") or ""),
-        url=str(info.get("url") or ""),
-        transcript=str(transcribed.get("text") or ""),
+        title=title,
+        author=author,
+        url=url,
+        transcript=transcript,
         summary="",
         topics=[],
     )
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(
+                select(BiliVideo).where(BiliVideo.bvid == bvid).limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = BiliVideo(bvid=bvid, account_key=account_key)
+            db.add(row)
+        row.title = title[:300]
+        row.author = author[:160]
+        row.url = url[:300]
+        row.duration = str(info.get("duration") or "")
+        row.transcript = transcript
+        row.summary = ""
+        row.topics = []
+        row.actions = {"manual_record": True}
+        row.status = "done"
+        row.error = ""
+        row.updated_at = utcnow()
+        await db.commit()
     return {
         "bvid": bvid,
         "title": info.get("title") or bvid,

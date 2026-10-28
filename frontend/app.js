@@ -3282,8 +3282,8 @@ async function switchAssistantConversation(value) {
   const input = $('#assistant-input');
   if (input) input.placeholder = '告诉 Agent 要做什么…（Enter 发送，Shift + Enter 换行）';
   const send = $('#assistant-send');
-  if (send) send.textContent = '发送';
-  if (stop) stop.hidden = true;
+  if (send) send.textContent = state.assistantBusy ? '插入' : '发送';
+  if (stop) stop.hidden = !state.assistantBusy;
   await loadAssistantHistory();
 }
 
@@ -3484,18 +3484,19 @@ async function sendAssistantMessage() {
     addAssistantProgress(`失败：${error.message}`, 'error');
     toast(error.message, 'error', 6000);
   } finally {
+    const inContact = state.assistantConversation !== 'main';
     if (queuedRun) {
       state.assistantBusy = true;
       if (button) {
         button.disabled = false;
-        button.textContent = '插入';
+        button.textContent = inContact ? '发送到微信' : '插入';
       }
-      if (stopButton) stopButton.hidden = false;
+      if (stopButton) stopButton.hidden = inContact;
     } else {
       state.assistantBusy = false;
       if (button) {
         button.disabled = false;
-        button.textContent = '发送';
+        button.textContent = inContact ? '发送到微信' : '发送';
       }
       if (stopButton) {
         stopButton.hidden = true;
