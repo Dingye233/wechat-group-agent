@@ -1784,6 +1784,7 @@ class RuntimeManager:
         *,
         is_agent: bool = False,
         allow_seconds: float = 60.0,
+        reuse_chat: bool = True,
     ) -> dict[str, Any]:
         if not self.is_online or self.adapter is None:
             raise RuntimeError("服务未在线")
@@ -1799,7 +1800,10 @@ class RuntimeManager:
         allow = getattr(self.adapter, "allow_ui_action", None)
         if callable(allow):
             allow(max(1.0, float(allow_seconds)))
-        await self.adapter.send_text(wxid, text)
+        if self.adapter_id == "replica":
+            await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
+        else:
+            await self.adapter.send_text(wxid, text)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         async with SessionLocal() as db:
             contact = await db.get(Contact, contact_id)

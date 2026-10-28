@@ -1955,18 +1955,31 @@ class ReplicaAdapter(BaseAdapter):
         except Exception:
             with self._lock:
                 self._wx = None
-        # A 350x475 portrait window cannot render the main tab bar / search
-        # box that wechatauto needs.  Maximize only when the window is too
-        # small for the wide layout; normal-sized windows are left untouched.
+        # A narrow WeChat window keeps the current chat open and hides the
+        # search box used by ChatWith.  Maximize before any lookup; if the
+        # window still cannot provide the wide layout, abort instead of
+        # clicking blind and freezing the UI.
         try:
             import win32con
             import win32gui
 
             if hwnd and not win32gui.IsIconic(hwnd):
                 left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-                if (right - left) < 900 or (bottom - top) < 600:
+                width = right - left
+                height = bottom - top
+                if width < 1100 or height < 700:
                     win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-                    time.sleep(0.5)
+                    time.sleep(0.6)
+                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                    width = right - left
+                    height = bottom - top
+                if width < 1000 or height < 650:
+                    raise RuntimeError(
+                        "微信窗口过窄，搜索框无法稳定显示，已取消发送；"
+                        "请先把微信窗口最大化/拉宽后重试"
+                    )
+        except RuntimeError:
+            raise
         except Exception:
             pass
         wx = self._ensure_wx()
