@@ -52,6 +52,7 @@
 ## 群聊复杂任务转交
 
 - 群伴 Agent 先做意图和能力判断：查天气、B站、点检表等简单任务继续走群聊工具；写代码、写脚本、运行命令、生成 PPT/复杂文档、读写工作区文件、操作桌面或多步工具编排等复杂任务，会在 plan 里标记 `delegate_to_opencode`。
+- 用户明确说“让 opencode 做 / 交给后台执行器 / 让后台跑 / 你负责盯着”时，会强制转交 OpenCode，不会再回复“不能驱动 opencode”。
 - 复杂任务进入 `ChatTask` 后台队列，由群伴 Agent 创建独立的 OpenCode 会话执行；群伴先回一句自然过渡，不阻塞继续聊天。
 - OpenCode 原生 `bash` / `read` / `write` / `edit` / `patch` / `task` 已全部启用，`permission` 全部设为 `allow`；可以在 workspace 里写脚本、运行命令，也可以使用群伴 MCP 工具、现有 skills/projects。
 - OpenCode 工作区是 `data/opencode/workspace`；群伴工作区是 `data/agent_workspace`。任务需要发文件时，OpenCode 把文件写到 `data/agent_workspace/exports/task-<id>/`，由群伴 Agent 统一发送。

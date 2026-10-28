@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import re
+import sys
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -128,6 +129,7 @@ class AgentEngine:
 - 做表格 / Excel / 点检表并要发到群里时，选 create_excel，把用户给的内容整理成 sheets[].rows；不要选屏幕控制类工具。
 - 工具列表里没有能完成任务的工具时，need_tools=false，并在 missing_capability 里写明缺少什么，不要假装能完成。
 - 需要写代码、写脚本、运行命令、读写工作区文件、生成 PPT/复杂文档、操作桌面或多个应用、多步工具编排，或现有群聊工具明显不够时，delegate_to_opencode=true，并把具体需求写进 opencode_brief。
+- 用户明确说“让 opencode 做 / 交给后台执行器 / 让后台跑 / 你负责盯着”时，必须 delegate_to_opencode=true，intent=task，opencode_brief 写清目标和已有文件；不要回答“不能驱动 opencode”。
 - 简单查天气、B站、点检表用群聊工具即可，不要委派；委派时 need_tools 可以为 false，should_reply=true。
 - 不要输出任何解释，只输出 JSON：
 {"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}"""
@@ -234,6 +236,14 @@ class AgentEngine:
             "命令行",
             "宏",
         )
+        explicit_opencode = self._wants_opencode(str(message.content or ""))
+        if explicit_opencode and intent not in {"privacy", "spam"}:
+            delegate = True
+            need_tools = False
+            selected = []
+            if intent == "chat":
+                intent = "task"
+            brief = brief or str(message.content or "")[:600]
         if (
             not delegate
             and intent not in {"privacy", "spam"}
@@ -275,6 +285,47 @@ class AgentEngine:
             "opencode_brief": brief,
             "source": "planner",
         }
+
+    @staticmethod
+    def _wants_opencode(text: str) -> bool:
+        value = str(text or "").lower()
+        if not value:
+            return False
+        if not any(
+            word in value
+            for word in ("opencode", "open code", "后台执行器")
+        ):
+            return False
+        if any(
+            word in value
+            for word in (
+                "不要用opencode",
+                "不要用 opencode",
+                "别用opencode",
+                "不用opencode",
+                "不要opencode",
+                "opencode不行",
+                "opencode没用",
+            )
+        ):
+            return False
+        return any(
+            phrase in value
+            for phrase in (
+                "让opencode",
+                "让 opencode",
+                "用opencode",
+                "用 opencode",
+                "交给opencode",
+                "交给 opencode",
+                "opencode做",
+                "opencode 做",
+                "后台执行器",
+                "后台跑",
+                "让后台",
+                "交给后台",
+            )
+        )
 
     def _fallback_plan(
         self, message: Message, config: GroupConfig, tools: list[dict[str, Any]]
@@ -347,9 +398,11 @@ class AgentEngine:
             "宏",
         )
         delegate = (
-            not selected
-            and intent not in {"privacy", "spam"}
-            and any(word in text for word in complex_words)
+            intent not in {"privacy", "spam"}
+            and (
+                any(word in text for word in complex_words)
+                or self._wants_opencode(str(message.content or ""))
+            )
         )
         if delegate:
             intent = "task"
@@ -780,7 +833,9 @@ class AgentEngine:
 - 你的工作区：{WORKSPACE}
 - 群伴工作区：{workspace_root()}
 - 你可以写脚本、运行命令、读写文件、使用 OpenCode 原生工具和 qunban_* MCP 工具，也可以使用现有 skills/projects。
-- 需要生成文件时写到：{output_dir}
+- 运行 Python 项目脚本时优先用：{sys.executable}（已安装项目依赖，包括 openpyxl）。
+- 如果任务是优化已有 Excel，先在 `data/agent_workspace/exports/` 找最新的相关文件，改好后写到：{output_dir}
+- 需要生成新文件时写到：{output_dir}
 - 不要直接给群友发消息，不要操作微信窗口；群伴 Agent 会统一发送结果。
 - 遇到权限确认或选择题，群伴 Agent 会自动确认；你按最合理的方案继续，不要停下来反复追问。
 - 最终说明实际做了什么、结果、文件路径、未完成项；不要声称未执行的事情。
@@ -1087,6 +1142,23 @@ class AgentEngine:
                         plan["need_tools"] = False
                         plan["tools"] = []
                         plan["ack"] = ""
+                    if (
+                        self._wants_opencode(str(message.content or ""))
+                        and plan.get("intent") not in {"privacy", "spam"}
+                    ):
+                        plan["should_reply"] = True
+                        plan["intent"] = "task"
+                        plan["need_tools"] = False
+                        plan["tools"] = []
+                        plan["delegate_to_opencode"] = True
+                        plan["ack"] = (
+                            plan.get("ack")
+                            or "我这就交给后台 OpenCode 处理，稍等～"
+                        )
+                        plan["opencode_brief"] = (
+                            plan.get("opencode_brief")
+                            or str(message.content or "")[:600]
+                        )
                     await update_impression(
                         group_id=group_id,
                         user_wxid=str(message.sender_wxid or ""),
