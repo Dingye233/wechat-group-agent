@@ -399,7 +399,7 @@ async def summarize_group_memories(
                     for row in selected
                     if str(row.content or "").strip()
                 ]
-                mem0_added = await mem0_memory.add_turn(
+                mem0_memory.schedule_add_turn(
                     settings,
                     account_key=account_key,
                     messages=mem_messages,
@@ -413,6 +413,7 @@ async def summarize_group_memories(
                         "title": f"{group_name} 群聊记忆",
                     },
                 )
+                mem0_added = True
         except Exception:
             mem0_added = False
     if selected:

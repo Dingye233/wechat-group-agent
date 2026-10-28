@@ -81,6 +81,7 @@ def _config(settings: dict[str, Any]) -> dict[str, Any] | None:
     ).strip() or DEFAULT_COLLECTION
     MEM0_DIR.mkdir(parents=True, exist_ok=True)
     return {
+        "history_db_path": str((MEM0_DIR / "history.db").resolve()),
         "llm": {
             "provider": "deepseek",
             "config": {
