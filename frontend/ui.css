@@ -2307,7 +2307,7 @@ dialog.modal::backdrop {
 
 /* --------------------------------------------- unified Qunban capability library */
 .plugin-stats {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .plugin-mode-tabs {
   display: flex;

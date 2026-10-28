@@ -5,8 +5,26 @@
 融合不是“把群伴包成一个 MCP 服务”，而是三层：
 
 1. **wechatauto 是消息源和发送端**：`RuntimeManager` 通过 replica 适配器读取 `message.db` / `contact.db`，把新消息交给 Agent；回复仍由 `send_agent_message` / `send_contact_message` 调用 wechatauto-replica 发出，落库确认后才算成功。
-2. **群伴是业务与安全网关**：Python 侧保留消息入库、群配置、意图、记忆、任务、能力权限、发送校验和重试队列。所有副作用都必须经过 `/api/opencode/tool` 网关。
-3. **DSH 是唯一的 Agent 大脑**：通过原生 Cordis 插件 `@qunban/dsh-native` 暴露 `wechat_*` / `qunban_*` 工具；用 `qunban-chat` profile 生成群聊回复，用 `qunban` / `qunban-group` 执行任务。没有 MCP 子进程，也没有 `mcp__qunban__*` 名称层。
+2. **群伴是通道与能力桥**：Python 侧保留消息入库、群配置、入口策略（读取/回复/@/概率/冷却/静默）、记忆、能力权限、发送校验和重试队列。语义意图分流不再由群伴做。
+3. **DSH 是唯一 Agent 大脑**：`qunban-primary` 常驻 ACP session 直接读取群消息上下文，自己决定 `none / reply / task`、调用工具并给出结果；群伴只负责把结果发回 wechatauto。`qunban-chat` 仅保留为 legacy 应急链路。
+
+## 0. 当前主链路：dsh_primary
+
+```text
+微信 → RuntimeManager → AgentEngine（只做通道策略）
+  → DSH primary ACP session（常驻进程，按群复用）
+      → none / reply / task 结构化输出
+      → 需要时调用 qunban_* 工具（技能/MCP/接口动态注册）
+  → RuntimeManager.send_agent_message → wechatauto
+```
+
+- 设置项 `group_channel_mode=dsh_primary`（默认）或 `legacy`。
+- `dsh_primary` 不再调用 Python `_plan_intent`，也不再走 `qunban-chat` 文本 renderer。
+- `app/services/dsh_primary.py` 启动一个常驻 `dsh --profile qunban-primary` ACP 进程，通过 JSON-RPC stdio 复用群 session；不是每条消息起一个 headless 进程。
+- `qunban-primary` profile 由 `@deepseek-ai/dsh-acp-app` + `@qunban/dsh-native` 组成，原生文件/shell/web 工具关闭，只保留群伴工具。
+- system prompt 固定要求输出：`{"action":"none"}`、`{"action":"reply","messages":[...]}` 或 `{"action":"task","ack":"...","messages":[...]}`。
+- DSH 工具集中的 `wechat_send_message` 在 primary toolset 中被移除；发送永远由群伴完成。
+- `legacy` 才会回到原来的 `AgentEngine` 意图/任务编排 + `qunban-chat` / `qunban-group`。
 
 ## 1. 代码结构
 
@@ -14,34 +32,34 @@
 | --- | --- |
 | [`dsh/qunban-native/`](../dsh/qunban-native/) | 原生 DSH Cordis 插件源码；工具定义、HTTP 网关客户端、scope 裁剪 |
 | [`app/services/dsh_runtime.py`](../app/services/dsh_runtime.py) | 版本发现、安装、校验、更新；`data/dsh/state.json` |
-| [`app/services/dsh_agent.py`](../app/services/dsh_agent.py) | 每个任务启动一个 `dsh --profile ... --json` 进程；profile 生成、插件安装、事件解析、会话映射、用量上报 |
+| [`app/services/dsh_agent.py`](../app/services/dsh_agent.py) | 每个任务启动一个 `dsh --profile ... --json` 进程；legacy/Operator profile 生成、插件安装、事件解析、会话映射、用量上报 |
+| [`app/services/dsh_primary.py`](../app/services/dsh_primary.py) | 常驻 ACP 进程、按群 session、结构化输出、工具事件；主群聊链路 |
 | [`app/services/dsh_skills.py`](../app/services/dsh_skills.py) | 把 `data/agent_workspace/skills` 转成 DSH 的 `<name>/SKILL.md` 格式，写入 `data/dsh/skills` |
 | [`app/services/agent_engines.py`](../app/services/agent_engines.py) | `resolve_agent_engine()`：DSH；仅当 DSH 明确禁用时才用内置循环 |
-| [`app/core/agent.py`](../app/core/agent.py) | `_generate_dsh_chat()`：wechatauto 消息 → DSH `qunban-chat` profile → 回复文本；失败回退旧生成链路 |
+| [`app/core/agent.py`](../app/core/agent.py) | 群聊通道策略；`_handle_dsh_primary()` 调常驻 DSH；legacy 模式保留 `_generate_dsh_chat()` |
 | [`app/api/dsh.py`](../app/api/dsh.py) | 状态、检查更新、更新、会话重置、停止 |
 | [`app/services/dsh_plugins.py`](../app/services/dsh_plugins.py) | 插件目录、导入、创造模式和 profile patch 合并；见 [PLUGINS.md](PLUGINS.md) |
 | [`frontend/index.html`](../frontend/index.html) | 「助手 → DeepSeek Harness」面板；顶层「插件」页 |
 
 ## 2. 运行链路
 
-### 2.1 群聊读取与回复
+### 2.1 群聊读取与回复（dsh_primary）
 
 ```text
 微信数据库 (wechatauto-replica 监听)
   → RuntimeManager 入库 Message
   → AgentEngine._handle()
-      → 意图/任务判断
-      → _generate_dsh_chat()
-          → dsh --profile qunban-chat --json
-          → 返回 {"action":"reply","messages":[...]}
+      → 规则门：读取/回复/触发/@/概率/冷却/静默
+      → DSH primary ACP session（按群复用）
+          → DSH 自己决定 none / reply / task
+          → 需要时调用群伴工具
       → _build_segments()
       → RuntimeManager.send_agent_message()
-          → wechatauto-replica 打开目标会话、确认输入框、发送
-          → 轮询 message.db 确认落库
-          → 失败进入 outbox，等待重发
+          → wechatauto-replica 确认落库
+          → 失败进入 outbox
 ```
 
-`qunban-chat` **没有任何工具**：不能读文件、不能跑 shell、不能调用微信发送。这样群聊回复阶段不可能绕过 wechatauto，也不会把工具调用误当成聊天内容。需要工具/复杂任务时，仍由群伴的任务链路转交 `qunban-group`。
+`qunban-primary` 没有 `wechat_send_message` 工具，DSH 不能直接发微信；最终发送只由群伴完成。`legacy` 模式下才会回到 `qunban-chat` + Python 意图/任务编排，作为应急开关。
 
 ### 2.2 Operator / 管理员私聊
 
@@ -115,9 +133,10 @@ data/agent_workspace/skills/<name>/SKILL.md
 
 | profile | 用途 | 插件 scope | DSH 原生工具 | 权限 |
 | --- | --- | --- | --- | --- |
+| `qunban-primary` | **群聊主链路**（常驻 ACP） | group / primary toolset | 关闭原生 fs/shell/web；群伴工具 | `read-only` |
 | `qunban` | Operator / 管理员私聊 | admin | fs/web/skill，无 shell | `danger-full-access` |
-| `qunban-group` | 群任务 | group | 全部禁用 | `read-only` |
-| `qunban-chat` | 群聊回复 | 不加载插件 | 全部禁用 | `read-only` |
+| `qunban-group` | legacy 群任务 | group | 全部禁用 | `read-only` |
+| `qunban-chat` | legacy 群聊回复 | 不加载插件 | 全部禁用 | `read-only` |
 
 每次启动会：
 
@@ -131,8 +150,11 @@ data/agent_workspace/skills/<name>/SKILL.md
 | 会话 key | 用途 |
 | --- | --- |
 | `main` | Operator / 管理员私聊 |
-| `group-<id>` | 某个群的群任务，跨任务复用 |
-| `chat-<id>` | 某个群的聊天回复，跨消息复用 |
+| `group-<id>` | primary ACP 群会话；持续复用 |
+| `group-<id>`（legacy） | legacy 群任务/聊天 |
+| `chat-<id>` | legacy 群聊回复 |
+
+primary 的会话由常驻 ACP 进程持有，一个群一个 session；同一 session 的 system prompt + 工具清单 + 历史形成稳定前缀，后续消息命中缓存。qunban-chat / group-task 的 per-message headless 会话仍然是 legacy 路径。
 
 稳定会话是缓存命中的关键。DSH 的 prefix 包含 system prompt + 工具清单 + 历史；同一会话的第二轮开始，`cacheReadTokens` 通常达到 90% 以上。实测：
 
@@ -158,7 +180,8 @@ data/agent_workspace/skills/<name>/SKILL.md
 | `dsh_enabled` | `true` | DSH 总开关 |
 | `operator_engine` | `dsh` | 兼容旧库；现在只解析 DSH |
 | `dsh_channel` | `stable` | `stable` / `alpha` |
-| `group_chat_engine` | `dsh` | `dsh` 或 `legacy`；`legacy` 只用于应急 |
+| `group_channel_mode` | `dsh_primary` | `dsh_primary` 主链路，或 `legacy` 应急 |
+| `group_chat_engine` | `dsh` | legacy 子开关，仅 `legacy` 模式使用 |
 | `opencode_enabled` | `false` | 兼容旧库，已不参与引擎选择 |
 
 ## 9. 版本与更新
@@ -177,8 +200,8 @@ DSH 是 TypeScript/Cordis 单体仓库，完整 `pnpm build` 不适合作为生�
 
 - **Provider**：当前 shipped profile 只支持 DeepSeek Messages 端点，`llm_base_url` 必须是 `api.deepseek.com`。其他 provider 会报错，不会静默切 OpenCode。
 - **Node**：需要 Node.js 24.9+。
-- **延迟**：每个任务仍是一个 `dsh` 进程，群聊回复约 3–5 秒；`qunban-chat` 已尽量缩小 prompt，但没有常驻进程。
-- **成本**：第一次会话要付 system prompt + 工具清单；稳定会话后缓存命中率高。群聊建议保持 `qunban-chat` 无工具。
+- **延迟**：primary 群聊使用常驻 ACP 进程，首条消息需要启动/建 session，后续约 2–4 秒；legacy 每个任务仍是一个 `dsh` 进程，约 3–5 秒。
+- **成本**：第一次 session 要付 system prompt + 工具清单；稳定 ACP session 的 prompt cache 命中率高。primary 群聊有工具，不再使用 `qunban-chat` 无工具 renderer。
 - **权限**：`qunban` 是 `danger-full-access`，管理员私聊等于本机代码执行；这是 Operator 的设计取舍。
 - **更新风险**：alpha 是 pre-release；生产用 stable。
 
@@ -200,6 +223,6 @@ node data\dsh\runtimes\0.2.1-rc.4\node_modules\@deepseek-ai\dsh\lib\bin.js --ver
 | `不是 DeepSeek 官方端点` | 设置 → 模型接入改回 `https://api.deepseek.com/v1` |
 | 插件未加载 | 看 `data/server.err.log` 的 `qunban-native ... failed to import`；确认 `dsh/qunban-native/lib/index.js` 存在，且 profile 的 `node_modules/@qunban/dsh-native` 已复制 |
 | 工具未在当前范围启用 | 检查 `app/services/capabilities.py` 的 group 核心工具白名单和 `QUNBAN_SCOPE` |
-| 群聊不回复 | 看 `data/server.err.log` 是否有 `DSH 群聊回复失败，回退内置链路`；检查 `group_chat_engine` |
+| 群聊不回复 | 看 `data/server.err.log` 是否有 `DSH primary 失败`；检查 `group_channel_mode` 和 DSH 面板的「主链路」状态 |
 | 会话恢复失败 | 面板「重置当前会话」，或删除 `data/dsh/sessions.json` 对应项 |
 | 任务无输出 | 看 `data/dsh/home/sessions` 的 JSONL 和 `data/server.err.log` |

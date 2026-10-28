@@ -1,19 +1,19 @@
-﻿# DSH 插件工作室
+# DSH 插件工作室
 
-「插件」是群伴新增的顶层选项卡，用来统一管理两类能力：
+「插件」是群伴的顶层选项卡，**只保留一套 DSH 插件目录**：
 
 - **DSH 插件**：Harness 内置插件、群伴原生插件、npm/git/本地导入包、DSH 现场生成的插件。
-- **群伴能力**：工作区里的 skills、MCP 项目、外部接口和自定义脚本工具，按「助手 / 群聊」两个作用域开关。
+- **群伴工具**：工作区 skills、MCP 项目、外部接口由 `@qunban/dsh-native` 在 DSH 启动时动态注册成独立 DSH 工具，不再作为一套平行的「群伴能力插件」目录出现在页面里。
 
 ## 1. 页面结构
 
-- **统计**：DSH 版本、内置插件数、当前启用数、导入/生成数、群伴能力数。
-- **DSH 插件页**：从 DSH 的 `--dump-config` 读取真实组合结果，不是硬编码。支持关键词、分类和「只看启用」。
-- **群伴能力页**：从 `/api/capabilities` 读取 skills、MCP、接口和自定义工具；每项有「助手 / 群聊」两个开关，高风险项会标记。
+- **统计**：DSH 版本、内置插件数、当前启用数、导入/生成数。
+- **DSH 目录**：从 DSH 的 `--dump-config` 读取真实组合结果，不是硬编码。支持关键词、分类和「只看启用」。
 - **已安装 DSH 插件**：群伴原生插件、导入包、DSH 生成插件；非内置项可以启用/停用。
 - **导入 DSH 插件**：npm 包、GitHub 简写、git URL、本地绝对路径。
 - **DSH 创造模式**：填写插件名、说明和需求，让 DSH Operator 写 `lib/index.js`，校验后安装。
 - **任务日志**：导入/创建是后台任务，页面每 1.5 秒轮询日志。
+- 群伴原生插件卡片显示当前有多少 skills/MCP/接口会注册为 DSH 工具。
 
 ## 2. 内置插件从哪来
 
@@ -29,18 +29,20 @@ node <runtime>/lib/bin.js --profile qunban --dump-config
 
 内置 DSH 插件在群伴里是**只读**的：不建议从网页停用核心插件。需要高级 profile 调整时直接改 `cordis.patch.yml`。
 
-## 3. 群伴能力
+## 3. 群伴工具如何进入 DSH
 
-「群伴能力」页把原本分散在「助手 → 技能 / 能力」的入口集中起来：
+「群伴能力」不再是一套独立插件目录。`@qunban/dsh-native` 在 DSH profile 启动时调用 `/api/capabilities`，按当前 scope 动态注册：
 
-- `skill`：`data/agent_workspace/skills/<name>/SKILL.md`
-- `mcp`：`data/agent_workspace/projects/<name>`
-- `api`：`data/agent_workspace/interfaces/*.json`
-- `tool`：非内置的自定义脚本工具
+- `skill` → `qunban_skill_<slug>`
+- `mcp` → `qunban_mcp_<slug>`
+- `api` → `qunban_interface_<slug>`
 
-每项直接调用现有的 `PATCH /api/capabilities`，同时更新助手和群聊两个 scope；高风险能力（屏幕控制等）默认只给助手，群聊默认关闭。`重新识别` 会执行 `/api/capabilities/sync`。
+工具名、描述、参数 schema 都来自群伴能力注册表；实际执行仍走群伴 HTTP 网关。因此模型在 DSH 里看到的是**独立工具**，不是 `qunban_run_skill(name=...)` 这种通用入口。
 
-这样插件页既有 DSH 的 npm/Cordis 插件，也有群伴自己的技能/MCP/接口，不需要在两个页面之间来回找。
+- 助手 scope 使用 `enabled_assistant`，群聊 scope 使用 `enabled_group`。
+- 高风险能力（屏幕控制等）默认只给助手，群聊关闭。
+- 修改能力开关后，需要重启对应 DSH 进程（DSH 面板「重启主链路」或下一次 headless 任务）。
+- 群伴能力页仍保留在「助手 → 能力」，用于细粒度开关；插件页不再重复一份目录。
 
 ## 4. 导入插件
 
@@ -54,7 +56,7 @@ POST /api/dsh/plugins/import
 
 - 本地路径：读取 `package.json`，复制到 `data/dsh/home/profiles/qunban/node_modules/<name>`，写入 profile 依赖和 patch 行。
 - npm/git：通过 `corepack pnpm add <spec>` 在 profile 目录安装，再把新增依赖挂到 patch。
-- 安装后下一次 DSH 任务生效；不需要重启常驻进程，因为 DSH 是每个任务启动一次。
+- 安装后下一次 DSH 任务生效；`qunban-primary` 启动时会同步 qunban profile 的导入/生成插件。
 - 导入的插件是任意 JavaScript，和 DSH 同权限执行。只安装可信来源。
 
 > `pnpm` 不是全局命令；群伴使用 Node 自带的 `corepack pnpm`，不要求用户单独安装 pnpm。
@@ -98,7 +100,7 @@ POST /api/dsh/plugins/create
 
 - 只有用户点击「生成并安装 / 导入」才会安装代码。
 - 创建任务使用 `qunban` Operator profile，权限为 `danger-full-access`，因此生成代码等同本机代码执行；不要在不可信需求下勾选“让 DSH 编写”。
-- 生成插件只挂到 `qunban`（Operator/管理员私聊）profile，不进入 `qunban-group` / `qunban-chat`；群聊仍不能安装或执行任意插件。
+- 生成插件会安装到 `qunban`（Operator/管理员私聊）profile，并在 `qunban-primary` 启动时同步；群聊 primary 可以加载这些 DSH 插件。`qunban-chat` / legacy 群聊仍不能安装或执行任意插件。
 - `_preserved_plugin_rows()` 会在每次 DSH 任务重建 profile 时保留用户插件行，避免“下一次任务插件消失”。
 - 内置插件只读；群伴原生插件 `@qunban/dsh-native` 固定挂载。
 

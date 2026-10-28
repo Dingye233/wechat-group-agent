@@ -133,6 +133,7 @@ class SettingsUpdate(BaseModel):
     assistant_shell_timeout: int | None = Field(default=None, ge=5, le=600)
     opencode_enabled: bool | None = None
     group_chat_engine: Literal["dsh", "legacy"] | None = None
+    group_channel_mode: Literal["dsh_primary", "legacy"] | None = None
     operator_engine: Literal["opencode", "dsh"] | None = None
     dsh_enabled: bool | None = None
     dsh_channel: Literal["stable", "alpha"] | None = None

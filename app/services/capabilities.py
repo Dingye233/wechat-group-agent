@@ -663,10 +663,6 @@ async def check_tool_allowed(name: str, args: dict[str, Any], scope: str) -> Non
         "create_excel",
     }:
         return
-    if scope == "group" and name in {"run_skill", "run_mcp"}:
-        raise PermissionError(
-            "群聊不开放通用技能/MCP执行；请使用专用的群聊工具"
-        )
     if name == "run_skill":
         skill = str(args.get("name") or "")
         if not await check_capability(f"skill:{skill}", scope):
@@ -709,7 +705,12 @@ async def execute_capability(
             ).scalar_one_or_none()
         if row is None:
             raise ValueError("MCP 不存在")
-        command = str(args.get("command") or (row.meta or {}).get("run") or "")
+        if scope == "group":
+            # Primary group agents may run the registered project only; they
+            # cannot supply a replacement command or request elevated rights.
+            command = str((row.meta or {}).get("run") or "")
+        else:
+            command = str(args.get("command") or (row.meta or {}).get("run") or "")
         if not command:
             raise ValueError("这个 MCP 没有登记启动命令；请在 manifest.json 写 run")
         return await asyncio.to_thread(
@@ -717,7 +718,7 @@ async def execute_capability(
             command,
             row.source,
             float(args.get("timeout") or 120),
-            bool(args.get("admin")),
+            False if scope == "group" else bool(args.get("admin")),
         )
     if name == "create_excel":
         from app.services.spreadsheet import create_excel

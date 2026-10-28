@@ -24,6 +24,7 @@ export const inject = ['tools']
 const API_BASE = (process.env.QUNBAN_API_BASE || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 const TOKEN = process.env.QUNBAN_TOKEN || ''
 const SCOPE = process.env.QUNBAN_SCOPE === 'group' ? 'group' : 'admin'
+const TOOLSET = process.env.QUNBAN_TOOLSET || 'full'
 const BOUND_GROUP = Number(process.env.QUNBAN_GROUP_ID || 0)
 
 function textResult(value) {
@@ -447,6 +448,96 @@ if (SCOPE === 'admin') {
   )
 }
 
+async function loadCapabilityTools(attempt = 0) {
+  try {
+    const data = await request('/api/capabilities', { timeoutMs: 2500 })
+    const rows = Array.isArray(data?.capabilities) ? data.capabilities : []
+    const out = []
+    for (const row of rows) {
+      const allowed =
+        SCOPE === 'group' ? Boolean(row.enabled_group) : Boolean(row.enabled_assistant)
+      if (!allowed) continue
+      const kind = String(row.type || '')
+      const rawName =
+        kind === 'mcp'
+          ? String(row.key || '').replace(/^mcp:/, '')
+          : String(row.name || row.key || '')
+      const slug = rawName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+      if (!slug) continue
+      const prefix = kind === 'skill' ? 'qunban_skill' : kind === 'mcp' ? 'qunban_mcp' : 'qunban_interface'
+      const toolName = `${prefix}_${slug}`.slice(0, 64)
+      const description = String(row.description || row.name || '').slice(0, 240)
+      if (kind === 'skill') {
+        out.push(
+          tool(
+            toolName,
+            `${description}（群伴技能，参数是传给技能脚本的字符串）`,
+            {
+              args: { type: 'string', description: '传给技能脚本的参数' },
+            },
+            async (args) =>
+              textResult(
+                await callQunban('run_skill', {
+                  name: rawName,
+                  args: String(args.args || ''),
+                }),
+              ),
+          ),
+        )
+      } else if (kind === 'mcp') {
+        out.push(
+          tool(
+            toolName,
+            `${description}（群伴 MCP 项目）`,
+            {
+              timeout: { type: 'number', description: '超时秒数，默认 120' },
+            },
+            async (args) =>
+              textResult(
+                await callQunban('run_mcp', {
+                  name: rawName,
+                  timeout: Math.max(5, Math.min(600, Number(args.timeout || 120))),
+                }),
+              ),
+          ),
+        )
+      } else if (kind === 'api') {
+        out.push(
+          tool(
+            toolName,
+            `${description}（群伴 HTTP 接口）`,
+            {
+              args: { type: 'object', additionalProperties: true, description: '接口参数对象' },
+            },
+            async (args) =>
+              textResult(
+                await callQunban('call_interface', {
+                  name: rawName,
+                  args: args.args && typeof args.args === 'object' ? args.args : {},
+                }),
+              ),
+          ),
+        )
+      }
+    }
+    return out
+  } catch {
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      return loadCapabilityTools(attempt + 1)
+    }
+    return []
+  }
+}
+
+const capabilityTools = await loadCapabilityTools()
+
 export function apply(ctx) {
-  for (const item of tools) ctx.tools.register(item)
+  for (const item of [...tools, ...capabilityTools]) {
+    if (TOOLSET === 'primary' && item.name === 'wechat_send_message') continue
+    ctx.tools.register(item)
+  }
 }

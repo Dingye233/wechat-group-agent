@@ -101,11 +101,38 @@ async def lifespan(app: FastAPI):
     app.state.bili_autopilot = bili_autopilot
     await bili_autopilot.start()
     auto_task = asyncio.create_task(runtime.maybe_auto_login(), name="auto-login")
+    primary_task = None
+    try:
+        async with SessionLocal() as db:
+            saved_settings = await get_settings(db)
+        if str(saved_settings.get("group_channel_mode") or "dsh_primary") == "dsh_primary":
+            from app.services.dsh_primary import get_dsh_primary_service
+
+            async def _start_primary_later() -> None:
+                # Let Uvicorn finish its startup/lifespan before the ACP plugin
+                # asks /api/capabilities for the dynamic tool catalogue.
+                await asyncio.sleep(2.0)
+                await get_dsh_primary_service().start(saved_settings)
+
+            primary_task = asyncio.create_task(
+                _start_primary_later(),
+                name="dsh-primary-start",
+            )
+    except Exception:
+        logger.warning("DSH primary 服务启动失败", exc_info=True)
     logger.info("%s v%s 已启动", settings.app_name, settings.version)
     logger.info("控制台: http://%s:%s", settings.host, settings.port)
     try:
         yield
     finally:
+        if primary_task and not primary_task.done():
+            primary_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await primary_task
+        with contextlib.suppress(Exception):
+            from app.services.dsh_primary import get_dsh_primary_service
+
+            await get_dsh_primary_service().stop()
         if not auto_task.done():
             auto_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

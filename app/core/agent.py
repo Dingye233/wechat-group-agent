@@ -1330,6 +1330,27 @@ class AgentEngine:
                 )
                 stickers = await self._load_sticker_catalog(db, config)
                 message = await db.get(Message, message_id)
+                if message is not None and str(
+                    settings.get("group_channel_mode") or "dsh_primary"
+                ) == "dsh_primary":
+                    try:
+                        handled = await self._handle_dsh_primary(
+                            message,
+                            group,
+                            config,
+                            settings,
+                            context,
+                            memory_text,
+                        )
+                        if handled:
+                            return
+                    except Exception as exc:
+                        await self._log(
+                            group_id,
+                            "warn",
+                            f"DSH primary 失败，切换 legacy 兜底：{exc}",
+                            level="warn",
+                        )
                 if message is not None:
                     tool_payload = await catalog_for_scope("group")
                     bili_context = await self._load_bili_context()
@@ -2040,6 +2061,218 @@ class AgentEngine:
                     time.time() + max(int(config.cooldown_seconds or 0), 0)
                 )
                 await self._log(group_id, "proactive", "Agent 主动发起了一条消息")
+
+    async def _handle_dsh_primary(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+    ) -> bool:
+        """DSH owns the group decision; Qunban only supplies channel context."""
+        from app.services.dsh_primary import get_dsh_primary_service
+
+        self.runtime.emit_typing(group.id)
+        prompt = self._primary_prompt(
+            message,
+            group,
+            config,
+            settings,
+            context,
+            memory_text,
+        )
+        service = get_dsh_primary_service()
+        started = time.perf_counter()
+
+        async def on_update(event: dict[str, Any]) -> None:
+            if event.get("phase") == "tool" and event.get("tool"):
+                await self._log(
+                    group.id,
+                    "dsh_primary_tool",
+                    f"DSH 调用工具：{str(event.get('tool'))[:160]}",
+                    level="info",
+                )
+
+        result = await service.prompt(
+            f"group-{group.id}",
+            prompt,
+            settings=settings,
+            timeout=180.0,
+            on_update=on_update,
+        )
+        text = str(result.get("text") or "").strip()
+        data = parse_json_object(text)
+        if not isinstance(data, dict):
+            data = {"action": "reply", "reply": text}
+        action = str(data.get("action") or "reply").lower()
+        if action == "none":
+            await self._log(
+                group.id,
+                "dsh_primary",
+                f"DSH 选择不回复｜{int((time.perf_counter() - started) * 1000)}ms",
+                level="info",
+            )
+            return True
+        if action == "task" and not data.get("messages") and not data.get("reply"):
+            data["reply"] = str(
+                data.get("ack") or "收到，我先按这个方向处理，稍后把结果发群里。"
+            )
+        if not data.get("messages") and not data.get("reply"):
+            await self._log(
+                group.id,
+                "dsh_primary",
+                "DSH 返回空动作，本轮不发送",
+                level="warn",
+            )
+            return True
+        await self._send_primary_reply(
+            message,
+            group,
+            config,
+            settings,
+            data,
+            result,
+            started,
+        )
+        return True
+
+    def _primary_prompt(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+    ) -> str:
+        persona = (config.persona or settings.get("default_persona") or "").strip()
+        mode = "多条消息" if config.multi_message_enabled else "单条消息"
+        sticker = "允许发表情包" if config.sticker_enabled else "不要发表情包"
+        sender = str(message.sender_name or message.sender_wxid or "群友")
+        recent = "\n".join(context[-12:]) or "（无）"
+        memory = (memory_text or "无")[:1600]
+        return f"""# 通道上下文
+- 群：{group.name or '未命名群'}（group_id={group.id}）
+- 触发者：{sender}
+- 群人数：{group.member_count or 0}
+- 消息时间：{message.created_at.isoformat() if message.created_at else '未知'}
+- 群配置：{mode}，最多 {config.max_messages or 3} 条，{sticker}
+- 当前人设：{persona or '自然、简短、像群友一样接话'}
+
+# 最近群聊
+{recent}
+
+# 长期记忆
+{memory}
+
+# 本条消息
+{sender}：{str(message.content or '')[:2000]}
+
+# 你的任务
+你是这个群的群聊 Agent。先决定是否参与，再决定聊天、调用工具还是执行任务。
+- 不需要参与：action=none，不输出解释。
+- 普通聊天：action=reply，直接给群友看的内容。
+- 需要工具/多步任务：可以调用暴露给你的群伴工具（读群、记忆、B站、接口等）；
+  完成后返回 action=reply 给最终结果。
+- 需要后台继续：action=task，并给 ack 和当前可发送的 messages；群伴会负责发送。
+- 不要调用 wechat_send_message；primary 工具集中没有发送工具，最终由群伴统一发送。
+- 不要输出 Markdown 代码块、工具名或分析过程。只输出一个 JSON。
+
+# 输出协议
+{{"action":"none"}}
+或
+{{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
+或
+{{"action":"task","ack":"收到，我处理一下","messages":[{{"text":"..."}}]}}
+"""
+
+    async def _send_primary_reply(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        data: dict[str, Any],
+        result: dict[str, Any],
+        started: float,
+    ) -> None:
+        async with SessionLocal() as db:
+            segments = await self._build_segments(db, config, data)
+        if not segments:
+            await self._log(group.id, "dsh_primary", "DSH 没有可发送的回复", level="warn")
+            return
+        if config.mention_on_reply:
+            mention = f"@{message.sender_name}"
+            for segment in segments:
+                text = str(segment.get("text") or "")
+                if text:
+                    if not text.startswith(mention):
+                        segment["text"] = f"{mention} {text}"
+                    break
+        global_interval = float(settings.get("reply_global_interval_seconds") or 0)
+        async with self._global_lock:
+            wait = self._global_next_reply - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            if not self.runtime.is_online or self.runtime.detached:
+                return
+            if not config.read_enabled or not config.agent_enabled:
+                return
+            if not self._passes_limits(group.id, config, settings):
+                return
+            sent_any = False
+            for index, segment in enumerate(segments):
+                if index:
+                    await asyncio.sleep(random.uniform(0.7, 1.5))
+                try:
+                    sent = await self.runtime.send_agent_message(
+                        group.id,
+                        text=str(segment.get("text") or ""),
+                        sticker=segment.get("sticker"),
+                        meta={
+                            "source": "dsh_primary",
+                            "engine": "dsh",
+                            "model": result.get("model") or "dsh",
+                            "action": data.get("action") or "reply",
+                            "segment": index + 1,
+                            "segment_count": len(segments),
+                        },
+                        reuse_chat=index > 0,
+                    )
+                except Exception as exc:
+                    await self._log(
+                        group.id,
+                        "dsh_primary",
+                        f"DSH primary 发送失败：{exc}",
+                        level="error",
+                    )
+                    return
+                sent_any = bool(sent_any or sent)
+            if not sent_any:
+                return
+            now = time.time()
+            self._last_reply[group.id] = now
+            self._reply_times[group.id].append(now)
+            self._global_next_reply = now + global_interval + random.uniform(
+                0.0, global_interval * 0.5
+            )
+            self._next_reply_at[group.id] = (
+                now
+                + max(int(config.cooldown_seconds or 0), 0)
+                + random.uniform(
+                    0.0,
+                    max(float(settings.get("reply_cooldown_jitter_seconds") or 0), 0.0),
+                )
+            )
+        await self._log(
+            group.id,
+            "dsh_primary",
+            f"DSH primary 回复｜{int((time.perf_counter() - started) * 1000)}ms"
+            f"｜{len(segments)} 段",
+            level="info",
+        )
 
     async def _generate_dsh_chat(
         self,

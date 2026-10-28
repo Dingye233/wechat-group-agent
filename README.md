@@ -51,9 +51,9 @@
 「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 由 **DeepSeek Harness（DSH）** 原生执行，OpenCode 已停用：
 
 - **DSH 原生融合**：群伴不再把 OpenCode 当同级引擎，也不再让 DSH 通过 MCP 调群伴。`dsh/qunban-native` 是挂载进 DSH profile 的 Cordis 插件，直接注册 `wechat_*` / `qunban_*` 原生工具；工具调用仍走群伴 `/api/opencode/tool` 网关的权限、目标解析、发送校验和 outbox。
-- **wechatauto 是消息源/发送端**：群聊消息从 replica 适配器读取并入库，交给 DSH 的 `qunban-chat` profile 生成回复；回复再交给 wechatauto-replica 发送。DSH 不直接操作微信窗口、键鼠或数据库。
+- **wechatauto 是消息源/发送端**：群聊消息从 replica 适配器读取并入库，交给 DSH 的常驻 `qunban-primary` ACP 群会话；DSH 自己判断 `none / reply / task` 并调用工具，群伴只负责发送。DSH 不直接操作微信窗口、键鼠或数据库。
 - **微信发送**：唯一入口是 `wechat_send_message`（群聊 group_id / 私聊 contact_id 二选一）。发送前确认目标和接管状态，发送后轮询数据库确认落库；失败进入失败队列。原生 shell 在 profile 里被禁用，只保留服务端会拦截微信关键词的 `qunban_powershell`。
-- **Skills**：`data/agent_workspace/skills` 会自动转成 DSH 的 `SKILL.md` 格式并挂到 `customSkillDirs`；群伴技能仍通过 `qunban_run_skill` 执行。外部 MCP 项目通过 `qunban_run_mcp` 接入，不再作为 DSH 的 MCP 子进程。
+- **Skills**：`data/agent_workspace/skills` 会自动转成 DSH 的 `SKILL.md` 格式并挂到 `customSkillDirs`；技能、MCP 和接口会由 `@qunban/dsh-native` 动态注册成独立的 DSH 工具。外部 MCP 项目通过 `qunban_run_mcp` 接入，不再作为 DSH 的 MCP 子进程。
 - **工具组件**：工具层拆分为 `app/tools/wechat.py`、`bili.py`、`memory.py`、`system.py`；DSH 插件只负责把原生工具名映射到网关，具体逻辑仍在群伴服务端。
 
 
@@ -87,7 +87,7 @@
 - **发送校验与重发**：每条发送在微信数据库确认落库后才算成功。暂停、界面异常或超时导致未送达的消息会保存为「发送失败」并进入待重发队列；重新接管时先查数据库确认是否其实已送达，再重发未送达的消息，避免重复。失败消息在聊天区显示「发送失败 · 点击重发」，也可以单独重发。
 - **任务进度**：助手执行高复杂度任务时，会通过 WebSocket 推送「第 N 步、正在调用哪个工具、成功/失败」等关键节点，显示在对话框上方；工具调用记录仍会持久化。管理员私聊会同步收到精简的微信进度。
 - **无人值守循环**：默认不限制步数，Agent 会持续「规划 → 调工具 → 看结果 → 继续」直到完成；用户可以随时点「停止」或在微信发「停止」打断，也可以在执行中继续发新要求，Agent 会合并处理。同一工具相同参数连续失败 3 次、或连续 5 次返回相同结果时，Agent 会自行停止并说明原因。
-- **官方运行时**：Operator 和群任务使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 headless profile；群伴通过原生 Cordis 插件、稳定会话和 `qunban-chat` 无工具 profile 融合，不再依赖 OpenCode。实现说明见 [docs/DSH.md](docs/DSH.md)。
+- **官方运行时**：群聊主链路使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的常驻 ACP 会话（`qunban-primary`）；群伴只做通道、入口策略和发送。Operator/legacy 仍可使用 headless profile。实现说明见 [docs/DSH.md](docs/DSH.md)。
 - **连续消息**：群配置新增「允许连续发送多条消息」和最多条数（2–6）。模型可以输出文字 + 表情包混合的多段回复，Agent 会按顺序逐条发送。
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
 - **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。群聊默认开放只读的 `bili_knowledge_search` / `bili_last_opinion` / `bili_video_info` / `bili_comments`，让 Agent 能回答“你看了什么/学到了什么”，且没有知识库结果时禁止编造具体视频内容。
@@ -105,22 +105,22 @@
 群伴现在只有一套 Agent 引擎：**DeepSeek Harness**。OpenCode 已从引擎选择、助手导航和设置中移除，相关 Python/API 代码只作为历史兼容保留，不再执行。
 
 - **原生插件**：`dsh/qunban-native` 是 Cordis 插件，注册 `wechat_*` / `qunban_*` 原生工具；不再启动 `app/mcp_server.py` 作为 DSH 的 MCP 子进程。
-- **三种 profile**：`qunban`（Operator/管理员私聊）、`qunban-group`（群任务，只读、无原生 shell）、`qunban-chat`（群聊回复，无工具）。
-- **消息源**：wechatauto-replica 读取微信数据库 → `RuntimeManager` 入库 → `AgentEngine._handle()` → DSH。回复由 `RuntimeManager.send_agent_message()` 交回 wechatauto-replica。
-- **会话**：`main` / `group-<id>` / `chat-<id>` 稳定复用，提升 DSH prompt cache 命中率。
-- **设置**：`dsh_enabled=true`、`operator_engine=dsh`、`group_chat_engine=dsh`；`opencode_enabled` 只用于读旧库。
+- **主链路 profile**：`qunban-primary`（群聊主 Agent，常驻 ACP，自己分流并调用群伴工具）、`qunban`（Operator/管理员私聊）、`qunban-group` / `qunban-chat`（legacy 应急）。
+- **消息源**：wechatauto-replica 读取微信数据库 → `RuntimeManager` 入库 → `AgentEngine` 入口规则 → DSH primary ACP session。回复由 `RuntimeManager.send_agent_message()` 交回 wechatauto-replica。
+- **会话**：primary 按群复用 ACP session；legacy 使用 `main` / `group-<id>` / `chat-<id>`。
+- **设置**：`dsh_enabled=true`、`operator_engine=dsh`、`group_channel_mode=dsh_primary`；`opencode_enabled` 只用于读旧库。切到 `legacy` 可临时回到旧编排。
 - 版本更新以 git 为准：读取仓库 `dsh-v*` tag，按 `stable`/`alpha` 渠道安装同版本官方 npm 包到 `data/dsh/runtimes/<version>`；失败保留旧版本。
-- 限制：当前 profile 只支持 DeepSeek Messages 端点（`api.deepseek.com`）；需要 Node.js 24.9+；每个任务一个进程，群聊回复约 3–5 秒。详见 [docs/DSH.md](docs/DSH.md)。
+- 限制：当前 profile 只支持 DeepSeek Messages 端点（`api.deepseek.com`）；需要 Node.js 24.9+；primary 群聊首条约 3–4 秒，后续 ACP session 复用；legacy 每任务一个 headless 进程。详见 [docs/DSH.md](docs/DSH.md)。
 
 ### 1.4 DSH 插件工作室
 
-「插件」选项卡专门统一管理 DSH 插件和群伴能力：
+「插件」选项卡只保留一套 **DSH 插件目录**：
 
 - **DSH 插件**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、86 个启用），按核心/工具/技能/服务/运行时/集成/界面分类，支持搜索和「只看启用」。
-- **群伴能力**：把工作区 skills、MCP 项目、外部接口和自定义脚本工具集中到同一页；每项可直接切换「助手 / 群聊」作用域，高风险能力默认不对群聊开放。
-- **导入 DSH 插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包直接复制到 `profiles/qunban/node_modules`，npm/git 通过 `corepack pnpm add` 安装。
+- **群伴工具**：工作区 skills、MCP 项目和外部接口不再单独列一套插件目录，而是由 `@qunban/dsh-native` 在 DSH 启动时动态注册成独立工具；插件页显示已安装原生插件和工具数量。
+- **导入 DSH 插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包复制到 DSH profile，npm/git 通过 `corepack pnpm add` 安装。
 - **创造模式**：填写插件名和需求，DSH Operator 会在 `data/dsh/studio/<slug>` 写一个合法 Cordis 插件，自动 `node --check`、安装到 profile、写入 patch；同名学生重新提交即更新。DSH 在用户明确要求时也可以自己写插件并调用 `qunban_plugin_install` 安装。
-- **安全**：生成/导入的 DSH 插件只挂到 `qunban` Operator profile，不进群聊 profile；只有用户点击或明确要求才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
+- **安全**：生成/导入的 DSH 插件会同步给 primary/Operator profile；只有用户点击或明确要求才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
 
 ---
 
@@ -538,6 +538,7 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 │   │   ├── bili_knowledge.py   # ChromaDB B站视频知识库
 │   │   ├── capabilities.py     # 能力发现与双作用域开关
 │   │   ├── dsh_agent.py        # DeepSeek Harness headless 适配器
+│   │   ├── dsh_primary.py      # 常驻 ACP 群聊主链路（JSON-RPC session）
 │   │   ├── dsh_runtime.py      # DSH git tag / npm 运行时管理
 │   │   ├── dsh_skills.py       # 群伴 skills → DSH SKILL.md
 │   │   ├── dsh_plugins.py      # DSH 插件目录、导入、创造模式

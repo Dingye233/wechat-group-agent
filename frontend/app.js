@@ -3847,7 +3847,7 @@ async function loadDSH() {
     const channel = $('#dsh-channel');
     if (channel) channel.value = state.settings?.dsh_channel || data.channel || 'stable';
     const groupChat = $('#dsh-group-chat-engine');
-    if (groupChat) groupChat.value = state.settings?.group_chat_engine || 'dsh';
+    if (groupChat) groupChat.value = state.settings?.group_channel_mode || data.group_channel_mode || 'dsh_primary';
     if (statusLine) {
       const version = st.version || runtime.version || '';
       const parts = [];
@@ -3855,6 +3855,7 @@ async function loadDSH() {
       else parts.push('未安装');
       parts.push(`当前引擎：${data.engine || '—'}`);
       if (st.running) parts.push(`运行中 ${st.running}`);
+      if (data.primary?.running) parts.push('主链路：DSH primary 运行中');
       if (st.update_available) parts.push(`可更新到 ${st.latest}`);
       statusLine.textContent = parts.join(' · ');
     }
@@ -3906,6 +3907,13 @@ async function loadPlugins() {
   renderQunbanFilters();
   renderQunbanCapabilities();
   renderPluginMode();
+  const toolsHint = $('#plugin-qunban-tools-hint');
+  if (toolsHint) {
+    const count = qunbanPluginItems().length;
+    toolsHint.textContent = count
+      ? `群伴工具：${count} 个能力可供 DSH 调用（按助手/群聊作用域启用）`
+      : '群伴工具：未发现已启用的技能、MCP 或接口';
+  }
 }
 
 function qunbanPluginItems() {
@@ -5576,13 +5584,13 @@ function bindAssistantActions() {
     try {
       const data = await api('/settings', {
         method: 'PUT',
-        body: JSON.stringify({ group_chat_engine: event.target.value }),
+        body: JSON.stringify({ group_channel_mode: event.target.value }),
       });
       state.settings = data.settings || state.settings;
       toast(
-        event.target.value === 'dsh'
-          ? '群聊回复已交给 DSH'
-          : '群聊回复已切到内置生成（应急）',
+        event.target.value === 'dsh_primary'
+          ? '群聊已切到 DSH 主 Agent'
+          : '群聊已切到 Legacy 编排（应急）',
       );
     } catch (error) {
       toast(error.message, 'error');
@@ -5627,6 +5635,15 @@ function bindAssistantActions() {
     try {
       await api('/dsh/stop', { method: 'POST' });
       toast('已停止 DeepSeek Harness 任务');
+      loadDSH();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-primary-restart')?.addEventListener('click', async () => {
+    try {
+      await api('/dsh/primary/restart', { method: 'POST' });
+      toast('DSH 主链路已重启');
       loadDSH();
     } catch (error) {
       toast(error.message, 'error');
