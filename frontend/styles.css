@@ -193,6 +193,8 @@ code {
   background: linear-gradient(135deg, #44efaf, #0abf78 55%, #53b7ff);
   box-shadow: 0 10px 30px rgba(16, 195, 124, 0.24);
   flex: none;
+  object-fit: cover;
+  overflow: hidden;
 }
 .brand-mark svg { width: 23px; height: 23px; }
 .brand strong { display: block; font-size: 18px; letter-spacing: 0.02em; }
