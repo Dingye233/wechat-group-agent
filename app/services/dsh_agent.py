@@ -327,6 +327,12 @@ def _ensure_profile(name: str, scope: str) -> Path:
     rows = _profile_patch(scope)
     if scope == "assistant":
         rows.extend(_preserved_plugin_rows(profile))
+        toggles = _read_json(profile / "plugin-toggles.json", {})
+        if isinstance(toggles, dict):
+            for plugin_id, enabled in toggles.items():
+                rows.append(
+                    {"id": str(plugin_id), "disabled": not bool(enabled)}
+                )
     _write_json(profile / "cordis.patch.yml", rows)
     try:
         sync_skills()

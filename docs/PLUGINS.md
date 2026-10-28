@@ -27,7 +27,7 @@ node <runtime>/lib/bin.js --profile qunban --dump-config
 
 当前 runtime `0.2.1-rc.4` 的组合结果约 **98 个内置插件，86 个启用**。前端按核心、工具、技能、服务、运行时、集成、界面/API 分类。
 
-内置 DSH 插件在群伴里是**只读**的：不建议从网页停用核心插件。需要高级 profile 调整时直接改 `cordis.patch.yml`。
+内置 DSH 插件也可以在页面里启用/停用，每个插件都有独立开关。关闭核心插件（category=核心 或关键运行时）时会先弹出风险确认；确认后写入 profile，重启对应 DSH 链路生效。
 
 ## 3. 群伴工具如何进入 DSH
 
@@ -102,7 +102,8 @@ POST /api/dsh/plugins/create
 - 创建任务使用 `qunban` Operator profile，权限为 `danger-full-access`，因此生成代码等同本机代码执行；不要在不可信需求下勾选“让 DSH 编写”。
 - 生成插件会安装到 `qunban`（Operator/管理员私聊）profile，并在 `qunban-primary` 启动时同步；群聊 primary 可以加载这些 DSH 插件。`qunban-chat` / legacy 群聊仍不能安装或执行任意插件。
 - `_preserved_plugin_rows()` 会在每次 DSH 任务重建 profile 时保留用户插件行，避免“下一次任务插件消失”。
-- 内置插件只读；群伴原生插件 `@qunban/dsh-native` 固定挂载。
+- 内置插件和群伴原生插件也有开关；核心/关键插件关闭前会先显示风险提示。
+- 开关写入 `plugin-toggles.json`，profile 重建时会重新应用。
 
 ## 7. 代码位置
 

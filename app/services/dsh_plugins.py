@@ -48,7 +48,21 @@ PROFILE_DIR = HOME_DIR / "profiles" / PROFILE
 PATCH_PATH = PROFILE_DIR / "cordis.patch.yml"
 STUDIO_DIR = DATA_DIR / "studio"
 MANIFEST_PATH = STUDIO_DIR / "index.json"
+TOGGLES_PATH = PROFILE_DIR / "plugin-toggles.json"
 CACHE_TTL = 20.0
+
+_CRITICAL_IDS = {
+    "agent",
+    "agent-loop",
+    "session",
+    "tools",
+    "llm",
+    "system-prompt",
+    "llm-deepseek",
+    "llm-deepseek-account",
+    "fs-sandbox",
+    "qunban-native",
+}
 
 _DESCRIPTIONS: dict[str, str] = {
     "agent": "Agent 注册表与生命周期，是 DSH 的会话主体。",
@@ -424,6 +438,8 @@ def catalog() -> dict[str, Any]:
                 and "bundle" in (package.get("dsh") or {})
                 else "plugin",
                 "active": not entry.get("disabled"),
+                "core": _category(entry) == "核心"
+                or str(entry.get("id") or "") in _CRITICAL_IDS,
             }
         )
     for item in _OPTIONAL:
@@ -438,6 +454,7 @@ def catalog() -> dict[str, Any]:
                 "kind": "plugin",
                 "active": False,
                 "installed": _package_installed(item["name"]),
+                "core": False,
             }
         )
     builtin.sort(
@@ -462,6 +479,8 @@ def catalog() -> dict[str, Any]:
                 "disabled": False,
                 "source": "native",
                 "installed": True,
+                "core": True,
+                "critical": True,
             }
         )
     for name in sorted(dependencies):
@@ -669,6 +688,7 @@ def start_import(spec: str, *, enabled: bool = True) -> dict[str, Any]:
 
 
 async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
+    global _DUMP_CACHE
     async with _LOCK:
         try:
             package_name = _package_name_from_spec(spec)
@@ -810,6 +830,7 @@ def _validate_plugin(target: Path) -> None:
 
 
 def _install_generated(slug: str, target: Path, *, enabled: bool = True) -> str:
+    global _DUMP_CACHE
     package = _read_json(target / "package.json", {})
     name = str(package.get("name") or f"@qunban/{slug}")
     plugin_id = f"studio-{slug}"
@@ -955,21 +976,53 @@ def install_existing(path: str, *, enabled: bool = True) -> dict[str, Any]:
 
 
 def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
+    global _DUMP_CACHE
     plugin_id = str(plugin_id or "").strip()
     if not plugin_id:
         raise ValueError("plugin id 不能为空")
     rows = _patch_rows()
     entries = _patch_entries(rows)
     found = next((row for row in entries if row.get("id") == plugin_id), None)
+    name = str((found or {}).get("name") or "")
+    core = bool((found or {}).get("core")) or plugin_id in _CRITICAL_IDS
+    if found is None:
+        for entry in _parse_dump(_cached_dump()):
+            if str(entry.get("id")) == plugin_id:
+                found = dict(entry)
+                name = str(entry.get("name") or "")
+                core = _category(entry) == "核心" or plugin_id in _CRITICAL_IDS
+                break
+    if found is None:
+        optional = next(
+            (item for item in _OPTIONAL if item.get("id") == plugin_id), None
+        )
+        if optional:
+            found = dict(optional)
+            name = str(optional.get("name") or "")
+            core = False
     if found is None:
         raise ValueError("未找到该插件条目")
-    name = str(found.get("name") or "")
-    if name in {"@qunban/dsh-native"} or (
-        name.startswith("@deepseek-ai/") and found.get("source") != "optional"
-    ):
-        raise ValueError("DSH 内置插件和群伴原生插件不允许在群伴里停用")
-    found["disabled"] = not enabled
+    if found.get("insert") is None and found.get("name") is None:
+        # Built-in override row: append a new override after all profile layers.
+        rows.append({"id": plugin_id, "disabled": not enabled})
+    else:
+        found["disabled"] = not enabled
+        # If the row came from a patch insert, mutate that object in place;
+        # otherwise append an explicit override for the runtime row.
+        if not any(
+            item.get("id") == plugin_id
+            for row in rows
+            if isinstance(row.get("insert"), list)
+            for item in row["insert"]
+            if isinstance(item, dict)
+        ):
+            rows.append({"id": plugin_id, "disabled": not enabled})
     _write_patch(rows)
+    toggles = _read_json(TOGGLES_PATH, {})
+    if not isinstance(toggles, dict):
+        toggles = {}
+    toggles[plugin_id] = bool(enabled)
+    _write_json(TOGGLES_PATH, toggles)
     _DUMP_CACHE = None
     manifest = _read_json(MANIFEST_PATH, {"plugins": []})
     items = manifest.get("plugins") if isinstance(manifest, dict) else []
@@ -979,4 +1032,10 @@ def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
                 item["enabled"] = enabled
                 item["updated_at"] = _utcnow()
         _write_json(MANIFEST_PATH, {"plugins": items})
-    return {"id": plugin_id, "name": name, "enabled": enabled}
+    return {
+        "id": plugin_id,
+        "name": name,
+        "enabled": enabled,
+        "core": core,
+        "critical": bool(found.get("critical")) or plugin_id == "qunban-native",
+    }

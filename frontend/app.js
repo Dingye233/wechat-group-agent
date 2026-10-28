@@ -3978,6 +3978,32 @@ function pluginMatches(row) {
     .includes(query);
 }
 
+function pluginToggleNode(row) {
+  const label = el('label', 'plugin-switch');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = !row.disabled;
+  input.setAttribute('aria-label', `${row.name || row.id} 开关`);
+  input.addEventListener('change', () => {
+    if (!input.checked && row.core) {
+      const critical = Boolean(row.critical) || row.id === 'qunban-native';
+      const message = critical
+        ? `「${row.name || row.id}」是群伴/DSH 的关键插件。关闭后群伴工具或会话可能不可用。\n\n确认关闭吗？`
+        : `「${row.name || row.id}」是 DSH 核心插件。关闭可能导致会话、模型或工具链不可用。\n\n确认关闭吗？`;
+      if (!window.confirm(message)) {
+        input.checked = true;
+        return;
+      }
+    }
+    togglePlugin(row.id, input.checked, row);
+  });
+  label.appendChild(input);
+  const track = el('span', 'plugin-switch-track');
+  label.appendChild(track);
+  label.appendChild(el('span', 'plugin-switch-text', row.disabled ? '停用' : '启用'));
+  return label;
+}
+
 function pluginCard(row, options = {}) {
   const card = el('article', `plugin-row${row.disabled ? ' is-disabled' : ''}`);
   const iconWrap = el('div', 'plugin-row-icon');
@@ -4000,17 +4026,15 @@ function pluginCard(row, options = {}) {
   const meta = el('div', 'plugin-meta');
   meta.appendChild(el('span', 'plugin-cat', row.category || '其他'));
   if (row.version) meta.appendChild(el('span', 'plugin-version', `v${row.version}`));
-  if (options.toggle) {
-    const button = el(
-      'button',
-      'text-btn plugin-toggle',
-      row.disabled ? '启用' : '停用',
-    );
-    button.type = 'button';
-    button.addEventListener('click', () => togglePlugin(row.id, Boolean(row.disabled)));
-    meta.appendChild(button);
+  if (row.installed === false || row.source === 'optional') {
+    const unavailable = pluginToggleNode({ ...row, disabled: true });
+    const input = unavailable.querySelector('input');
+    if (input) input.disabled = true;
+    const text = unavailable.querySelector('.plugin-switch-text');
+    if (text) text.textContent = '未安装';
+    meta.appendChild(unavailable);
   } else {
-    meta.appendChild(el('span', 'plugin-readonly', '内置只读'));
+    meta.appendChild(pluginToggleNode(row));
   }
   card.appendChild(meta);
   return card;
@@ -4061,31 +4085,27 @@ function renderInstalledPlugins() {
       ),
     );
     item.appendChild(info);
-    if (row.source !== 'native') {
-      const button = el(
-        'button',
-        'text-btn',
-        row.disabled ? '启用' : '停用',
-      );
-      button.type = 'button';
-      button.disabled = !row.installed;
-      button.addEventListener('click', () => togglePlugin(row.id, Boolean(row.disabled)));
-      item.appendChild(button);
-    }
+    item.appendChild(pluginToggleNode(row));
     root.appendChild(item);
   }
 }
 
-async function togglePlugin(id, enabled) {
+async function togglePlugin(id, enabled, row = {}) {
   try {
     await api('/dsh/plugins/toggle', {
       method: 'POST',
       body: JSON.stringify({ id, enabled }),
     });
-    toast(enabled ? '插件已启用，下次 DSH 任务生效' : '插件已停用');
+    const coreHint = row.core ? '；核心插件改动需重启对应 DSH 链路才能完全生效' : '；下次 DSH 任务生效';
+    toast(
+      enabled
+        ? `插件已启用${coreHint}`
+        : `插件已停用${coreHint}`,
+    );
     await loadPlugins();
   } catch (error) {
     toast(error.message, 'error');
+    await loadPlugins();
   }
 }
 

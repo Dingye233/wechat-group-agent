@@ -142,6 +142,17 @@ class DSHPrimaryService:
                 },
             ]
         )
+        try:
+            toggles = json.loads(
+                (source_profile / "plugin-toggles.json").read_text(encoding="utf-8")
+            )
+            if isinstance(toggles, dict):
+                for plugin_id, enabled in toggles.items():
+                    rows.append(
+                        {"id": str(plugin_id), "disabled": not bool(enabled)}
+                    )
+        except Exception:
+            pass
         if dependencies:
             manifest["dependencies"] = dependencies
             for name in dependencies:

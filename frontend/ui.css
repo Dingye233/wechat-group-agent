@@ -2598,3 +2598,82 @@ dialog.modal::backdrop {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* plugin enable switches */
+.plugin-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.plugin-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.plugin-switch-track {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 16px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel-3);
+  transition: background .15s ease, border-color .15s ease;
+}
+.plugin-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s ease, background .15s ease;
+}
+.plugin-switch input:checked + .plugin-switch-track {
+  background: var(--green-soft);
+  border-color: var(--green-line);
+}
+.plugin-switch input:checked + .plugin-switch-track::after {
+  transform: translateX(12px);
+  background: var(--green);
+}
+.plugin-switch input:focus-visible + .plugin-switch-track {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.plugin-switch-text {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.plugin-switch input:checked ~ .plugin-switch-text {
+  color: var(--green);
+}
+.plugin-mini .plugin-switch {
+  gap: 4px;
+}
+.plugin-mini .plugin-switch-track {
+  width: 24px;
+  height: 14px;
+}
+.plugin-mini .plugin-switch-track::after {
+  width: 8px;
+  height: 8px;
+}
+.plugin-mini .plugin-switch input:checked + .plugin-switch-track::after {
+  transform: translateX(10px);
+}
+.plugin-switch input:disabled + .plugin-switch-track {
+  opacity: .45;
+}
+.plugin-switch input:disabled ~ .plugin-switch-text {
+  color: var(--muted-2);
+}
