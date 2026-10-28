@@ -445,13 +445,30 @@ async def assistant_forget_memories(
         settings = await get_settings(db)
     days = int(payload.get("days") or settings.get("memory_forgetting_days") or 180)
     dry_run = bool(payload.get("dry_run", False))
-    result = await mem0_memory.forget_old(
+    from app.services.memory import forget_sqlite_memories
+
+    mem0_result = await mem0_memory.forget_old(
         settings,
         account_key=runtime.account_key,
         days=days,
         dry_run=dry_run,
     )
-    return {"ok": True, **result}
+    sqlite_result = await forget_sqlite_memories(
+        days=days,
+        account_key=runtime.account_key,
+        dry_run=dry_run,
+    )
+    return {
+        "ok": True,
+        "deleted": int(mem0_result.get("deleted") or 0)
+        + int(sqlite_result.get("deleted") or 0),
+        "scanned": int(mem0_result.get("scanned") or 0)
+        + int(sqlite_result.get("candidates") or 0),
+        "days": days,
+        "dry_run": dry_run,
+        "mem0": mem0_result,
+        "sqlite": sqlite_result,
+    }
 
 
 @router.get("/assistant/memories")

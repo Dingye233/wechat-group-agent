@@ -48,7 +48,11 @@ from app.services.assistant import (
     take_session_inbox,
 )
 from app.services.llm import LLMService
-from app.services.memory import prune_memories, summarize_group_memories
+from app.services.memory import (
+    maybe_forget_sqlite,
+    prune_memories,
+    summarize_group_memories,
+)
 from app.services.serializers import direct_message_dict, group_dict, message_dict
 from app.services.settings import get_settings
 
@@ -1754,8 +1758,11 @@ class RuntimeManager:
                     await mem0_memory.maybe_forget(
                         settings, account_key=self.account_key
                     )
+                    await maybe_forget_sqlite(
+                        settings, account_key=self.account_key
+                    )
                 except Exception:
-                    logger.warning("Mem0 遗忘清理失败", exc_info=True)
+                    logger.warning("记忆遗忘清理失败", exc_info=True)
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -362,6 +362,9 @@ async def forget_old(
     items = [_as_memory(item) for item in _as_items(raw)]
     candidates = []
     for item in items:
+        # Preserve 5-star memories; they are explicitly marked as important.
+        if int(item.get("importance") or 3) >= 5:
+            continue
         timestamp = _parse_time(item.get("created_at") or item.get("updated_at"))
         if timestamp and timestamp < cutoff:
             candidates.append(item)

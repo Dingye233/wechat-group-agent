@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -432,6 +432,57 @@ async def summarize_group_memories(
         "prompt_tokens": result.get("prompt_tokens", 0),
         "completion_tokens": result.get("completion_tokens", 0),
     }
+
+
+_LAST_SQLITE_FORGET = 0.0
+
+
+async def forget_sqlite_memories(
+    *,
+    days: int = 180,
+    account_key: str = "",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Deactivate old SQLite memories, keeping 5-star memories."""
+    cutoff = utcnow() - timedelta(days=max(1, int(days)))
+    async with SessionLocal() as db:
+        statement = select(AgentMemory).where(
+            AgentMemory.active.is_(True),
+            AgentMemory.updated_at < cutoff,
+            AgentMemory.importance < 5,
+        )
+        if account_key:
+            statement = statement.where(
+                (AgentMemory.account_key == account_key)
+                | (AgentMemory.account_key == "")
+            )
+        rows = list((await db.execute(statement)).scalars().all())
+        if rows and not dry_run:
+            for item in rows:
+                item.active = False
+            await db.commit()
+    return {
+        "candidates": len(rows),
+        "deleted": 0 if dry_run else len(rows),
+        "days": max(1, int(days)),
+        "dry_run": dry_run,
+    }
+
+
+async def maybe_forget_sqlite(
+    settings: dict[str, Any], *, account_key: str = ""
+) -> dict[str, Any]:
+    global _LAST_SQLITE_FORGET
+    if not settings.get("memory_forgetting_enabled", True):
+        return {"deleted": 0, "skipped": "disabled"}
+    now = time.time()
+    if now - _LAST_SQLITE_FORGET < 86400:
+        return {"deleted": 0, "skipped": "recent"}
+    _LAST_SQLITE_FORGET = now
+    return await forget_sqlite_memories(
+        days=int(settings.get("memory_forgetting_days") or 180),
+        account_key=account_key,
+    )
 
 
 async def prune_memories(group_id: int | None, keep: int = 200) -> int:
