@@ -2165,7 +2165,27 @@ class RuntimeManager:
                 ).scalars().all()
                 for row in recent:
                     if self._outgoing_matches(row, kind, content):
-                        return message_dict(row)
+                        # The database listener may have seen the real WeChat
+                        # echo before this method ran.  Reuse that row, but
+                        # preserve Agent attribution and tool/model metadata;
+                        # otherwise replies look like ordinary self messages
+                        # and their tool trace disappears.
+                        row.is_from_agent = bool(
+                            is_from_agent or row.is_from_agent
+                        )
+                        merged_meta = dict(row.meta or {})
+                        merged_meta.update(meta or {})
+                        row.meta = merged_meta
+                        if sticker is not None:
+                            # WeChat stores sticker sends as image rows; keep
+                            # the dashboard's friendlier "表情包" presentation.
+                            row.kind = "sticker"
+                            row.content = sticker.name or "[表情包]"
+                            row.media_path = sticker.filename
+                        await db.commit()
+                        payload = message_dict(row)
+                        self.broadcast("message.updated", payload)
+                        return payload
                 # Otherwise mark this optimistic record so the listener can
                 # consume it when the same message appears in the database.
                 record_meta["_replica_pending"] = True
@@ -2395,7 +2415,7 @@ class RuntimeManager:
                 await asyncio.sleep(delay)
             if not self.is_online or self.detached:
                 return
-            result = await self.retry_failed_sends()
+            result = await self.retry_failed_sends(include_unconfirmed=False)
             if result.get("retried") or result.get("failed"):
                 logger.info(
                     "未发送消息校验完成：成功 %s，仍失败 %s，已确认重复 %s",
@@ -2415,7 +2435,11 @@ class RuntimeManager:
         return [message_dict(row) for row in rows]
 
     async def _pending_outbox_rows(
-        self, limit: int = 50, message_id: int | None = None
+        self,
+        limit: int = 50,
+        message_id: int | None = None,
+        *,
+        include_unconfirmed: bool = True,
     ) -> list[Message]:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
         async with SessionLocal() as db:
@@ -2435,7 +2459,27 @@ class RuntimeManager:
             meta = row.meta or {}
             if not meta.get("_outbox"):
                 continue
-            if meta.get("_send_state") not in {"failed", "pending"}:
+            state = str(meta.get("_send_state") or "")
+            error_text = str(meta.get("_send_error") or "")
+            unconfirmed = (
+                state == "unconfirmed"
+                or bool(meta.get("_send_unconfirmed"))
+                or any(
+                    marker in error_text
+                    for marker in (
+                        "发送后未在微信数据库确认",
+                        "已尝试发送但结果未确认",
+                        "结果未确认",
+                        "数据库未确认",
+                    )
+                )
+            )
+            allowed = {"failed", "pending"}
+            if include_unconfirmed:
+                allowed.add("unconfirmed")
+            if state not in allowed:
+                continue
+            if unconfirmed and not include_unconfirmed:
                 continue
             if message_id is not None and int(row.id) != int(message_id):
                 continue
@@ -2462,12 +2506,23 @@ class RuntimeManager:
             if db_group is None:
                 return None
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            error_text = str(error or "")
+            unconfirmed = any(
+                marker in error_text
+                for marker in (
+                    "????????????",
+                    "???????????",
+                    "?????",
+                    "??????",
+                )
+            )
             record_meta = dict(meta or {})
             record_meta.update(
                 {
                     "_outbox": True,
-                    "_send_state": "failed",
-                    "_send_error": str(error or "")[:600],
+                    "_send_state": "unconfirmed" if unconfirmed else "failed",
+                    "_send_error": error_text[:600],
+                    "_send_unconfirmed": unconfirmed,
                     "_outbox_created_at": now.isoformat(),
                 }
             )
@@ -2498,6 +2553,13 @@ class RuntimeManager:
         self.log_agent_event(
             "warn", f"消息未发送成功，已加入待重发：{str(error or '')[:160]}"
         )
+        if not unconfirmed and self.is_online and not self.detached:
+            # Safe pre-send failures may self-heal.  An "unconfirmed" send is
+            # not retried automatically: the WeChat UI may already have
+            # delivered it while the local DB lagged, and retrying would spam
+            # the group.  The user can press the per-message retry button,
+            # which forces a fresh DB verification first.
+            self._schedule_outbox_retry(6.0)
         return payload
 
     async def _mark_outbox_pending(self, message_id: int) -> None:
@@ -2552,8 +2614,19 @@ class RuntimeManager:
             if row is None:
                 return
             meta = dict(row.meta or {})
-            meta["_send_state"] = "failed"
-            meta["_send_error"] = str(error or "")[:600]
+            error_text = str(error or "")
+            unconfirmed = any(
+                marker in error_text
+                for marker in (
+                    "发送后未在微信数据库确认",
+                    "已尝试发送但结果未确认",
+                    "结果未确认",
+                    "数据库未确认",
+                )
+            )
+            meta["_send_state"] = "unconfirmed" if unconfirmed else "failed"
+            meta["_send_unconfirmed"] = unconfirmed
+            meta["_send_error"] = error_text[:600]
             meta["_replica_pending"] = False
             row.meta = meta
             await db.commit()
@@ -2590,7 +2663,11 @@ class RuntimeManager:
         return None
 
     async def retry_failed_sends(
-        self, message_id: int | None = None, limit: int = 20
+        self,
+        message_id: int | None = None,
+        limit: int = 20,
+        *,
+        include_unconfirmed: bool = True,
     ) -> dict[str, Any]:
         if not self.is_online or self.adapter is None:
             return {"ok": False, "error": "微信账号未登录"}
@@ -2600,7 +2677,9 @@ class RuntimeManager:
             self._outbox_lock = asyncio.Lock()
         async with self._outbox_lock:
             rows = await self._pending_outbox_rows(
-                limit=limit, message_id=message_id
+                limit=limit,
+                message_id=message_id,
+                include_unconfirmed=include_unconfirmed,
             )
             if not rows:
                 return {
@@ -2623,6 +2702,33 @@ class RuntimeManager:
                     await self._mark_outbox_sent(row.id)
                     duplicates += 1
                     continue
+                meta = row.meta or {}
+                error_text = str(meta.get("_send_error") or "")
+                unconfirmed = (
+                    meta.get("_send_state") == "unconfirmed"
+                    or bool(meta.get("_send_unconfirmed"))
+                    or any(
+                        marker in error_text
+                        for marker in (
+                            "发送后未在微信数据库确认",
+                            "已尝试发送但结果未确认",
+                            "结果未确认",
+                            "数据库未确认",
+                        )
+                    )
+                )
+                if unconfirmed and row.kind == "text":
+                    verify = getattr(self.adapter, "verify_text_sent", None)
+                    if callable(verify):
+                        try:
+                            if await asyncio.to_thread(
+                                verify, group.external_id, row.content
+                            ):
+                                await self._mark_outbox_sent(row.id)
+                                duplicates += 1
+                                continue
+                        except Exception:
+                            pass
                 echo = await self._find_confirmed_echo(row)
                 if echo is not None:
                     # The previous attempt did land in WeChat even though the

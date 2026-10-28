@@ -354,12 +354,43 @@ class AgentEngine:
         rows = list(reversed(rows))
         tz = ZoneInfo(str(settings.get("timezone") or "Asia/Shanghai"))
         lines: list[str] = []
+        context_rows: list[Message] = []
+
+        def _timestamp(value: datetime | None) -> float:
+            if value is None:
+                return 0.0
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+
         for row in rows:
+            content = self._flatten(row.content)
+            # Replica stores an optimistic Agent row and later the real
+            # WeChat echo with the same text. Feeding both to the model made
+            # it look like it had answered twice and increased prompt size.
+            duplicate = False
+            if row.is_self:
+                for previous in reversed(context_rows[-8:]):
+                    if not previous.is_self:
+                        continue
+                    if previous.kind != row.kind:
+                        continue
+                    if previous.is_from_agent == row.is_from_agent:
+                        continue
+                    if (previous.content or "").strip() != (row.content or "").strip():
+                        continue
+                    if abs(_timestamp(previous.created_at) - _timestamp(row.created_at)) <= 120:
+                        duplicate = True
+                        break
+            if duplicate:
+                continue
+            context_rows.append(row)
             created = row.created_at
-            if created.tzinfo is None:
+            if created is None:
+                created = datetime.now(timezone.utc)
+            elif created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
             local = created.astimezone(tz).strftime("%m-%d %H:%M")
-            content = self._flatten(row.content)
             if row.kind == "sticker":
                 content = f"[表情包] {content}".strip()
             elif row.kind in ("image", "voice", "video", "app", "system", "other") and not content:
@@ -373,6 +404,38 @@ class AgentEngine:
             )
         ).scalars().all()
         return lines, [str(name) for name in members if name]
+
+    async def _load_bili_context(self, limit: int = 4) -> str:
+        """Recent watched-video opinions, used as background for group replies."""
+
+        try:
+            from app.models import BiliVideo
+
+            async with SessionLocal() as db:
+                rows = (
+                    await db.execute(
+                        select(BiliVideo)
+                        .order_by(BiliVideo.updated_at.desc())
+                        .limit(12)
+                    )
+                ).scalars().all()
+        except Exception:
+            return ""
+        lines: list[str] = []
+        for row in rows:
+            analysis = row.analysis or {}
+            opinion = str(analysis.get("opinion") or "").strip()
+            summary = str(row.summary or "").strip()
+            text = opinion or summary
+            if not text:
+                continue
+            title = str(row.title or row.bvid or "").strip()
+            seen = row.updated_at or row.created_at
+            stamp = seen.strftime("%m-%d %H:%M") if seen is not None else ""
+            lines.append(f"- [{stamp}] 《{title}》：{text[:180]}")
+            if len(lines) >= max(1, int(limit)):
+                break
+        return "\n".join(lines)
 
     async def _load_memory_context(
         self,
@@ -668,10 +731,46 @@ class AgentEngine:
             resources.append(f"skill:{item['name']}")
         for item in tool_payload.get("mcps") or []:
             resources.append(f"mcp:{item['key'].split(':', 1)[-1]}")
-        for item in tool_payload.get("apis") or []:
-            resources.append(f"api:{item['name']}")
+        apis = tool_payload.get("apis") or []
+        for item in apis:
+            resources.append(
+                f"api:{item['name']} args={json.dumps(item.get('args') or {}, ensure_ascii=False)}"
+            )
+        api_example = ""
+        if apis:
+            api_example = (
+                "\n接口参数必须使用 args 里的键，例如：\n"
+                + json.dumps(
+                    {
+                        "action": "tool",
+                        "tool": "call_interface",
+                        "args": {
+                            "name": apis[0]["name"],
+                            "args": apis[0].get("args") or {},
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
         tool_section = ""
         if group_tools:
+            tool_names = {str(item.get("name") or "") for item in group_tools}
+            tool_example = json.dumps(
+                {
+                    "action": "tool",
+                    "tool": group_tools[0]["name"],
+                    "args": group_tools[0].get("args") or {},
+                    "thought": "为什么调用",
+                },
+                ensure_ascii=False,
+            )
+            bili_hint = ""
+            if tool_names & {"bili_knowledge_search", "bili_last_opinion"}:
+                bili_hint = (
+                    "\n如果用户问你看过/学到了什么、最近对视频的看法，"
+                    "必须先调用 bili_knowledge_search 或 bili_last_opinion；"
+                    "没有 OBSERVATION 时不要编造具体视频、作者或评论内容。"
+                )
             tool_section = f"""
 
 # 已启用的群聊工具（只有这些能调用）
@@ -680,9 +779,10 @@ class AgentEngine:
 
 # 工具协议
 当你确实需要工具时，输出：
-{{"action":"tool","tool":"screen_ocr","args":{{}},"thought":"为什么调用"}}
+{tool_example}{api_example}
 工具结果会以 OBSERVATION 返回，然后你再决定回复或继续调用。
-不要假装调用过工具；没有拿到 OBSERVATION 就不能声称完成。"""
+参数键必须与工具列表完全一致；如果 OBSERVATION 以 ERROR 开头，先修正参数重试，不要编造结果。
+不要假装调用过工具；没有拿到 OBSERVATION 就不能声称完成。{bili_hint}"""
         multi_rules = ""
         multi_format = '{"action": "reply", "reply": "要发送的文字，可为空", "sticker": 3}'
         if config.multi_message_enabled:
@@ -704,6 +804,14 @@ class AgentEngine:
         memory_block = f"""# 长期记忆（每次对话自动注入）
 以下是过去总结的群聊记忆，可作为背景参考；不要机械复述，也不要编造记忆里没有的内容：
 {memory_text or '无'}"""
+        bili_context = await self._load_bili_context()
+        bili_block = (
+            f"""# 最近看过的 B站内容（背景资料，不是新消息）
+{ bili_context }
+以上只用于回答“你看了什么/学到了什么”；不要把它当成当前群聊的新消息。"""
+            if bili_context
+            else ""
+        )
         extra_prompt = str(settings.get("group_prompt_extra") or "").strip()
         extra_block = (
             f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
@@ -725,6 +833,7 @@ class AgentEngine:
 {group_info}
 
 {memory_block}
+{bili_block}
 {extra_block}
 # 可用表情包
 {sticker_catalog}
@@ -737,6 +846,7 @@ class AgentEngine:
 {group_info}
 
 {memory_block}
+{bili_block}
 
 # 回复规则
 1. 你是在微信群里自然地接话，回复最新一条消息，不要像客服或机器人。
@@ -746,6 +856,7 @@ class AgentEngine:
 5. 可以结合上下文和成员昵称，但不要叫错人。
 6. 普通模式最多选择一个表情包；连续消息模式可穿插表情包，但不要每条都发。
 7. 只输出一个 JSON 对象，不要输出 Markdown 代码块或其他文字。
+8. 先直接回应最后一条消息的具体问题；不要用玩笑、人设或旧话题回避。用户在反馈卡顿、答非所问或工具问题时，先说明你实际看到了什么、准备怎么处理。
 {extra_block}
 # 可用表情包
 {sticker_catalog}
@@ -764,7 +875,10 @@ class AgentEngine:
         total_prompt = 0
         total_completion = 0
         last_result: dict[str, Any] = {}
-        max_steps = 2 if group_tools else 1
+        # Allow a tool error to be corrected, a second lookup, and then the
+        # final reply.  The old limit of 2 stopped right after the first tool
+        # result, so a bad argument could never be retried.
+        max_steps = 4 if group_tools else 1
         try:
             for _step in range(max_steps):
                 prompt = user_prompt
@@ -817,7 +931,22 @@ class AgentEngine:
                         "seconds": round(time.time() - started, 2),
                     }
                 )
+                failed = output_text.startswith("ERROR")
+                await self._log(
+                    message.group_id,
+                    "tool",
+                    f"工具 {tool_name} {'失败' if failed else '成功'} "
+                    f"args={json.dumps(args, ensure_ascii=False)} "
+                    f"结果={output_text[:180]}",
+                    level="warn" if failed else "info",
+                )
                 observations.append(f"<{tool_name}> {output_text[:5000]}")
+            await self._log(
+                message.group_id,
+                "error",
+                f"工具调用达到 {max_steps} 步仍未生成回复",
+                level="warn",
+            )
             meta = {
                 "model": last_result.get("model") or model,
                 "latency_ms": last_result.get("latency_ms") or 0,

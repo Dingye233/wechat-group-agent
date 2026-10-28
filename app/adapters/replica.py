@@ -828,6 +828,13 @@ class ReplicaAdapter(BaseAdapter):
     def _connect(self) -> bool:
         from wechatauto import WeChatDB
 
+        try:
+            from app.adapters.fast_db import install as install_fast_db
+
+            install_fast_db()
+        except Exception:
+            pass
+
         if not self._ensure_weixin_running():
             return False
         # The library prints a full key diagnosis on every failed attempt.
@@ -860,7 +867,12 @@ class ReplicaAdapter(BaseAdapter):
 
     def _bootstrap(self, db: Any, info: dict[str, Any]) -> None:
         from wechatauto import MediaDownloader
-        from wechatauto.db import Listener
+        from wechatauto.db import Listener as UpstreamListener
+
+        try:
+            from app.adapters.fast_listener import FastListener
+        except Exception:
+            FastListener = UpstreamListener  # type: ignore[assignment,misc]
 
         self._db = db
         self._media = MediaDownloader(db, save_dir=str(self._download_dir))
@@ -887,12 +899,32 @@ class ReplicaAdapter(BaseAdapter):
         )
         try:
             watermark = str(Path("data") / f"replica_watermark_{self._safe_name()}.json")
-            listener = Listener(
+            listener = FastListener(
                 db,
                 interval=1.0,
                 watermark_file=watermark,
             )
-            listener.add_all(self._on_db_message, discover=True)
+            original_poll = listener._poll_once
+
+            def _timed_poll() -> None:
+                started = time.perf_counter()
+                try:
+                    original_poll()
+                finally:
+                    elapsed = time.perf_counter() - started
+                    if elapsed >= 3.0:
+                        self.log(
+                            f"数据库轮询较慢：{elapsed:.1f} 秒，"
+                            f"监听会话 {len(listener._callbacks)} 个",
+                            level="warn",
+                        )
+
+            listener._poll_once = _timed_poll
+            # Do not use add_all(): it registers every WeChat session (500+)
+            # and re-scans get_sessions() every second, which made a single
+            # polling round take tens of seconds.  Only groups explicitly
+            # enabled for reading (plus admin DMs) are registered below by
+            # set_read_schedule / _sync_listeners.
             listener.start()
             self._listener = listener
             self.log("已启动 4.x 本地数据库实时监听（无需保持微信前台）")
@@ -1667,6 +1699,65 @@ class ReplicaAdapter(BaseAdapter):
         except Exception:
             return 0
 
+    def refresh_snapshot(self) -> None:
+        """Force the next DB read to rebuild the decrypted message snapshot.
+
+        The incremental reader is conservative, but a WeChat checkpoint can
+        still race a send.  Verification therefore rebuilds once before
+        declaring a message missing; otherwise a successfully sent message
+        looked failed and the outbox retried it into duplicates.
+        """
+
+        if self._db is None:
+            return
+        try:
+            rels = self._db._message_dbs()
+        except Exception:
+            return
+        for rel in rels:
+            stamp = os.path.join(
+                self._db.workdir, rel.replace(os.sep, "__") + ".stamp"
+            )
+            try:
+                os.remove(stamp)
+            except OSError:
+                pass
+
+    def _scan_own_message(
+        self,
+        raw: str,
+        baseline: int,
+        *,
+        content: str = "",
+        media: bool = False,
+    ) -> bool:
+        if self._db is None:
+            return False
+        try:
+            rows = self._db.get_new_messages(raw, since_seq=baseline, limit=80)
+        except Exception:
+            rows = []
+        for row in rows or []:
+            sender = str(row.get("sender_username") or "")
+            if sender and sender != self._self_wxid:
+                continue
+            if media:
+                if str(row.get("type") or "") in (
+                    "图片",
+                    "动画表情",
+                    "语音",
+                    "视频",
+                    "文件/链接/卡片",
+                ):
+                    return True
+                continue
+            text = _clean_group_content(
+                str(row.get("content") or ""), self._self_wxid
+            ).strip()
+            if text == content.strip():
+                return True
+        return False
+
     def _confirm_own_message(
         self,
         raw: str,
@@ -1680,30 +1771,48 @@ class ReplicaAdapter(BaseAdapter):
             return False
         deadline = time.time() + max(0.5, timeout)
         while time.time() < deadline:
-            try:
-                rows = self._db.get_new_messages(raw, since_seq=baseline, limit=50)
-            except Exception:
-                rows = []
-            for row in rows or []:
-                sender = str(row.get("sender_username") or "")
-                if sender and sender != self._self_wxid:
-                    continue
-                if media:
-                    if str(row.get("type") or "") in (
-                        "图片",
-                        "动画表情",
-                        "语音",
-                        "视频",
-                        "文件/链接/卡片",
-                    ):
-                        return True
-                    continue
-                text = _clean_group_content(
-                    str(row.get("content") or ""), self._self_wxid
-                ).strip()
-                if text == content.strip():
-                    return True
+            if self._scan_own_message(
+                raw, baseline, content=content, media=media
+            ):
+                return True
             time.sleep(0.4)
+        # The listener may be looking at a snapshot taken just before a
+        # WeChat checkpoint.  Rebuild once and check again before reporting a
+        # failure; a false failure here causes duplicate resends.
+        try:
+            self.refresh_snapshot()
+        except Exception:
+            pass
+        deadline = time.time() + max(4.0, timeout)
+        while time.time() < deadline:
+            if self._scan_own_message(
+                raw, baseline, content=content, media=media
+            ):
+                return True
+            time.sleep(0.5)
+        return False
+
+    def verify_text_sent(self, room_id: str, text: str) -> bool:
+        """Check the real WeChat DB (after a forced refresh) for a sent row."""
+
+        if self._db is None:
+            return False
+        raw = self._room_raw(room_id)
+        try:
+            self.refresh_snapshot()
+            rows = self._db.get_messages(raw, limit=80) or []
+        except Exception:
+            return False
+        expected = _clean_group_content(text, self._self_wxid).strip()
+        for row in rows:
+            sender = str(row.get("sender_username") or "")
+            if sender and sender != self._self_wxid:
+                continue
+            actual = _clean_group_content(
+                str(row.get("content") or ""), self._self_wxid
+            ).strip()
+            if actual == expected:
+                return True
         return False
 
     @staticmethod

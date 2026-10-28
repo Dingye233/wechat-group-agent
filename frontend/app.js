@@ -1513,8 +1513,10 @@ function buildMessageNode(message) {
   const source = messageSourceLabel(message);
   if (source) meta.appendChild(el('span', 'msg-source-badge', source));
   const sendState = String(message.meta?._send_state || '');
-  if (sendState === 'failed') {
-    meta.appendChild(el('span', 'msg-failed-badge', '发送失败'));
+  if (sendState === 'failed' || sendState === 'unconfirmed') {
+    meta.appendChild(
+      el('span', 'msg-failed-badge', sendState === 'unconfirmed' ? '结果未确认' : '发送失败'),
+    );
   }
   meta.appendChild(el('time', null, formatClock(message.created_at)));
   const bubble = el(
@@ -1542,8 +1544,12 @@ function buildMessageNode(message) {
   } else {
     bubble.textContent = message.content || '…';
   }
-  if (sendState === 'failed') {
-    const retry = el('button', 'msg-retry-btn', '发送失败 · 点击重发');
+  if (sendState === 'failed' || sendState === 'unconfirmed') {
+    const retry = el(
+      'button',
+      'msg-retry-btn',
+      sendState === 'unconfirmed' ? '结果未确认 · 校验并重发' : '发送失败 · 点击重发',
+    );
     retry.title = String(message.meta?._send_error || '');
     retry.addEventListener('click', async (event) => {
       event.stopPropagation();
@@ -1557,7 +1563,8 @@ function buildMessageNode(message) {
       } catch (error) {
         toast(error.message, 'error');
         retry.disabled = false;
-        retry.textContent = '发送失败 · 点击重发';
+        retry.textContent =
+          sendState === 'unconfirmed' ? '结果未确认 · 校验并重发' : '发送失败 · 点击重发';
       }
     });
     bubble.appendChild(retry);

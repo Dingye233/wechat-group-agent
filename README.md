@@ -51,7 +51,7 @@
 - **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。模型请求只使用群伴设置里每个用户自己的 Base URL / API Key / 模型，不读取 OpenCode 官方账号或内置 Key。
 - **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode，并注册为独立工具（如 `qunban_read_file`、`qunban_run_powershell`）；群伴 MCP 项目、技能和接口分别通过 `qunban_run_mcp`、`qunban_run_skill`、`qunban_call_interface` 调用。工具调用仍经过群伴的 capability 权限网关。
 - **微信发送**：只走 wechatauto-replica 的 `send_group_message` / `send_contact_message`；OpenCode 默认不注册 `keyboard_*` / `mouse_*`，并拦截包含微信操作关键词的 `run_powershell`。发送前会先打开目标会话并确认输入框，确认不了就取消，避免盲打键盘或卡死微信。
-- **工具组件**：工具层拆分为 `app/tools/wechat.py`、`bili.py`、`memory.py`、`system.py`，`app/mcp_server.py` 只做组合；详见 [docs/tools.md](docs/tools.md)。
+- **工具组件**：工具层拆分为 `app/tools/wechat.py`、`bili.py`、`memory.py`、`system.py`，`app/mcp_server.py` 只做组合；详见 [docs/tools.md](docs/tools.md)。群聊工具会带上真实参数示例；外部接口调用会校验 URL 占位符，参数不匹配时返回明确错误并允许模型在后续步骤重试，不会把 `{city}` 当成城市直接请求。
 - **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。群伴原生工具清单在 `data/opencode/tools.json`，OpenCode 可通过 `qunban_tool_admin` 新增别名、改描述、停用/启用、删除和同步工具；也可以把新脚本写到 `data/opencode/tools/`，用 `handler_type="script"` 注册成真正的新工具，无需改 Python 主程序。
 
 
@@ -84,7 +84,7 @@
 - **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。
 - **连续消息**：群配置新增「允许连续发送多条消息」和最多条数（2–6）。模型可以输出文字 + 表情包混合的多段回复，Agent 会按顺序逐条发送。
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
-- **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。
+- **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。群聊默认开放只读的 `bili_knowledge_search` / `bili_last_opinion` / `bili_video_info` / `bili_comments`，让 Agent 能回答“你看了什么/学到了什么”，且没有知识库结果时禁止编造具体视频内容。
 - **自动刷 B站**：在「助手 → B站」开启后，Agent 会自行选择主题和视频、转写音频、理解内容，并按自己的判断决定是否点赞/收藏/评论/回复评论；兴趣关键词可以留空，由 Agent 按自己的喜好选择。不会默认对每个视频三连，操作可以全部不做。面板会实时显示完整过程。看完视频后会生成 Agent 自己的 `opinion`；如果决定评论，评论通过群伴的 `bili_comment` 工具发出，模型没写评论正文时会直接用 `opinion`。Agent 也可以先调用 `bili_last_opinion` 读取最近看法，再调用 `bili_comment`。
 - **登录有效性**：`/api/bili/status` 会真实调用 B站校验 SESSDATA；过期时显示「登录已失效」，点赞/收藏/评论/回复会返回明确提示，不再只报 `-101` 或假装成功。
 - **Cookie 持久化**：扫码登录成功后会把完整 Cookie（`SESSDATA`、`bili_jct`、`buvid3`、`buvid4`、`DedeUserID`、`ac_time_value` 以及 `buvid_fp`、`b_nut`、`sid` 等额外字段）保存到本地 `bili_accounts.cookie_json`，重启服务后自动复用；原始 Cookie 不会返回前端，只在本地数据库和接口请求中使用。
@@ -239,6 +239,7 @@ powershell -ExecutionPolicy Bypass -File .\stop-background.ps1
 微信 4.x（wechatauto-replica）适配器：
 
 - 群列表、群成员、联系人、群聊和私聊记录都直接读本地数据库，不搜索微信窗口或通讯录。
+- 数据库监听只注册已开启读取的群和管理员私聊，不再每秒扫描全部 500+ 会话；WAL 增量合并，避免反复解密 180MB 消息库。
 - 支持扫码登录、实时消息、发送文字/图片/文件/表情包；发送使用 replica 的 `SendMsg` / `SendFiles` / `send_image`。
 - 图片会解密后内联显示；表情包不下载，只显示「表情包」。
 - 群名包含 `@chatroom` 或原始 ID 的过期临时群会被过滤：不展示、不记录、不自动回复。

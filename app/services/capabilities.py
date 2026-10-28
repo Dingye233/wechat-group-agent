@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import select
 
@@ -14,6 +16,17 @@ from app.services import assistant_tools, desktop
 
 _ASSETS_READY = False
 _LAST_SYNC_AT = 0.0
+
+# Read-only information tools that are safe for group replies by default.
+# Destructive / posting tools (like, comment, reply) stay opt-in.
+GROUP_DEFAULT_TOOLS = {
+    "bili_search",
+    "bili_recommend",
+    "bili_video_info",
+    "bili_comments",
+    "bili_knowledge_search",
+    "bili_last_opinion",
+}
 
 BUILTIN_TOOLS: list[dict[str, Any]] = [
     {"name": "list_dir", "label": "列出目录", "desc": "列出文件/目录", "risk": "low"},
@@ -325,6 +338,7 @@ async def sync_capabilities(force: bool = False) -> None:
             risk: str = "medium",
             builtin: bool = False,
             enabled_assistant: bool = True,
+            enabled_group: bool = False,
             meta: dict[str, Any] | None = None,
         ) -> None:
             row = existing.get(key)
@@ -338,7 +352,7 @@ async def sync_capabilities(force: bool = False) -> None:
                     risk=risk,
                     builtin=builtin,
                     enabled_assistant=enabled_assistant,
-                    enabled_group=False,
+                    enabled_group=enabled_group,
                     meta=meta or {},
                 )
                 db.add(row)
@@ -362,6 +376,7 @@ async def sync_capabilities(force: bool = False) -> None:
                 source="builtin",
                 risk=item["risk"],
                 builtin=True,
+                enabled_group=item["name"] in GROUP_DEFAULT_TOOLS,
                 meta={"tool": item["name"], "present": True},
             )
 
@@ -496,6 +511,29 @@ async def enabled_map(scope: str) -> dict[str, bool]:
     return {row.key: bool(getattr(row, field)) for row in rows}
 
 
+def _interface_args_example(meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Build a concrete args example from the URL placeholders.
+
+    The model used to see only ``weather_wttr`` and guessed ``location`` while
+    the interface expected ``city``.  Showing the exact keys avoids a wrong
+    call that still "succeeds" against a literal ``{city}`` URL.
+    """
+
+    url = str((meta or {}).get("url") or "")
+    result: dict[str, Any] = {}
+    for key in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", url):
+        lowered = key.lower()
+        if lowered in {"city", "location", "place"}:
+            result[key] = "Shanghai"
+        elif lowered in {"query", "q", "keyword", "keywords"}:
+            result[key] = "关键词"
+        elif lowered in {"count", "limit", "num"}:
+            result[key] = 5
+        else:
+            result[key] = "值"
+    return result
+
+
 async def catalog_for_scope(scope: str) -> dict[str, Any]:
     await sync_capabilities()
     async with SessionLocal() as db:
@@ -535,6 +573,7 @@ async def catalog_for_scope(scope: str) -> dict[str, Any]:
             "name": row.name,
             "key": row.key,
             "description": row.description,
+            "args": _interface_args_example(row.meta),
         }
         for row in rows
         if row.type == "api" and enabled.get(row.key)
@@ -556,11 +595,18 @@ async def catalog_for_scope(scope: str) -> dict[str, Any]:
             }
         )
     if apis and "call_interface" not in seen_tools:
+        interface_examples = "；".join(
+            f"{item['name']} args={json.dumps(item.get('args') or {}, ensure_ascii=False)}"
+            for item in apis
+        )
         tools.append(
             {
                 "name": "call_interface",
-                "args": {"name": apis[0]["name"], "args": {}},
-                "desc": "调用已登记接口；可用：" + "、".join(item["name"] for item in apis),
+                "args": {
+                    "name": apis[0]["name"],
+                    "args": apis[0].get("args") or {},
+                },
+                "desc": "调用已登记接口；参数键必须完全匹配。可用：" + interface_examples,
             }
         )
     if scope == "admin":
@@ -651,7 +697,16 @@ async def execute_capability(
         params = args.get("args") if isinstance(args.get("args"), dict) else {}
         url = str(meta.get("url") or "")
         for key, value in params.items():
-            url = url.replace("{" + key + "}", str(value))
+            url = url.replace("{" + key + "}", quote(str(value), safe=""))
+        missing = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", url)
+        if missing:
+            expected = {
+                key: _interface_args_example(meta).get(key, "值") for key in missing
+            }
+            raise ValueError(
+                f"接口 {api} 缺少参数 {missing}，不能把占位符当成城市/关键词直接请求；"
+                f"请使用 args={json.dumps(expected, ensure_ascii=False)}"
+            )
         return await assistant_tools.web_request(
             str(meta.get("method") or "GET"),
             url,
