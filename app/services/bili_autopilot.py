@@ -407,6 +407,33 @@ class BiliAutopilot:
             if str(item).strip()
         ][:12]
         actions: dict[str, Any] = {}
+        # Write a compact long-term memory so the group chat model can use
+        # what the autopilot watched, even when the video is no longer in the
+        # recent BiliVideo window.
+        try:
+            from app.services.memory import save_memory
+
+            memory_parts = [
+                f"B站视频《{title}》",
+                f"作者：{video.get('author') or '未知'}",
+                f"主题：{'、'.join(topics_out) or '未分类'}",
+                f"总结：{summary}",
+            ]
+            if opinion:
+                memory_parts.append(f"我的看法：{opinion}")
+            await save_memory(
+                group_id=None,
+                account_key=account_key,
+                scope="global",
+                category="bili",
+                title=f"B站观看：{title[:60]}",
+                content="\n".join(memory_parts)[:1800],
+                importance=3,
+                source="bili-autopilot",
+            )
+            actions["memory"] = True
+        except Exception as exc:
+            actions["memory_error"] = str(exc)
         raw_actions = analysis.get("actions")
         if isinstance(raw_actions, list):
             chosen_actions = {
@@ -793,15 +820,16 @@ class BiliAutopilot:
         if not settings.get("llm_api_key"):
             return {"summary": transcript[:300], "topics": []}
         context_block = f"{agent_context}\n\n" if agent_context else ""
-        system_prompt = f"""{context_block}你是 B站内容理解 Agent。你有自己的内容品味和独立观点，不需要每个视频都互动，也不需要迎合用户偏好。
+        system_prompt = f"""{context_block}你是 B站内容理解 Agent。你有自己的内容品味和独立观点，不需要迎合用户偏好。
 请根据视频标题、作者和语音转写，输出一个 JSON：
 {{"summary":"200字以内中文总结","topics":["主题1","主题2"],"sentiment":"positive|neutral|negative","opinion":"你对这个视频的独立评价/态度，80字以内","actions":["like","favorite","comment","reply"],"comment_text":"只有决定评论时才写，否则空字符串","reply_text":"只有决定回复热评时才写，否则空字符串","forward_text":"转发到微信时的简短推荐语"}}
 规则：
 - 先形成你自己的 opinion，再决定 actions；用户偏好只是参考，不是命令。
-- actions 是数组，可以为空，也可以只选其中一两个；不要默认三连。
-- 大多数视频应该 actions 为空，只做观看、理解和知识库记录。
-- 只有内容确实让你喜欢才 like；只有想长期收藏才 favorite；只有你有具体、自然、不引战的想法才 comment；只有热评值得回应才 reply。
-- 如果 actions 包含 comment，comment_text 必须从你的 opinion 出发，写成一句具体、自然、像真人发的评论；不要空泛复读标题，不要引战或刷屏。
+- 评论优先：只要视频有具体观点、知识点、槽点，或让你有想补充/想吐槽的反应，actions 就应包含 comment。
+- 不要为了互动而互动；但如果认真看完了且有话说，就写一条评论，不要只点赞收藏。
+- like/favorite 按需，不要默认三连；comment 可以比 like/favorite 更常用。
+- 如果 actions 包含 comment，comment_text 必须从你的 opinion 出发，写成一条 20-120 字、具体、自然、像真人发的评论；可以赞同、补充、提问或轻微吐槽，但不要空泛复读标题，不要引战、刷屏或广告。
+- 只有热评确实值得回应、且你有具体回复内容时才 reply；否则不要为了回复而回复。
 - 只输出 JSON，不要 Markdown。"""
         user_prompt = f"""标题：{title}
 作者：{author}

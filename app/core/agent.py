@@ -1569,8 +1569,8 @@ class AgentEngine:
         ).scalars().all()
         return lines, [str(name) for name in members if name]
 
-    async def _load_bili_context(self, limit: int = 4) -> str:
-        """Recent watched-video opinions, used as background for group replies."""
+    async def _load_bili_context(self, limit: int = 5) -> str:
+        """Recent watched-video summaries and opinions for chat context."""
 
         try:
             from app.models import BiliVideo
@@ -1579,25 +1579,34 @@ class AgentEngine:
                 rows = (
                     await db.execute(
                         select(BiliVideo)
+                        .where(BiliVideo.status == "done")
                         .order_by(BiliVideo.updated_at.desc())
-                        .limit(12)
+                        .limit(16)
                     )
                 ).scalars().all()
         except Exception:
             return ""
         lines: list[str] = []
+        videos = 0
         for row in rows:
             analysis = row.analysis or {}
             opinion = str(analysis.get("opinion") or "").strip()
             summary = str(row.summary or "").strip()
-            text = opinion or summary
-            if not text:
+            if not summary and not opinion:
                 continue
             title = str(row.title or row.bvid or "").strip()
+            topics = "、".join(str(item) for item in (row.topics or []) if str(item))
             seen = row.updated_at or row.created_at
             stamp = seen.strftime("%m-%d %H:%M") if seen is not None else ""
-            lines.append(f"- [{stamp}] 《{title}》：{text[:180]}")
-            if len(lines) >= max(1, int(limit)):
+            lines.append(f"- [{stamp}] 《{title}》")
+            if topics:
+                lines.append(f"  主题：{topics[:120]}")
+            if summary:
+                lines.append(f"  总结：{summary[:260]}")
+            if opinion:
+                lines.append(f"  我的看法：{opinion[:140]}")
+            videos += 1
+            if videos >= max(1, int(limit)):
                 break
         return "\n".join(lines)
 
