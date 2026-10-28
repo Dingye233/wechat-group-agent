@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>群伴 · WeChat Group Agent —— 会聊天、会刷 B站、会记事儿的微信群 Agent</title>
+<meta name="description" content="群伴是一个可拓展的微信群 Agent：扫码登录、按人设接话、长期记忆、刷 B站、发表情包，还能自己写技能和定时任务。">
+<style>
+  :root{
+    --bg:#070d16; --bg2:#0c1626; --card:#111d2f; --line:#1e2f47;
+    --fg:#e8f1ff; --dim:#8ea6c4; --blue:#4d8dff; --cyan:#39d3ff; --gold:#ffd166; --pink:#ff7ab6;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--fg); background:
+      radial-gradient(900px 500px at 15% -10%, #143b6b55, transparent 60%),
+      radial-gradient(700px 400px at 85% 0%, #0d5b7355, transparent 55%),
+      linear-gradient(180deg, var(--bg), var(--bg2) 60%, #060b12);
+    font:16px/1.7 "Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--cyan);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  header{padding:72px 0 30px;text-align:center}
+  .bubbles{font-size:26px;letter-spacing:6px;opacity:.5;margin-bottom:6px}
+  h1{font-size:clamp(30px,5vw,54px);line-height:1.15;margin:.2em 0 .1em;
+     background:linear-gradient(96deg,#7fb2ff,#39d3ff 45%,#ffd166);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--dim);font-size:clamp(15px,2vw,19px);margin:0 auto;max-width:720px}
+  .badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:22px 0 0}
+  .badges img{height:22px}
+  .btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:28px 0 0}
+  .btn{padding:11px 22px;border-radius:999px;border:1px solid var(--line);color:var(--fg);background:#ffffff0d;font-weight:600}
+  .btn.primary{background:linear-gradient(96deg,#2f6bff,#39d3ff);border:0;color:#04121f}
+  .btn:hover{transform:translateY(-1px);text-decoration:none}
+  .hero{margin:38px auto 10px;display:flex;justify-content:center}
+  .hero img{width:min(100%,900px);border-radius:18px;border:1px solid var(--line);box-shadow:0 24px 60px #0008}
+  section{padding:54px 0}
+  h2{font-size:clamp(21px,3vw,29px);margin:0 0 6px}
+  .lead{color:var(--dim);margin:0 0 26px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .card{background:linear-gradient(180deg,#ffffff0f,#ffffff05);border:1px solid var(--line);border-radius:16px;padding:20px}
+  .card h3{margin:.2em 0 .4em;font-size:17px}
+  .card p{margin:0;color:var(--dim);font-size:14.5px}
+  .ico{font-size:22px}
+  .stk{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
+  .stk figure{margin:0;background:#ffffff08;border:1px solid var(--line);border-radius:14px;padding:10px;text-align:center;transition:.18s}
+  .stk figure:hover{transform:translateY(-3px);border-color:#2c4a70}
+  .stk img{width:100%;border-radius:10px;display:block}
+  .stk figcaption{color:var(--dim);font-size:13px;margin-top:8px}
+  pre{background:#050b13;border:1px solid var(--line);border-radius:14px;padding:16px 18px;overflow:auto;font-size:14px}
+  code{font-family:"JetBrains Mono",Consolas,monospace}
+  .steps{counter-reset:s}
+  .step{position:relative;padding-left:46px;margin-bottom:18px}
+  .step:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:30px;height:30px;border-radius:50%;
+    background:linear-gradient(96deg,#2f6bff,#39d3ff);color:#04121f;font-weight:700;display:grid;place-items:center;font-size:14px}
+  footer{border-top:1px solid var(--line);padding:28px 0 60px;color:var(--dim);font-size:14px;text-align:center}
+  .warn{border-left:3px solid var(--gold);background:#ffd16611;padding:12px 16px;border-radius:0 10px 10px 0;color:#ffdf9b;font-size:14.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="bubbles">🫧 🐟 🫧</div>
+    <h1>群伴 · WeChat Group Agent</h1>
+    <p class="sub">一个会接话、会刷 B站、记得住事儿、还能自己写技能的微信群 Agent。<br>扫码登录 → 按人设开口 → 群里有事它自己动手。</p>
+    <div class="badges">
+      <img alt="stars" src="https://img.shields.io/github/stars/Dingye233/wechat-group-agent?style=flat-square&color=1f6feb">
+      <img alt="forks" src="https://img.shields.io/github/forks/Dingye233/wechat-group-agent?style=flat-square&color=8957e5">
+      <img alt="license" src="https://img.shields.io/github/license/Dingye233/wechat-group-agent?style=flat-square&color=dbab09">
+      <img alt="python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white">
+      <img alt="fastapi" src="https://img.shields.io/badge/FastAPI-0.110%2B-009688?style=flat-square&logo=fastapi&logoColor=white">
+    </div>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/Dingye233/wechat-group-agent">⭐ 去 GitHub 点个 star</a>
+      <a class="btn" href="https://github.com/Dingye233/wechat-group-agent#快速开始">快速开始</a>
+    </div>
+    <div class="hero"><img src="assets/hero.png" alt="大肥鱼表情包"></div>
+  </header>
+
+  <section>
+    <h2>它到底会什么</h2>
+    <p class="lead">不是只会复读的客服机器人：它在真实系统里干活。</p>
+    <div class="grid">
+      <div class="card"><div class="ico">💬</div><h3>群聊接话</h3><p>按人设、按触发规则（@ / 关键词 / 概率 / 冷却 / 静默时段）接话，可拆成多条短消息，不是一坨长文。</p></div>
+      <div class="card"><div class="ico">🧠</div><h3>长期记忆</h3><p>mem0 + Chroma 语义记忆：人名、项目、口味、约定，跨会话都记得住。</p></div>
+      <div class="card"><div class="ico">🖥️</div><h3>会动手</h3><p>读写文件、跑命令、装 DSH 插件、写技能、挂定时任务，全部走可控工具层，不碰微信窗口。</p></div>
+      <div class="card"><div class="ico">📺</div><h3>B站一条龙</h3><p>搜视频、看视频、点赞、收藏、评论（能带 [doge] 小黄脸，也能附表情包图片）、发动态。</p></div>
+      <div class="card"><div class="ico">🐟</div><h3>表情包</h3><p>16 张大肥鱼梗图，按人设挑图而不是机械镜像情绪：得意「吹牛第一」，被吹就「有点无语」。</p></div>
+      <div class="card"><div class="ico">🧩</div><h3>可拓展</h3><p>适配器、事件总线、人设、表情库、技能、MCP 项目、DSH 插件全部解耦，缺什么自己写。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>大肥鱼表情包</h2>
+    <p class="lead">素材来自开源梗图库 dsh-nekowhale-stickers，渲染进群伴表情库后，群聊里用 <code>sticker</code> 字段就能挑。</p>
+    <div class="stk">
+      <figure><img src="assets/stickers/happy.png" alt="鱼生快乐"><figcaption>鱼生快乐</figcaption></figure>
+      <figure><img src="assets/stickers/story.png" alt="会讲故事"><figcaption>会讲故事</figcaption></figure>
+      <figure><img src="assets/stickers/sea.png" alt="海是我的"><figcaption>海是我的</figcaption></figure>
+      <figure><img src="assets/stickers/listen.png" alt="听我讲海"><figcaption>听我讲海</figcaption></figure>
+      <figure><img src="assets/stickers/boast.png" alt="吹牛第一"><figcaption>吹牛第一</figcaption></figure>
+      <figure><img src="assets/stickers/speechless.png" alt="有点无语"><figcaption>有点无语</figcaption></figure>
+      <figure><img src="assets/stickers/tired.png" alt="累成咸鱼"><figcaption>累成咸鱼</figcaption></figure>
+      <figure><img src="assets/stickers/hug.png" alt="抱一个"><figcaption>抱一个</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>三分钟跑起来</h2>
+    <div class="steps">
+      <div class="step"><strong>装依赖</strong>
+        <pre><code>git clone https://github.com/Dingye233/wechat-group-agent.git
+cd wechat-group-agent
+python -m venv .venv &amp;&amp; .venv/Scripts/activate
+pip install -r requirements.txt</code></pre>
+      </div>
+      <div class="step"><strong>配模型</strong><p class="lead">控制台填自己的 Base URL / Key / 模型即可，仓库里没有任何内置 Key。</p></div>
+      <div class="step"><strong>起服务</strong>
+        <pre><code>./start.bat        # Windows
+# 或
+uvicorn app.main:app --host 127.0.0.1 --port 8000</code></pre>
+      </div>
+      <div class="step"><strong>开工</strong><p class="lead">打开 <code>http://127.0.0.1:8000</code>：选群、开开关、填人设，剩下的交给它。</p></div>
+    </div>
+    <p class="warn">个人微信自动化有风控和封号风险，请用小号测试并控制频率；服务默认只监听 127.0.0.1，没有内置鉴权，别直接暴露公网。</p>
+  </section>
+
+  <footer>
+    <p>🐟 群伴 · WeChat Group Agent —— 用爱发电，欢迎 star、issue、PR。</p>
+    <p><a href="https://github.com/Dingye233/wechat-group-agent">GitHub</a> · <a href="https://github.com/Dingye233/wechat-group-agent/issues">提意见</a> · <a href="https://www.npmjs.com/package/dsh-nekowhale-stickers">表情包来源</a></p>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,4 +1,62 @@
-# 群伴 · WeChat Group Agent
+<div align="center">
+
+<img src="docs/assets/hero.png" alt="群伴大肥鱼表情包" width="880">
+
+# 🐟 群伴 · WeChat Group Agent
+
+**一个会接话、会刷 B站、记得住事儿、还能自己写技能的微信群 Agent**
+
+[![Stars](https://img.shields.io/github/stars/Dingye233/wechat-group-agent?style=flat-square&color=1f6feb)](https://github.com/Dingye233/wechat-group-agent/stargazers)
+[![Forks](https://img.shields.io/github/forks/Dingye233/wechat-group-agent?style=flat-square&color=8957e5)](https://github.com/Dingye233/wechat-group-agent/forks)
+[![Issues](https://img.shields.io/github/issues/Dingye233/wechat-group-agent?style=flat-square&color=3fb950)](https://github.com/Dingye233/wechat-group-agent/issues)
+[![License](https://img.shields.io/github/license/Dingye233/wechat-group-agent?style=flat-square&color=dbab09)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![DSH](https://img.shields.io/badge/DeepSeek%20Harness-ready-4D6BFE?style=flat-square)](https://github.com/deepseek-ai)
+
+扫码登录 → 按人设接话 → 群里有事它自己动手：读文件、跑命令、查天气、刷 B站、发动态、发表情包。
+
+[快速开始](#快速开始) · [功能一览](#1-功能一览) · [**在线展示页**](https://dingye233.github.io/wechat-group-agent/) · [表情包](#大肥鱼表情包)
+
+</div>
+
+---
+
+## 大肥鱼表情包
+
+群伴自带一套「大肥鱼」表情包（16 张，GIF + 标签 + 情绪分类），模型会按**人设**而不是机械镜像用户情绪来挑图：得意时举牌「吹牛第一」，被人吹牛就「有点无语」，朋友难受就「抱一个」。
+
+<p>
+<img src="docs/assets/stickers/happy.png" width="96" alt="鱼生快乐">
+<img src="docs/assets/stickers/story.png" width="96" alt="会讲故事">
+<img src="docs/assets/stickers/sea.png" width="96" alt="海是我的">
+<img src="docs/assets/stickers/listen.png" width="96" alt="听我讲海">
+<img src="docs/assets/stickers/boast.png" width="96" alt="吹牛第一">
+<img src="docs/assets/stickers/speechless.png" width="96" alt="有点无语">
+<img src="docs/assets/stickers/tired.png" width="96" alt="累成咸鱼">
+<img src="docs/assets/stickers/hug.png" width="96" alt="抱一个">
+</p>
+
+表情包模板来自开源项目 [dsh-nekowhale-stickers](https://www.npmjs.com/package/dsh-nekowhale-stickers)（大肥鱼 / GPT娘梗图），群伴把它渲染出的图放进自己的表情库，群里直接按 `sticker` 字段挑选。
+
+> 🎨 想先看效果？打开 [在线展示页](docs/index.html)（启用 GitHub Pages 后可直接访问）。
+
+---
+
+## 这个 Agent 能干什么
+
+| | 能力 | 说明 |
+| --- | --- | --- |
+| 💬 | 群聊接话 | 按人设、按触发规则（@ / 关键词 / 概率 / 冷却）自动接话，支持拆成多条短消息 |
+| 🧠 | 长期记忆 | mem0 + Chroma 语义记忆，跨会话记得住人名、项目、偏好 |
+| 🖥️ | 会动手 | 读写文件、跑 PowerShell、装插件、开技能、挂定时任务（全部走可控工具层） |
+| 📺 | B站 | 搜视频、看视频、点赞、收藏、评论（正文可带 [doge] 等小黄脸，也能附表情包图片）、发动态 |
+| 🐟 | 表情包 | 16 张大肥鱼梗图 + 自定义上传，按人设挑选，群聊/私聊都能发 |
+| 🧩 | 可拓展 | 适配器、事件总线、人设、技能、MCP 项目、DSH 插件全部解耦 |
+
+---
+
+## 技术栈与运行说明
 
 一个可拓展的微信群聊 Agent 服务：扫码登录微信、实时读取群消息与成员昵称、按人设自动接话，并且能自己挑表情包发出去。
 
@@ -6,7 +64,7 @@
 - **前端**：原生 HTML/CSS/JS 控制台，无需前端构建
 - **适配器**：演示模式；Windows 真实微信使用「微信 4.x（wechatauto-replica）」本地数据库读取 + UIA/OCR 发送，WeChatFerry 仅保留为实验备选
 - **模型**：任意 OpenAI Compatible API（DeepSeek / OpenAI / Moonshot / Qwen / Ollama…）；每个群伴用户自己配置 Base URL、Key 和模型，仓库不内置任何 Key
-- **表情包**：内置示例 + 上传 PNG/JPG/GIF/WEBP，模型按标签与语境自动选择
+- **表情包**：内置 16 张大肥鱼梗图 + 上传 PNG/JPG/GIF/WEBP，模型按标签、人设与语境自动选择
 - **可拓展**：适配器、事件总线、触发规则、人设、表情库均解耦
 
 > 个人微信自动化存在平台风控与封号风险，请使用小号测试，并控制回复频率。
