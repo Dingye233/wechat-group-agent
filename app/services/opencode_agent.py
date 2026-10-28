@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -112,6 +113,10 @@ class OpenCodeRuntime:
         self._sessions_loaded = False
         self._lock = asyncio.Lock()
         self._tools_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
+        self._task_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
+        self._message_cache: dict[
+            str, tuple[float, list[dict[str, Any]]]
+        ] = {}
 
     # --------------------------------------------------------------- lifecycle
     @property
@@ -286,6 +291,8 @@ class OpenCodeRuntime:
         self.process = None
         self.port = 0
         self.url = ""
+        self._task_cache = (0.0, [])
+        self._message_cache.clear()
         with contextlib.suppress(Exception):
             PID_PATH.unlink()
 
@@ -447,6 +454,8 @@ class OpenCodeRuntime:
         sessions = self._load_sessions()
         sid = sessions.pop(session_id, None)
         self._save_sessions()
+        self._task_cache = (0.0, [])
+        self._message_cache.clear()
         if sid and self.running:
             with contextlib.suppress(Exception):
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -987,6 +996,141 @@ class OpenCodeRuntime:
             return response.status_code == 200
         except Exception:
             return False
+
+    async def sessions(self, limit: int = 30) -> list[dict[str, Any]]:
+        if not self.running:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(
+                    f"{self.url}/session",
+                    params={"directory": str(WORKSPACE)},
+                )
+            rows = response.json() if response.status_code == 200 else []
+        except Exception as exc:
+            logger.debug("OpenCode session list failed: %s", exc)
+            return []
+        rows = [row for row in rows if isinstance(row, dict)]
+        rows.sort(
+            key=lambda row: int((row.get("time") or {}).get("updated") or 0),
+            reverse=True,
+        )
+        return rows[: max(1, int(limit))]
+
+    async def session_messages(
+        self, session_id: str, limit: int = 80
+    ) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        cached = self._message_cache.get(session_id)
+        if cached and now - cached[0] < 5.0:
+            return cached[1]
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(
+                    f"{self.url}/session/{session_id}/message",
+                    params={"directory": str(WORKSPACE)},
+                )
+            rows = response.json() if response.status_code == 200 else []
+        except Exception as exc:
+            logger.debug("OpenCode session messages failed: %s", exc)
+            rows = []
+        rows = [row for row in rows if isinstance(row, dict)]
+        rows = rows[-max(1, int(limit)) :]
+        self._message_cache[session_id] = (now, rows)
+        return rows
+
+    @staticmethod
+    def _summarize_session(
+        session: dict[str, Any], messages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        title = str(session.get("title") or "")
+        user_text = ""
+        assistant_text = ""
+        tool_count = 0
+        last_role = ""
+        last_completed = True
+        for row in messages:
+            info = row.get("info") or {}
+            role = str(info.get("role") or "")
+            parts = row.get("parts") or []
+            texts = [
+                str(part.get("text") or "").strip()
+                for part in parts
+                if part.get("type") == "text"
+                and str(part.get("text") or "").strip()
+            ]
+            if role == "user":
+                last_role = "user"
+                if texts:
+                    user_text = "\n".join(texts)
+            elif role == "assistant":
+                last_role = "assistant"
+                tool_count += sum(
+                    1 for part in parts if part.get("type") == "tool"
+                )
+                if texts:
+                    assistant_text = "\n".join(texts)
+                last_completed = bool(
+                    (info.get("time") or {}).get("completed")
+                )
+        if not messages:
+            status = "idle"
+        elif last_role == "user":
+            status = "running"
+        elif last_role == "assistant" and not last_completed:
+            status = "running"
+        else:
+            status = "done"
+        updated_ms = int((session.get("time") or {}).get("updated") or 0)
+        updated_at = (
+            datetime.fromtimestamp(
+                updated_ms / 1000, timezone.utc
+            ).isoformat()
+            if updated_ms
+            else ""
+        )
+        return {
+            "session_id": str(session.get("id") or ""),
+            "title": title,
+            "label": title or "OpenCode 任务",
+            "status": status,
+            "last_user": user_text[-800:],
+            "last_assistant": assistant_text[-1000:],
+            "tool_count": tool_count,
+            "updated_at": updated_at,
+            "tokens": session.get("tokens") or {},
+        }
+
+    async def task_snapshots(
+        self, limit: int = 12, cache_seconds: float = 4.0
+    ) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        if self._task_cache[0] and now - self._task_cache[0] < cache_seconds:
+            return self._task_cache[1]
+        sessions = await self.sessions(limit=max(int(limit), 12))
+        sessions = [
+            session
+            for session in sessions
+            if str(session.get("title") or "").startswith("群伴")
+            or "group-task-" in str(session.get("title") or "")
+        ]
+        semaphore = asyncio.Semaphore(5)
+
+        async def one(session: dict[str, Any]) -> dict[str, Any] | None:
+            session_id = str(session.get("id") or "")
+            if not session_id:
+                return None
+            async with semaphore:
+                messages = await self.session_messages(session_id)
+            return self._summarize_session(session, messages)
+
+        rows = await asyncio.gather(
+            *(one(session) for session in sessions),
+            return_exceptions=True,
+        )
+        tasks = [row for row in rows if isinstance(row, dict)]
+        self._task_cache = (now, tasks)
+        return tasks
 
     # ------------------------------------------------------------- inspection
     async def tools(self, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:

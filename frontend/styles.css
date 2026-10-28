@@ -895,6 +895,21 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .chat-task-query { margin-top: 5px; font-size: 9.5px; line-height: 1.55; color: #b5cabe; word-break: break-word; }
 .chat-task-result { margin-top: 4px; font-size: 9px; line-height: 1.5; color: var(--muted); word-break: break-word; }
 .chat-task-error { margin-top: 4px; font-size: 9px; line-height: 1.5; color: #ffb4b4; word-break: break-word; }
+.chat-task-badges { display: flex; align-items: center; gap: 4px; flex: none; }
+.chat-task-engine { font-family: inherit; font-size: 8.5px; padding: 1px 5px; border-radius: 4px; border: 1px solid rgba(96, 165, 250, 0.4); color: #93c5fd; background: rgba(96, 165, 250, 0.1); cursor: pointer; }
+.chat-task-engine:hover { background: rgba(96, 165, 250, 0.2); }
+.opencode-task-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; margin: 7px 0; }
+.opencode-task-list .muted { font-size: 10.5px; line-height: 1.6; }
+.opencode-task-item { padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, 0.02); }
+.opencode-task-item.running, .opencode-task-item.pending { border-color: rgba(251, 191, 36, 0.3); }
+.opencode-task-item.error { border-color: rgba(248, 113, 113, 0.35); }
+.opencode-task-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.opencode-task-head strong { font-size: 10px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opencode-task-meta { margin-top: 4px; font-size: 9px; color: var(--muted); }
+.opencode-task-query { margin-top: 5px; font-size: 9.5px; line-height: 1.5; color: #b5cabe; word-break: break-word; }
+.opencode-task-result { margin-top: 4px; font-size: 9px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+.opencode-task-error { margin-top: 4px; font-size: 9px; line-height: 1.5; color: #ffb4b4; word-break: break-word; }
+.opencode-task-time { margin-top: 4px; font-size: 8.5px; color: var(--muted-2); }
 
 /* ---------------------------------------------------------- sticker / settings pages */
 .page { max-width: 1280px; margin: 0 auto; padding: 30px 34px 50px; min-height: 100%; }

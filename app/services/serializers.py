@@ -112,6 +112,7 @@ def chat_task_dict(task: ChatTask) -> dict[str, Any]:
         "user_name": task.user_name,
         "intent": task.intent,
         "query": task.query,
+        "engine": str((task.plan or {}).get("engine") or "qunban"),
         "status": task.status,
         "result": task.result,
         "error": task.error,

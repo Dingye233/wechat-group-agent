@@ -4,17 +4,19 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
+from app.models import ChatTask, Group
 from app.services import assistant_tools, tool_registry
 from app.services.assistant import AssistantService
 from app.services.capabilities import list_capabilities
@@ -96,6 +98,56 @@ async def _run_script_tool(
 @router.get("/opencode/status")
 async def opencode_status() -> dict:
     return {"opencode": await _runtime().status()}
+
+
+@router.get("/opencode/tasks")
+async def opencode_tasks(
+    limit: int = Query(default=12, ge=1, le=30),
+) -> dict:
+    """OpenCode sessions synced into the Qunban task panel."""
+
+    runtime = _runtime()
+    if not runtime.running:
+        return {"tasks": [], "running": False}
+    try:
+        tasks = await runtime.task_snapshots(limit=limit)
+    except Exception as exc:
+        logger.warning("读取 OpenCode 任务失败：%s", exc)
+        return {"tasks": [], "running": True, "error": str(exc)}
+    async with SessionLocal() as db:
+        for item in tasks:
+            title = str(item.get("title") or "")
+            match = re.search(r"group-task-(\d+)(?:-(\d+))?", title)
+            if not match:
+                item["label"] = title or "OpenCode 任务"
+                continue
+            task_id = int(match.group(1))
+            message_id = int(match.group(2) or 0)
+            item["group_task_id"] = task_id
+            row = await db.get(ChatTask, task_id)
+            if row is not None and message_id and row.message_id:
+                if int(row.message_id) != message_id:
+                    row = None
+            if row is None:
+                item["label"] = f"群聊任务 #{task_id}（历史）"
+                continue
+            group = await db.get(Group, row.group_id)
+            item.update(
+                {
+                    "label": (
+                        f"群聊任务 #{row.id}"
+                        + (f" · {group.name}" if group and group.name else "")
+                    ),
+                    "group_id": row.group_id,
+                    "group_name": group.name if group else "",
+                    "user_name": row.user_name,
+                    "query": row.query,
+                    "status": row.status,
+                    "result": row.result or item.get("last_assistant") or "",
+                    "error": row.error,
+                }
+            )
+    return {"tasks": tasks, "running": True}
 
 
 @router.get("/opencode/tools")

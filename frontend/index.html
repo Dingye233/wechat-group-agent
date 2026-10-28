@@ -7,7 +7,7 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261028-52">
+  <link rel="stylesheet" href="/styles.css?v=20261028-54">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -510,6 +510,8 @@
                   <button class="btn btn-ghost" id="opencode-restart">重启 OpenCode</button>
                   <button class="btn btn-ghost" id="opencode-reset">重置当前会话</button>
                 </div>
+                <div class="assistant-section-head"><strong>OpenCode 任务</strong><span class="tool-meta" id="opencode-task-count">0</span><button class="text-btn" id="opencode-tasks-refresh">刷新</button></div>
+                <div class="opencode-task-list" id="opencode-task-list"><p class="muted">暂无 OpenCode 任务</p></div>
                 <div class="assistant-section-head"><strong>工具</strong><span class="tool-meta" id="opencode-tool-count">0</span></div>
                 <p class="field-hint">群伴原生工具清单由 OpenCode 管理；可以对话让 Agent 调用 <code>qunban_tool_admin</code> 新增别名、改描述、停用、删除或同步工具。要让 Agent 造真正的新功能，可在 <code>data/opencode/tools/</code> 写脚本，再用 <code>handler_type="script"</code> 注册。</p>
                 <div class="assistant-file-list" id="opencode-tool-list"></div>
@@ -894,6 +896,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-52" defer></script>
+  <script src="/app.js?v=20261028-54" defer></script>
 </body>
 </html>

@@ -86,6 +86,8 @@ const state = {
   biliPasswordTimer: null,
   biliPasswordSession: '',
   chatTasks: [],
+  opencodeTasks: [],
+  opencodeTaskTimer: null,
   detached: false,
   detachReason: '',
   unread: new Map(),
@@ -2008,7 +2010,26 @@ function renderChatTasks() {
     const item = el('div', `chat-task-item ${task.status || 'pending'}`);
     const head = el('div', 'chat-task-head');
     head.appendChild(el('strong', null, `#${task.id} ${task.user_name || '群友'}`));
-    head.appendChild(el('span', `chat-task-status ${task.status || 'pending'}`, CHAT_TASK_LABELS[task.status] || task.status));
+    const badges = el('div', 'chat-task-badges');
+    if (task.engine === 'opencode') {
+      const openCodeBadge = el('button', 'chat-task-engine', 'OpenCode');
+      openCodeBadge.type = 'button';
+      openCodeBadge.title = '查看 OpenCode 任务';
+      openCodeBadge.addEventListener('click', () => {
+        document.querySelector('button[data-tab="assistant"]')?.click();
+        switchAssistantPanel('opencode');
+        loadOpenCode();
+      });
+      badges.appendChild(openCodeBadge);
+    }
+    badges.appendChild(
+      el(
+        'span',
+        `chat-task-status ${task.status || 'pending'}`,
+        CHAT_TASK_LABELS[task.status] || task.status,
+      ),
+    );
+    head.appendChild(badges);
     item.appendChild(head);
     item.appendChild(el('p', 'chat-task-query', task.query || ''));
     if (task.result) item.appendChild(el('p', 'chat-task-result', `结果：${task.result.slice(0, 180)}`));
@@ -3649,6 +3670,17 @@ function switchAssistantPanel(name) {
   $$('[data-assistant-panel-body]').forEach((panel) => {
     panel.hidden = panel.dataset.assistantPanelBody !== name;
   });
+  if (state.opencodeTaskTimer) {
+    clearInterval(state.opencodeTaskTimer);
+    state.opencodeTaskTimer = null;
+  }
+  if (name === 'opencode') {
+    state.opencodeTaskTimer = setInterval(() => {
+      if (state.assistantPanel === 'opencode' && state.currentTab === 'assistant') {
+        loadOpenCodeTasks().catch(() => {});
+      }
+    }, 4000);
+  }
 }
 
 async function loadOpenCode() {
@@ -3754,9 +3786,86 @@ async function loadOpenCode() {
       const count = $('#opencode-project-count');
       if (count) count.textContent = String(rows.length);
     }
+    await loadOpenCodeTasks();
   } catch (error) {
     if (statusLine) statusLine.textContent = `读取失败：${error.message}`;
     toast(error.message, 'error');
+  }
+}
+
+const OPENCODE_TASK_LABELS = {
+  pending: '排队中',
+  running: '运行中',
+  done: '已完成',
+  error: '失败',
+  cancelled: '已取消',
+  idle: '空闲',
+};
+
+async function loadOpenCodeTasks() {
+  const root = $('#opencode-task-list');
+  if (!root) return;
+  try {
+    const data = await api('/opencode/tasks?limit=12');
+    state.opencodeTasks = data.tasks || [];
+    const count = $('#opencode-task-count');
+    if (count) count.textContent = String(state.opencodeTasks.length);
+    root.replaceChildren();
+    if (!state.opencodeTasks.length) {
+      root.appendChild(
+        el('p', 'muted', data.running ? '暂无 OpenCode 任务' : 'OpenCode 尚未启动'),
+      );
+      return;
+    }
+    for (const task of state.opencodeTasks) {
+      const item = el('div', `opencode-task-item ${task.status || 'idle'}`);
+      const head = el('div', 'opencode-task-head');
+      head.appendChild(el('strong', null, task.label || task.title || 'OpenCode 任务'));
+      head.appendChild(
+        el(
+          'span',
+          `chat-task-status ${task.status || 'idle'}`,
+          OPENCODE_TASK_LABELS[task.status] || task.status || '空闲',
+        ),
+      );
+      item.appendChild(head);
+      const meta = [
+        task.group_name,
+        task.user_name,
+        task.tool_count ? `${task.tool_count} 个工具` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      if (meta) item.appendChild(el('p', 'opencode-task-meta', meta));
+      const query = String(task.query || task.last_user || '').trim();
+      if (query) item.appendChild(el('p', 'opencode-task-query', query.slice(0, 220)));
+      const result = String(task.error || task.result || task.last_assistant || '').trim();
+      if (result) {
+        item.appendChild(
+          el(
+            'p',
+            task.error ? 'opencode-task-error' : 'opencode-task-result',
+            result.slice(0, 280),
+          ),
+        );
+      }
+      if (task.updated_at) {
+        let timeText = '';
+        try {
+          timeText = new Date(task.updated_at).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          });
+        } catch {
+          timeText = '';
+        }
+        if (timeText) item.appendChild(el('p', 'opencode-task-time', timeText));
+      }
+      root.appendChild(item);
+    }
+  } catch (error) {
+    root.replaceChildren(el('p', 'muted', `读取失败：${error.message}`));
   }
 }
 
@@ -4719,6 +4828,7 @@ function bindAssistantActions() {
     });
   });
   $('#opencode-refresh')?.addEventListener('click', loadOpenCode);
+  $('#opencode-tasks-refresh')?.addEventListener('click', loadOpenCodeTasks);
   $('#opencode-restart')?.addEventListener('click', async () => {
     try {
       await api('/opencode/restart', { method: 'POST' });

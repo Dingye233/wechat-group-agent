@@ -415,6 +415,7 @@ class AgentEngine:
             "user_name": row.user_name,
             "intent": row.intent,
             "query": row.query,
+            "engine": str((row.plan or {}).get("engine") or "qunban"),
             "status": row.status,
             "result": row.result,
             "error": row.error,
