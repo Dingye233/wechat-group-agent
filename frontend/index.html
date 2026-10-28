@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%2307c160'/%3E%3Cstop offset='1' stop-color='%2300d4ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%23081511'/%3E%3Cpath d='M18 22c0-4 4-7 9-7h10c5 0 9 3 9 7v8c0 4-4 7-9 7h-5l-7 6v-6c-4-1-7-4-7-7z' fill='url(%23g)'/%3E%3Ccircle cx='27' cy='26' r='2.4' fill='%23081511'/%3E%3Ccircle cx='38' cy='26' r='2.4' fill='%23081511'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/styles.css?v=20261028-29">
+  <link rel="stylesheet" href="/styles.css?v=20261028-33">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -285,6 +285,12 @@
             <section class="surface assistant-chat">
               <div class="assistant-chat-head">
                 <div><strong>操作对话</strong><small id="assistant-model-hint">读取模型状态中…</small></div>
+                <label class="assistant-conversation-picker" title="切换 Operator 主对话或微信私聊">
+                  <span>对话</span>
+                  <select id="assistant-conversation-select">
+                    <option value="main">主对话</option>
+                  </select>
+                </label>
                 <label class="assistant-step-control" title="每次任务最多连续调用工具的次数；0 = 不限制，仍有 500 步 / 30 分钟安全上限">
                   <span>最大步数 <small>0 = 不限</small></span>
                   <input type="number" id="assistant-max-steps" min="0" max="500" step="1" value="0">
@@ -852,6 +858,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-29" defer></script>
+  <script src="/app.js?v=20261028-33" defer></script>
 </body>
 </html>

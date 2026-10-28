@@ -107,7 +107,9 @@ class AgentEngine:
         # window and only let the newest trigger for this group reply. This
         # avoids two or three answers for messages sent seconds apart.
         self._latest_trigger[group_id] = message_id
-        await asyncio.sleep(random.uniform(1.0, 2.5))
+        # Short burst-coalescing window. The previous 1.0-2.5s window made a
+        # normal group reply feel noticeably delayed.
+        await asyncio.sleep(random.uniform(0.3, 0.9))
         if self._latest_trigger.get(group_id) != message_id:
             return
 
@@ -409,6 +411,7 @@ class AgentEngine:
                 query=query,
                 limit=max(1, int(settings.get("memory_context_items") or 8)),
                 group_id=group_id,
+                timeout=4.0,
             )
             template = str(
                 settings.get("memory_prompt_template")

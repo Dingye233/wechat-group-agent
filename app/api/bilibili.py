@@ -307,6 +307,21 @@ async def bili_videos(limit: int = Query(default=20, ge=1, le=100)) -> dict:
     }
 
 
+@router.post("/bili/knowledge/add")
+async def bili_knowledge_add(
+    payload: dict = Body(...),
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    try:
+        return await bilibili.record_video_to_knowledge(
+            str(payload.get("bvid") or ""),
+            str(payload.get("model") or "small"),
+            _account_key(runtime),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/bili/knowledge/search")
 async def bili_knowledge_search(
     q: str = Query(min_length=1, max_length=200),

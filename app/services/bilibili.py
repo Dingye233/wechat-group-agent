@@ -913,6 +913,38 @@ async def transcribe_video(
     return {"bvid": bvid, "text": text, "source": "asr", "model": model_size}
 
 
+async def record_video_to_knowledge(
+    bvid: str,
+    model_size: str = "small",
+    account_key: str = "",
+) -> dict[str, Any]:
+    """Transcribe a video on demand and add it to the local knowledge base."""
+    bvid = str(bvid or "").strip()
+    if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid):
+        raise ValueError("bvid 格式不正确")
+    info = await video_info(bvid)
+    transcribed = await transcribe_video(bvid, model_size, account_key)
+    from app.services import bili_knowledge
+
+    added = await bili_knowledge.add_video_async(
+        bvid=str(bvid or "").strip(),
+        title=str(info.get("title") or bvid),
+        author=str(info.get("author") or ""),
+        url=str(info.get("url") or ""),
+        transcript=str(transcribed.get("text") or ""),
+        summary="",
+        topics=[],
+    )
+    return {
+        "bvid": bvid,
+        "title": info.get("title") or bvid,
+        "recorded": True,
+        "chunks": int(added.get("added") or 0),
+        "transcript_source": transcribed.get("source") or "",
+        "transcript_chars": len(str(transcribed.get("text") or "")),
+    }
+
+
 async def get_video_comments(
     bvid: str, limit: int = 10, account_key: str = ""
 ) -> list[dict[str, Any]]:

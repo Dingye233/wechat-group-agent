@@ -79,6 +79,7 @@
 - **Cookie 持久化**：扫码登录成功后会把完整 Cookie（`SESSDATA`、`bili_jct`、`buvid3`、`buvid4`、`DedeUserID`、`ac_time_value` 以及 `buvid_fp`、`b_nut`、`sid` 等额外字段）保存到本地 `bili_accounts.cookie_json`，重启服务后自动复用；原始 Cookie 不会返回前端，只在本地数据库和接口请求中使用。
 - **音频转文字**：优先使用 B站字幕/AI 总结（需登录）；没有字幕时用 `faster-whisper`（small 模型，CPU）把下载的音频转成中文文本。模型默认从 hf-mirror 下载，首次使用会慢一些。
 - **视频知识库**：转写文本、总结和主题会写入本地 **ChromaDB** 向量库，中文 embedding 使用 **BGE-small-zh-v1.5**（fastembed）。Agent 可以用 `bili_knowledge_search` 检索已刷过的视频内容。
+- **按需记录**：手动查阅 B站视频时，可点视频行「记」按需转写并写入知识库；Agent 也可调用 `bili_knowledge_add` 只记录当前需要的视频，不必把每个看过的视频都入库。
 - B站实现参考 [bilibili-api-python](https://github.com/Nemo2011/bilibili-api)（GitHub 高星 B站 API 库）；ASR 参考 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 与 [FunASR/SenseVoice](https://github.com/modelscope/FunASR)（中文场景更优的备选）；知识库使用 [ChromaDB](https://github.com/chroma-core/chroma)（约 2.7 万 star）。主动对话设计参考 [Thoughtful Agents](https://github.com/xybruceliu/thoughtful-agents) 与 Proactive Conversational Agents（Inner Thoughts）的思路。
 - B站自动化可能受平台风控和社区规则限制，请只用自己的账号并控制频率；不要用于刷量、营销或骚扰。
 

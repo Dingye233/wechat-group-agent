@@ -109,6 +109,7 @@ _TOOL_LABELS = {
     "bili_comments": "读取 B站评论",
     "bili_reply_comment": "回复 B站评论",
     "bili_knowledge_search": "检索 B站知识库",
+    "bili_knowledge_add": "记录 B站视频到知识库",
 }
 
 
@@ -1358,9 +1359,11 @@ class RuntimeManager:
     ) -> str:
         phase = str(event.get("phase") or "")
         if phase == "start":
-            state["sent"] = int(state.get("sent") or 0) + 1
-            state["last_sent"] = time.monotonic()
-            return "收到，我开始处理。"
+            # Do not spend a full WeChat UI send on an acknowledgement. For a
+            # normal chat this was adding 5-15 seconds before the model even
+            # started. Tool/failure progress is still sent when it is useful.
+            state["started"] = time.monotonic()
+            return ""
         if phase == "queued":
             state["sent"] = int(state.get("sent") or 0) + 1
             state["last_sent"] = time.monotonic()
@@ -1480,8 +1483,10 @@ class RuntimeManager:
             clean = "\n".join([*pending, clean])
 
         async def run() -> None:
+            progress_queue: asyncio.Queue[str] = asyncio.Queue()
+            progress_worker: asyncio.Task | None = None
             try:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.2)
                 if self.detached:
                     logger.warning(
                         "管理员消息已收到，但检测到用户重新接管微信，"
@@ -1510,12 +1515,28 @@ class RuntimeManager:
                     "max": 6,
                 }
 
+                async def progress_worker_loop() -> None:
+                    while True:
+                        message = await progress_queue.get()
+                        try:
+                            await self._send_admin_notice(
+                                contact_id, message, allow_seconds=8.0
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            logger.warning("发送管理员进度失败: %s", exc)
+                        finally:
+                            progress_queue.task_done()
+
+                progress_worker = asyncio.create_task(
+                    progress_worker_loop(), name=f"admin-progress-{wxid}"
+                )
+
                 async def emit_progress(event: dict[str, Any]) -> None:
                     message = self._admin_progress_text(event, progress_state)
                     if message:
-                        await self._send_admin_notice(
-                            contact_id, message, allow_seconds=8.0
-                        )
+                        progress_queue.put_nowait(message)
 
                 result = await service.chat(
                     clean,
@@ -1537,6 +1558,11 @@ class RuntimeManager:
                 reply = str(result.get("reply") or "").strip()
                 if not reply:
                     return
+                # Always wait for in-flight progress work. Checking empty() is
+                # racy: the worker may have dequeued the last item but not
+                # finished sending it yet, and the final reply would overtake
+                # or cancel that message.
+                await progress_queue.join()
                 image_paths = RuntimeManager._image_paths_from_trace(
                     result.get("trace") or []
                 )
@@ -1561,6 +1587,11 @@ class RuntimeManager:
                 await self._send_admin_notice(
                     contact_id, f"Agent 执行失败：{exc}"
                 )
+            finally:
+                if progress_worker is not None:
+                    progress_worker.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await progress_worker
 
         task = asyncio.create_task(run(), name=f"admin-chat-{wxid}")
         self._admin_tasks[wxid] = task

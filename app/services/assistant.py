@@ -652,6 +652,7 @@ class AssistantService:
                 account_key=account_key,
                 query=message,
                 limit=memory_limit,
+                timeout=4.0,
             )
             if mem0_items:
                 remembers = _merge_memories(

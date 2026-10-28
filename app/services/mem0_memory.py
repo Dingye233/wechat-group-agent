@@ -197,6 +197,7 @@ async def search(
     limit: int = 8,
     group_id: int | str | None = None,
     contact_id: int | str | None = None,
+    timeout: float = 8.0,
 ) -> list[dict[str, Any]]:
     """Semantic search over Mem0 memories, filtered by group/contact metadata."""
     memory = await _get_memory(settings)
@@ -219,7 +220,7 @@ async def search(
                         top_k=max(1, min(100, int(limit) * 4)),
                         filters=filters,
                     ),
-                    timeout=8.0,
+                    timeout=max(1.0, float(timeout)),
                 )
             else:
                 raw = await asyncio.wait_for(
@@ -228,7 +229,7 @@ async def search(
                         filters=filters,
                         top_k=1000,
                     ),
-                    timeout=8.0,
+                    timeout=max(1.0, float(timeout)),
                 )
     except Exception as exc:
         logger.warning("Mem0 检索失败，回退 SQLite 记忆：%s", exc)

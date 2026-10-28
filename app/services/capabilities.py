@@ -64,6 +64,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     {"name": "bili_comments", "label": "B站评论列表", "desc": "读取视频热门评论", "risk": "low"},
     {"name": "bili_reply_comment", "label": "B站回复评论", "desc": "回复指定评论，需登录", "risk": "high"},
     {"name": "bili_knowledge_search", "label": "B站知识库", "desc": "检索已转写视频的语义知识库", "risk": "low"},
+    {"name": "bili_knowledge_add", "label": "B站知识库写入", "desc": "按需转写视频并写入知识库", "risk": "medium"},
 ]
 
 DESKTOP_NAMES = {
@@ -726,6 +727,11 @@ async def execute_capability(name: str, args: dict[str, Any], scope: str) -> Any
                     int(args.get("limit") or 5),
                 )
             }
+        if name == "bili_knowledge_add":
+            return await bilibili.record_video_to_knowledge(
+                str(args.get("bvid") or ""),
+                str(args.get("model") or "small"),
+            )
     if name in DESKTOP_NAMES:
         return await asyncio.to_thread(desktop.execute, name, args)
     return await asyncio.to_thread(

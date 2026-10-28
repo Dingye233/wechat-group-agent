@@ -91,10 +91,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_trigger_mode": "mention",
     "default_keywords": [],
     "context_messages": 18,
-    "reply_delay_seconds": 2.5,
-    "reply_delay_random_seconds": 4.0,
+    "reply_delay_seconds": 0.8,
+    "reply_delay_random_seconds": 1.5,
     "reply_cooldown_jitter_seconds": 20.0,
-    "reply_global_interval_seconds": 8.0,
+    "reply_global_interval_seconds": 3.0,
     # Database polling is cheap; keep the default responsive. Per-group
     # read_interval_seconds can still override this.
     "read_poll_interval_seconds": 1.0,

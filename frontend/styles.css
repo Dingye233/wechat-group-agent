@@ -1121,6 +1121,8 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .assistant-chat-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .assistant-chat-head strong { display: block; font-size: 12px; }
 .assistant-chat-head small { display: block; font-size: 9.5px; color: var(--muted); margin-top: 3px; }
+.assistant-conversation-picker { display: flex; align-items: center; gap: 5px; flex: none; color: var(--muted); font-size: 9px; }
+.assistant-conversation-picker select { max-width: 165px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: rgba(0,0,0,0.18); color: var(--text); font-size: 9.5px; }
 .assistant-step-control { display: flex; align-items: center; gap: 5px; flex: none; color: var(--muted); font-size: 9px; }
 .assistant-step-control input { width: 54px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: rgba(0,0,0,0.18); color: var(--text); font-size: 10px; }
 .assistant-messages { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 11px; }
@@ -1138,6 +1140,7 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .assistant-msg.user .assistant-avatar { color: var(--blue); background: rgba(0,196,255,0.08); }
 .assistant-bubble { max-width: 82%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,0.025); font-size: 11px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
 .assistant-msg.user .assistant-bubble { border-color: rgba(0,196,255,0.3); background: rgba(0,196,255,0.06); }
+.assistant-source { display: inline-block; margin-bottom: 4px; padding: 1px 6px; border-radius: 999px; border: 1px solid rgba(0,196,255,0.25); color: var(--blue); font-size: 8px; }
 .assistant-tool { margin: 4px 0 4px 34px; padding: 8px 10px; border-left: 2px solid var(--amber); border-radius: 0 8px 8px 0; background: rgba(255,200,100,0.045); font: 9.5px/1.6 "Cascadia Code", Consolas, monospace; color: #d6c69e; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
 .assistant-composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); align-items: flex-end; }
 .assistant-composer textarea { flex: 1; resize: none; min-height: 46px; max-height: 150px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,0.18); color: var(--text); font: inherit; font-size: 11px; }

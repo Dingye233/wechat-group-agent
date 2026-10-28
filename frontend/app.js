@@ -76,6 +76,8 @@ const state = {
   assistantContacts: [],
   assistantContactId: null,
   assistantContactQuery: '',
+  assistantConversation: 'main',
+  assistantConversationContactId: null,
   biliVideos: [],
   biliAccount: null,
   biliAuto: null,
@@ -3040,6 +3042,9 @@ function assistantMessageNode(row) {
   const wrapper = el('div', `assistant-msg ${row.role === 'user' ? 'user' : 'assistant'}`);
   const avatar = el('span', 'assistant-avatar', row.role === 'user' ? '你' : 'AI');
   const bubble = el('div', 'assistant-bubble');
+  if (row.meta?.source === 'wechat-contact') {
+    bubble.appendChild(el('span', 'assistant-source', '微信私聊'));
+  }
   if (row.kind === 'image' && row.media_url) {
     const img = el('img', 'assistant-image');
     img.src = row.media_url;
@@ -3059,7 +3064,11 @@ function renderAssistantMessages() {
   if (!root) return;
   if (!state.assistantHistory.length) {
     const empty = el('div', 'assistant-empty');
-    empty.innerHTML = `${icon('sparkles', 26)}<h3>可以直接下命令</h3><p>例如：“检查工作区”“创建一个 MCP 项目”“写一个技能整理群聊记忆”。</p>`;
+    if (state.assistantConversation !== 'main') {
+      empty.innerHTML = `${icon('chat', 26)}<h3>还没有私聊记录</h3><p>在微信里给这个联系人发一条消息，或切换到其他私聊。</p>`;
+    } else {
+      empty.innerHTML = `${icon('sparkles', 26)}<h3>可以直接下命令</h3><p>例如：“检查工作区”“创建一个 MCP 项目”“写一个技能整理群聊记忆”。</p>`;
+    }
     root.replaceChildren(empty);
     return;
   }
@@ -3130,12 +3139,132 @@ async function saveAssistantMaxSteps() {
 
 async function loadAssistantHistory() {
   try {
+    const conversation = state.assistantConversation;
     const data = await api('/assistant/history?session_id=main&limit=100');
+    if (conversation !== 'main' || state.assistantConversation !== 'main') return;
     state.assistantHistory = data.messages || [];
     renderAssistantMessages();
   } catch (error) {
     toast(error.message, 'error');
   }
+}
+
+function assistantContactById(contactId) {
+  return (
+    state.assistantContacts.find((item) => item.id === contactId) ||
+    state.contacts.find((item) => item.id === contactId) ||
+    null
+  );
+}
+
+function populateAssistantConversationOptions() {
+  const select = $('#assistant-conversation-select');
+  if (!select) return;
+  const current = state.assistantConversation || 'main';
+  const contacts = state.assistantContacts.length
+    ? state.assistantContacts
+    : state.contacts;
+  const options = [new Option('主对话（Operator）', 'main')];
+  for (const contact of contacts || []) {
+    const name = contact.name || contact.remark || contact.wxid || `联系人 ${contact.id}`;
+    options.push(new Option(`私聊 · ${name}`, `contact:${contact.id}`));
+  }
+  select.replaceChildren(...options);
+  if (Array.from(select.options).some((option) => option.value === current)) {
+    select.value = current;
+  } else {
+    select.value = 'main';
+    state.assistantConversation = 'main';
+    state.assistantConversationContactId = null;
+  }
+}
+
+async function loadAssistantConversationOptions() {
+  populateAssistantConversationOptions();
+  if (state.assistantContacts.length || state.contacts.length) return;
+  try {
+    const data = await api('/contacts');
+    state.assistantContacts = data.contacts || [];
+    state.contacts = state.assistantContacts;
+    populateAssistantConversationOptions();
+  } catch (error) {
+    console.warn('assistant conversations', error);
+  }
+}
+
+async function loadContactConversation(contactId) {
+  const contact = assistantContactById(contactId);
+  const input = $('#assistant-input');
+  if (input) {
+    input.placeholder = `发送微信私聊给 ${contact?.name || contact?.remark || contact?.wxid || '联系人'}…`;
+  }
+  const send = $('#assistant-send');
+  if (send) send.textContent = '发送到微信';
+  const stop = $('#assistant-stop');
+  if (stop) stop.hidden = true;
+  const data = await api(`/contacts/${contactId}/messages?limit=150`);
+  if (
+    state.assistantConversation !== `contact:${contactId}` ||
+    state.assistantConversationContactId !== Number(contactId)
+  ) {
+    return;
+  }
+  const rows = (data.messages || []).map((message) => {
+    const kind = message.kind || 'text';
+    let content = message.content || '';
+    if (!content) {
+      content = kind === 'sticker' ? '[表情包]' : kind === 'image' ? '[图片]' : `[${kind}]`;
+    }
+    return {
+      role: message.is_self ? 'assistant' : 'user',
+      content,
+      kind,
+      media_url: message.media_url || '',
+      created_at: message.created_at || null,
+      meta: {
+        ...(message.meta || {}),
+        source: message.is_self ? (message.meta?.source || 'wechat') : 'wechat-contact',
+        sender_name: message.sender_name || '',
+      },
+    };
+  });
+  rows.sort((left, right) => {
+    const a = left.created_at ? new Date(left.created_at).getTime() : 0;
+    const b = right.created_at ? new Date(right.created_at).getTime() : 0;
+    return a - b;
+  });
+  state.assistantHistory = rows;
+  renderAssistantMessages();
+  const root = $('#assistant-messages');
+  if (root) root.scrollTop = root.scrollHeight;
+}
+
+async function switchAssistantConversation(value) {
+  const match = /^contact:(\d+)$/.exec(String(value || ''));
+  state.assistantConversation = match ? `contact:${match[1]}` : 'main';
+  state.assistantConversationContactId = match ? Number(match[1]) : null;
+  const step = document.querySelector('.assistant-step-control');
+  if (step) step.hidden = Boolean(match);
+  const attach = $('#assistant-attach');
+  if (attach) attach.hidden = Boolean(match);
+  const stop = $('#assistant-stop');
+  if (match) {
+    if (stop) stop.hidden = true;
+    try {
+      await loadContactConversation(Number(match[1]));
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+    return;
+  }
+  if (step) step.hidden = false;
+  if (attach) attach.hidden = false;
+  const input = $('#assistant-input');
+  if (input) input.placeholder = '告诉 Agent 要做什么…（Enter 发送，Shift + Enter 换行）';
+  const send = $('#assistant-send');
+  if (send) send.textContent = '发送';
+  if (stop) stop.hidden = true;
+  await loadAssistantHistory();
 }
 
 async function uploadAssistantImage(file) {
@@ -3222,6 +3351,24 @@ async function sendAssistantMessage() {
   if (!text) return;
   const button = $('#assistant-send');
   const stopButton = $('#assistant-stop');
+
+  if (state.assistantConversation !== 'main') {
+    const contactId = state.assistantConversationContactId;
+    if (!contactId) return;
+    input.value = '';
+    try {
+      await api(`/contacts/${contactId}/send`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+      await loadContactConversation(contactId);
+      toast('已发送到微信私聊');
+    } catch (error) {
+      input.value = text;
+      toast(error.message, 'error');
+    }
+    return;
+  }
 
   // While a task is running, keep the same session and queue the message.
   // The backend treats it as a mid-task inserted requirement, not a new task.
@@ -3687,6 +3834,7 @@ async function loadAssistantContacts() {
     const data = await api('/contacts');
     state.assistantContacts = data.contacts || [];
     state.contacts = state.assistantContacts;
+    populateAssistantConversationOptions();
     renderAssistantContacts();
     const current = state.assistantContacts.find(
       (item) => item.id === state.assistantContactId,
@@ -4020,7 +4168,11 @@ function biliRenderVideos(videos) {
     const cmt = el('button', 'text-btn', '评');
     cmt.type = 'button';
     cmt.addEventListener('click', () => biliComment(video.bvid));
-    row.append(main, watch, like, cmt);
+    const remember = el('button', 'text-btn', '记');
+    remember.type = 'button';
+    remember.title = '按需转写并记录到知识库';
+    remember.addEventListener('click', () => biliRemember(video.bvid));
+    row.append(main, watch, like, cmt, remember);
     root.appendChild(row);
   }
 }
@@ -4045,6 +4197,27 @@ async function biliWatch(bvid) {
     toast(data.opened ? `已打开：${data.video?.title || bvid}` : '视频已读取，但浏览器未打开');
   } catch (error) {
     toast(error.message, 'error');
+  }
+}
+
+async function biliRemember(bvid) {
+  if (
+    !window.confirm(
+      '将下载音频并转写，可能耗时 1–3 分钟；完成后会写入本地知识库。继续？',
+    )
+  ) {
+    return;
+  }
+  toast('正在转写并记录到知识库…', 'info', 12000);
+  try {
+    const data = await api('/bili/knowledge/add', {
+      method: 'POST',
+      body: JSON.stringify({ bvid, model: 'small' }),
+    });
+    toast(`已记录：${data.title || bvid}（${data.chunks || 0} 段）`);
+    loadBiliAutopilot().catch(() => {});
+  } catch (error) {
+    toast(error.message, 'error', 6000);
   }
 }
 
@@ -4237,6 +4410,9 @@ async function runBiliAutopilot() {
 function bindAssistantActions() {
   $('#assistant-send')?.addEventListener('click', sendAssistantMessage);
   $('#assistant-stop')?.addEventListener('click', stopAssistant);
+  $('#assistant-conversation-select')?.addEventListener('change', (event) => {
+    switchAssistantConversation(event.target.value);
+  });
   $('#assistant-max-steps')?.addEventListener('change', saveAssistantMaxSteps);
   $('#assistant-max-steps')?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -4385,7 +4561,15 @@ function showTab(tab) {
   }
   if (tab === 'assistant') {
     loadAssistantStatus().catch(() => {});
-    loadAssistantHistory().catch(() => {});
+    if (
+      state.assistantConversation !== 'main' &&
+      state.assistantConversationContactId
+    ) {
+      loadContactConversation(state.assistantConversationContactId).catch(() => {});
+    } else {
+      loadAssistantHistory().catch(() => {});
+    }
+    loadAssistantConversationOptions().catch(() => {});
     loadAssistantFiles().catch(() => {});
   }
   if (tab === 'chats') {
