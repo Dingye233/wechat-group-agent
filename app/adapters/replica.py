@@ -1287,6 +1287,11 @@ class ReplicaAdapter(BaseAdapter):
                 name = str(self._db.group_id_to_name(username) or "").strip()
             except Exception:
                 name = ""
+            if not name or name == username:
+                try:
+                    name = str(self._db.get_nickname(username) or "").strip()
+                except Exception:
+                    name = ""
             if name and name != username:
                 self._resolved_group_names[username] = name
                 return name
@@ -1779,14 +1784,21 @@ class ReplicaAdapter(BaseAdapter):
     async def send_text(self, room_id: str, text: str) -> None:
         await asyncio.to_thread(self._send_text_sync, room_id, text)
 
-    def _prepare_send_gui(self, raw: str) -> Any:
+    def _prepare_send_gui(self, raw: str, name: str = "") -> Any:
         """Bind wechatauto to the current WeChat window and pre-open the chat.
 
-        This is deliberately done before ``SendMsg``: if the UIA/OCR driver
-        cannot open the target chat or find the input box, abort instead of
-        letting wechatauto blind-type into whatever window has focus.
+        Group/contact lookup deliberately uses the display name, never the raw
+        ``@chatroom`` ID.  After opening the chat we verify the resolved wxid
+        against the expected target; a same-name mismatch aborts the send.
         """
         self._ensure_attached()
+        display_name = str(name or self._group_name(raw) or "").strip()
+        if (
+            not display_name
+            or display_name == raw
+            or "@chatroom" in display_name.lower()
+        ):
+            raise RuntimeError("没有可用的群名，已取消发送，避免用 chatroom ID 搜索")
         hwnd = 0
         try:
             hwnd = self.recover_window()
@@ -1819,10 +1831,19 @@ class ReplicaAdapter(BaseAdapter):
                 gui._get_uia(refresh=True)
             except Exception:
                 pass
-        if not wx.ChatWith(raw, exact=False):
+        if not wx.ChatWith(display_name, exact=True):
             raise RuntimeError(
-                "wechatauto 无法打开目标会话或输入框，已取消发送，"
-                "避免键盘误输入到其他窗口"
+                f"按群名「{display_name}」没有打开目标会话或输入框，已取消发送"
+            )
+        resolved = str(getattr(wx, "_wxid", "") or "").strip()
+        if not resolved:
+            raise RuntimeError(
+                f"按群名「{display_name}」搜索后无法确认目标群身份，已取消发送"
+            )
+        if resolved != raw:
+            raise RuntimeError(
+                f"按群名「{display_name}」搜索后确认到 {resolved}，"
+                f"与目标 {raw} 不一致，已取消发送（可能同名群）"
             )
         if gui is not None and not gui.get_input_box():
             raise RuntimeError(
@@ -1834,10 +1855,16 @@ class ReplicaAdapter(BaseAdapter):
     async def preflight(self, room_id: str) -> dict[str, Any]:
         """Open the target chat and verify the input box, without sending."""
         raw = self._room_raw(room_id)
+        name = self._group_name(raw)
 
         def task() -> dict[str, Any]:
-            self._prepare_send_gui(raw)
-            return {"ok": True, "room": raw}
+            wx = self._prepare_send_gui(raw, name)
+            return {
+                "ok": True,
+                "room": raw,
+                "name": name,
+                "confirmed_wxid": str(getattr(wx, "_wxid", "") or ""),
+            }
 
         return await asyncio.to_thread(
             self._run_ui, task, 90.0, True
@@ -1846,10 +1873,11 @@ class ReplicaAdapter(BaseAdapter):
     def _send_text_sync(self, room_id: str, text: str) -> None:
         self._ensure_attached()
         raw = self._room_raw(room_id)
+        name = self._group_name(raw)
 
         def task() -> Any:
-            wx = self._prepare_send_gui(raw)
-            return wx.SendMsg(text, who=raw)
+            wx = self._prepare_send_gui(raw, name)
+            return wx.SendMsg(text, who=name, exact=True)
 
         self._send_with_retry(
             task,
@@ -1868,13 +1896,14 @@ class ReplicaAdapter(BaseAdapter):
         if not path.exists():
             raise RuntimeError(f"表情文件不存在：{path}")
         raw = self._room_raw(room_id)
+        name = self._group_name(raw)
 
         def task() -> Any:
-            wx = self._prepare_send_gui(raw)
+            wx = self._prepare_send_gui(raw, name)
             # Use the replica public API for sticker/image delivery. WeChat
             # stores the resulting message as an image row, which the DB
             # listener reads back normally.
-            return wx.SendFiles(str(path), who=raw)
+            return wx.SendFiles(str(path), who=name, exact=True)
 
         self._send_with_retry(
             task,
