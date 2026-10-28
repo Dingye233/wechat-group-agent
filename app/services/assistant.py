@@ -421,7 +421,9 @@ class AssistantService:
             )
         # File / PowerShell / skill / desktop tools are blocking; keep them off
         # the event loop. The capability gate is applied by execute_capability.
-        return await execute_capability(name, args, scope)
+        return await execute_capability(
+            name, args, scope, account_key=account_key
+        )
 
     async def _admin_group_tool(
         self,

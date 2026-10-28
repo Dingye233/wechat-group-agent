@@ -121,6 +121,7 @@ _TOOL_LABELS = {
     "bili_reply_comment": "回复 B站评论",
     "bili_knowledge_search": "检索 B站知识库",
     "bili_knowledge_add": "记录 B站视频到知识库",
+    "bili_last_opinion": "读取 B站最近看法",
 }
 
 

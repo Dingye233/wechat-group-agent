@@ -24,6 +24,10 @@
 - 群伴 MCP 项目 / 技能 / 接口：分别通过 `qunban_run_mcp`、
   `qunban_run_skill`、`qunban_call_interface` 调用；`qunban_capabilities`
   会返回可直接使用的工具名、示例参数和 `call_tool` / `call_args` 提示。
+- B站看法 → 评论：自动刷视频会生成 `opinion`；评论动作通过
+  `bili_comment` 工具发送，若模型未填写 `comment_text`，会直接使用
+  `opinion`。Agent 也可以先调用 `bili_last_opinion`，再调用
+  `bili_comment`，把最近一次看法发到对应视频评论区。
 - 事件：群伴订阅 OpenCode 的 `/event`，把 `message.part.updated` 中的
   tool running/completed 事件同步到后台和微信管理员进度。
 - 停止：微信管理员发「停止」时，群伴调用 OpenCode 的

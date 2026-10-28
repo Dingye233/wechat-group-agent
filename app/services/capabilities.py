@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Capability, utcnow
+from app.models import BiliVideo, Capability, utcnow
 from app.services import assistant_tools, desktop
 
 _ASSETS_READY = False
@@ -65,6 +65,7 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     {"name": "bili_reply_comment", "label": "B站回复评论", "desc": "回复指定评论，需登录", "risk": "high"},
     {"name": "bili_knowledge_search", "label": "B站知识库", "desc": "检索已转写视频的语义知识库", "risk": "low"},
     {"name": "bili_knowledge_add", "label": "B站知识库写入", "desc": "按需转写视频并写入知识库", "risk": "medium"},
+    {"name": "bili_last_opinion", "label": "B站最近看法", "desc": "读取最近一次 B站视频分析中 Agent 自己的看法", "risk": "low"},
 ]
 
 DESKTOP_NAMES = {
@@ -606,7 +607,13 @@ async def check_tool_allowed(name: str, args: dict[str, Any], scope: str) -> Non
         raise PermissionError(f"工具未在当前范围启用：{name}")
 
 
-async def execute_capability(name: str, args: dict[str, Any], scope: str) -> Any:
+async def execute_capability(
+    name: str,
+    args: dict[str, Any],
+    scope: str,
+    *,
+    account_key: str = "",
+) -> Any:
     await check_tool_allowed(name, args, scope)
     if name == "run_mcp":
         project = str(args.get("name") or "")
@@ -679,36 +686,43 @@ async def execute_capability(name: str, args: dict[str, Any], scope: str) -> Any
             return await bilibili.watch_video(
                 str(args.get("bvid") or ""),
                 open_browser=bool(args.get("open_browser", True)),
+                account_key=account_key,
             )
         if name == "bili_like":
             return await bilibili.like_video(
                 str(args.get("bvid") or ""),
                 bool(args.get("liked", True)),
+                account_key=account_key,
             )
         if name == "bili_comment":
             return await bilibili.comment_video(
                 str(args.get("bvid") or ""),
                 str(args.get("text") or ""),
+                account_key=account_key,
             )
         if name == "bili_feed":
             return await bilibili.feed_videos(
                 int(args.get("limit") or 5),
                 open_browser=bool(args.get("open_browser", True)),
+                account_key=account_key,
             )
         if name == "bili_transcribe":
             return await bilibili.transcribe_video(
                 str(args.get("bvid") or ""),
                 str(args.get("model") or "small"),
+                account_key=account_key,
             )
         if name == "bili_favorite":
             return await bilibili.favorite_video(
-                str(args.get("bvid") or "")
+                str(args.get("bvid") or ""),
+                account_key=account_key,
             )
         if name == "bili_comments":
             return {
                 "comments": await bilibili.get_video_comments(
                     str(args.get("bvid") or ""),
                     int(args.get("limit") or 10),
+                    account_key=account_key,
                 )
             }
         if name == "bili_reply_comment":
@@ -717,7 +731,28 @@ async def execute_capability(name: str, args: dict[str, Any], scope: str) -> Any
                 str(args.get("text") or ""),
                 int(args.get("root") or 0),
                 int(args["parent"]) if args.get("parent") else None,
+                account_key=account_key,
             )
+        if name == "bili_last_opinion":
+            async with SessionLocal() as db:
+                stmt = select(BiliVideo).order_by(BiliVideo.id.desc()).limit(20)
+                rows = list((await db.execute(stmt)).scalars().all())
+            for row in rows:
+                analysis = row.analysis or {}
+                opinion = str(analysis.get("opinion") or "").strip()
+                if not opinion:
+                    continue
+                return {
+                    "bvid": row.bvid,
+                    "title": row.title,
+                    "author": row.author,
+                    "url": row.url,
+                    "opinion": opinion,
+                    "summary": row.summary,
+                    "sentiment": analysis.get("sentiment"),
+                    "topics": row.topics or [],
+                }
+            return {"opinion": "", "message": "还没有带看法的 B站视频"}
         if name == "bili_knowledge_search":
             from app.services import bili_knowledge
 

@@ -4428,6 +4428,8 @@ function biliRenderAutoHistory(videos) {
       null,
       `${video.author || ''} · ${video.status || ''}${
         video.actions?.knowledge ? ' · 已入知识库' : ''
+      }${video.actions?.comment ? ' · 已评论' : ''}${
+        video.actions?.comment_from_opinion ? '（来自看法）' : ''
       }`,
     );
     const summary = el('small', null, (video.summary || video.error || '').slice(0, 120));

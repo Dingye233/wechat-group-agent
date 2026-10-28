@@ -442,14 +442,25 @@ class BiliAutopilot:
         comment_text = str(
             analysis.get("comment_text") or analysis.get("comment") or ""
         ).strip()
-        if "comment" in chosen_actions and config.get("comment_enabled") and comment_text:
+        if "comment" in chosen_actions and config.get("comment_enabled"):
             try:
-                actions["comment"] = await bilibili.comment_video(
-                    bvid, comment_text[:1000], account_key
+                actions.update(
+                    await self._comment_with_tool(
+                        bvid=bvid,
+                        title=title,
+                        comment_text=comment_text,
+                        opinion=opinion,
+                        account_key=account_key,
+                    )
                 )
-                await self._emit("action", "已发表评论", bvid=bvid, title=title)
             except Exception as exc:
                 actions["comment_error"] = str(exc)
+                await self._emit(
+                    "error",
+                    f"bili_comment 工具发表评论失败：{exc}",
+                    bvid=bvid,
+                    title=title,
+                )
         reply_text = str(analysis.get("reply_text") or "").strip()
         if "reply" in chosen_actions and config.get("reply_comments_enabled") and reply_text:
             try:
@@ -541,6 +552,58 @@ class BiliAutopilot:
         self.current = {"phase": "done", "bvid": bvid, "title": title}
         await self._emit("done", f"完成：{title}", bvid=bvid, title=title, actions=actions)
         self.notify()
+
+    async def _comment_with_tool(
+        self,
+        *,
+        bvid: str,
+        title: str,
+        comment_text: str,
+        opinion: str,
+        account_key: str,
+    ) -> dict[str, Any]:
+        """Send the Agent's opinion through the same bili_comment tool.
+
+        If the analysis chose `comment` but left `comment_text` empty, the
+        independent `opinion` becomes the comment.  This keeps the decision in
+        the Agent layer while the actual write goes through the capability
+        gateway and its permissions/audit path.
+        """
+        text = str(comment_text or "").strip()
+        if not text:
+            text = str(opinion or "").strip()
+        if not text:
+            return {"comment_skipped": "没有看法或评论正文"}
+        text = text[:1000]
+        from app.services.capabilities import execute_capability
+
+        await self._emit(
+            "action",
+            "Agent 正在调用 bili_comment 工具，把自己的看法发到评论区",
+            bvid=bvid,
+            title=title,
+            text=text[:300],
+        )
+        result = await execute_capability(
+            "bili_comment",
+            {"bvid": bvid, "text": text},
+            "admin",
+            account_key=account_key,
+        )
+        await self._emit(
+            "action",
+            "已通过 bili_comment 工具发表评论",
+            bvid=bvid,
+            title=title,
+        )
+        return {
+            "comment": result,
+            "comment_text": text,
+            "comment_tool": "bili_comment",
+            "comment_from_opinion": bool(
+                opinion and text == str(opinion).strip()
+            ),
+        }
 
     async def _agent_context(
         self, settings: dict[str, Any], account_key: str
@@ -738,6 +801,7 @@ class BiliAutopilot:
 - actions 是数组，可以为空，也可以只选其中一两个；不要默认三连。
 - 大多数视频应该 actions 为空，只做观看、理解和知识库记录。
 - 只有内容确实让你喜欢才 like；只有想长期收藏才 favorite；只有你有具体、自然、不引战的想法才 comment；只有热评值得回应才 reply。
+- 如果 actions 包含 comment，comment_text 必须从你的 opinion 出发，写成一句具体、自然、像真人发的评论；不要空泛复读标题，不要引战或刷屏。
 - 只输出 JSON，不要 Markdown。"""
         user_prompt = f"""标题：{title}
 作者：{author}

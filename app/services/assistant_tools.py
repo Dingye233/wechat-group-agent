@@ -531,6 +531,7 @@ def tool_catalog() -> list[dict[str, Any]]:
         {"name": "bili_reply_comment", "args": {"bvid": "BV...", "text": "...", "root": 123}, "desc": "回复 B站评论，需登录"},
         {"name": "bili_knowledge_search", "args": {"query": "主题", "limit": 5}, "desc": "检索 B站视频知识库"},
         {"name": "bili_knowledge_add", "args": {"bvid": "BV...", "model": "small"}, "desc": "按需转写 B站视频并记录到知识库"},
+        {"name": "bili_last_opinion", "args": {}, "desc": "读取最近一次 B站视频分析中 Agent 自己的看法"},
     ]
 
 
