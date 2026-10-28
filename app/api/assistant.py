@@ -13,7 +13,7 @@ from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
 from app.models import AgentMemory, AgentTask, AssistantMessage, Group, GroupConfig
-from app.services import assistant_tools
+from app.services import assistant_tools, mem0_memory
 from app.services.assistant import (
     AssistantService,
     cancel_session,
@@ -50,6 +50,7 @@ async def assistant_status(runtime: RuntimeManager = Depends(get_runtime)) -> di
         ).scalar() or 0
         tasks = (await db.execute(select(func.count(AgentTask.id)))).scalar() or 0
         messages = (await db.execute(select(func.count(AssistantMessage.id)))).scalar() or 0
+    mem0_memory.warmup(settings)
     root = assistant_tools.workspace_root()
     return {
         "admin": assistant_tools.is_admin(),
@@ -61,6 +62,7 @@ async def assistant_status(runtime: RuntimeManager = Depends(get_runtime)) -> di
         "model": settings.get("llm_model", ""),
         "max_steps": int(settings.get("assistant_max_steps") or 0),
         "assistant_active": is_session_active("main"),
+        "memory": mem0_memory.status(settings),
         "llm_configured": bool(settings.get("llm_api_key")),
         "memory_enabled": bool(settings.get("memory_enabled", True)),
         "service_online": runtime.is_online,
@@ -434,6 +436,24 @@ async def assistant_update_task(task_id: int, payload: dict = Body(...)) -> dict
 
 
 # ----------------------------------------------------------------- memory
+@router.post("/assistant/memories/forget")
+async def assistant_forget_memories(
+    payload: dict = Body(default={}),
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    async with SessionLocal() as db:
+        settings = await get_settings(db)
+    days = int(payload.get("days") or settings.get("memory_forgetting_days") or 180)
+    dry_run = bool(payload.get("dry_run", False))
+    result = await mem0_memory.forget_old(
+        settings,
+        account_key=runtime.account_key,
+        days=days,
+        dry_run=dry_run,
+    )
+    return {"ok": True, **result}
+
+
 @router.get("/assistant/memories")
 async def assistant_memories(
     q: str = Query(default=""),

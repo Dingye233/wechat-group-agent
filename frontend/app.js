@@ -2262,6 +2262,13 @@ function fillSettings(settings) {
   $('#set-max-tokens').value = String(settings.llm_max_tokens ?? 300);
   $('#set-json-mode').checked = settings.llm_json_mode !== false;
   $('#set-persona').value = settings.default_persona || '';
+  $('#set-operator-persona').value = settings.operator_persona || '';
+  $('#set-operator-extra').value = settings.operator_prompt_extra || '';
+  $('#set-group-extra').value = settings.group_prompt_extra || '';
+  $('#set-memory-template').value = settings.memory_prompt_template || '';
+  $('#set-memory-always').checked = settings.memory_always_include !== false;
+  $('#set-operator-system').value = settings.operator_system_prompt || '';
+  $('#set-group-system').value = settings.group_system_prompt || '';
   $('#set-default-trigger').value = settings.default_trigger_mode || 'mention';
   $('#set-context').value = String(settings.context_messages ?? 18);
   $('#set-delay').value = String(settings.reply_delay_seconds ?? 2.5);
@@ -2271,6 +2278,14 @@ function fillSettings(settings) {
   $('#set-poll-interval').value = String(settings.read_poll_interval_seconds ?? 1);
   $('#set-media-download').checked = settings.read_media_download_enabled !== false;
   $('#set-memory-enabled').checked = settings.memory_enabled !== false;
+  $('#set-memory-engine').value = settings.memory_engine || 'auto';
+  $('#set-mem0-collection').value = settings.mem0_collection || 'agent_memory';
+  $('#set-memory-forgetting').checked = settings.memory_forgetting_enabled !== false;
+  $('#set-memory-forgetting-days').value = String(settings.memory_forgetting_days ?? 180);
+  const mem0Status = $('#mem0-status');
+  if (mem0Status) {
+    mem0Status.textContent = `Mem0 引擎：${settings.memory_engine || 'auto'} · 遗忘 ${settings.memory_forgetting_days ?? 180} 天`;
+  }
   $('#set-memory-input').value = String(settings.memory_summary_max_input_chars ?? 6000);
   $('#set-memory-tokens').value = String(settings.memory_summary_max_tokens ?? 500);
   $('#set-memory-items').value = String(settings.memory_summary_max_items ?? 5);
@@ -2314,6 +2329,13 @@ async function saveSettings() {
       llm_max_tokens: parseIntSafe($('#set-max-tokens').value, 300),
       llm_json_mode: $('#set-json-mode').checked,
       default_persona: $('#set-persona').value,
+      operator_persona: $('#set-operator-persona').value,
+      operator_prompt_extra: $('#set-operator-extra').value,
+      group_prompt_extra: $('#set-group-extra').value,
+      memory_prompt_template: $('#set-memory-template').value,
+      memory_always_include: $('#set-memory-always').checked,
+      operator_system_prompt: $('#set-operator-system').value,
+      group_system_prompt: $('#set-group-system').value,
       default_trigger_mode: $('#set-default-trigger').value,
       context_messages: parseIntSafe($('#set-context').value, 18),
       reply_delay_seconds: parseFloatSafe($('#set-delay').value, 2.5),
@@ -2323,6 +2345,10 @@ async function saveSettings() {
       read_poll_interval_seconds: parseFloatSafe($('#set-poll-interval').value, 5),
       read_media_download_enabled: $('#set-media-download').checked,
       memory_enabled: $('#set-memory-enabled').checked,
+      memory_engine: $('#set-memory-engine').value,
+      mem0_collection: $('#set-mem0-collection').value.trim() || 'agent_memory',
+      memory_forgetting_enabled: $('#set-memory-forgetting').checked,
+      memory_forgetting_days: parseIntSafe($('#set-memory-forgetting-days').value, 180),
       memory_summary_max_input_chars: parseIntSafe($('#set-memory-input').value, 6000),
       memory_summary_max_tokens: parseIntSafe($('#set-memory-tokens').value, 500),
       memory_summary_max_items: parseIntSafe($('#set-memory-items').value, 5),
@@ -2394,6 +2420,37 @@ async function clearApiKey() {
     toast('API Key 已清除');
   } catch (error) {
     toast(error.message, 'error');
+  }
+}
+
+async function forgetMemories() {
+  const input = $('#set-memory-forgetting-days');
+  const days = Math.max(7, Math.min(3650, parseIntSafe(input?.value, 180)));
+  if (!window.confirm(`清理 Mem0 中超过 ${days} 天的旧记忆？此操作不可撤销。`)) return;
+  const button = $('#forget-memories-btn');
+  if (button) {
+    button.disabled = true;
+    button.textContent = '清理中…';
+  }
+  try {
+    const data = await api('/assistant/memories/forget', {
+      method: 'POST',
+      body: JSON.stringify({ days, dry_run: false }),
+    });
+    const status = $('#mem0-status');
+    if (status) {
+      status.textContent = data.available
+        ? `已清理 ${data.deleted || 0} 条 · 扫描 ${data.scanned || 0} 条 · 阈值 ${data.days || days} 天`
+        : 'Mem0 未安装，当前使用 SQLite 记忆回退';
+    }
+    toast(`已清理 ${data.deleted || 0} 条旧记忆`);
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = '立即执行遗忘清理';
+    }
   }
 }
 
@@ -3029,6 +3086,13 @@ async function loadAssistantStatus() {
     }
     const tasks = $('#assistant-task-count');
     if (tasks) tasks.textContent = `${data.tasks || 0} 个任务`;
+    const mem0 = $('#mem0-status');
+    if (mem0 && data.memory) {
+      const memory = data.memory;
+      mem0.textContent = memory.available
+        ? `Mem0 ${memory.enabled ? '已启用' : '已安装但未启用'} · ${memory.engine} · 遗忘 ${memory.forgetting_days} 天`
+        : 'Mem0 未安装，当前使用 SQLite 记忆回退';
+    }
     const maxSteps = $('#assistant-max-steps');
     if (maxSteps && document.activeElement !== maxSteps) {
       maxSteps.value = String(data.max_steps ?? 0);
@@ -4731,6 +4795,7 @@ function bindEvents() {
   $('#save-settings-btn')?.addEventListener('click', saveSettings);
   $('#test-llm-btn')?.addEventListener('click', testLLM);
   $('#clear-key-btn')?.addEventListener('click', clearApiKey);
+  $('#forget-memories-btn')?.addEventListener('click', forgetMemories);
   $('#refresh-stats')?.addEventListener('click', loadStats);
   bindToolActions();
   bindAssistantActions();

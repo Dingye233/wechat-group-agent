@@ -379,9 +379,16 @@ class AgentEngine:
         settings: dict[str, Any],
         message: Message | None,
     ) -> str:
-        if not settings.get("memory_enabled", True):
+        if not settings.get("memory_always_include", True) and not settings.get(
+            "memory_enabled", True
+        ):
             return ""
-        from app.services.memory import build_memory_context
+        from app.services import mem0_memory
+        from app.services.memory import (
+            DEFAULT_MEMORY_PROMPT_TEMPLATE,
+            build_memory_context,
+            format_memory_line,
+        )
 
         query = str(message.content or "")[:200] if message is not None else ""
         try:
@@ -392,9 +399,36 @@ class AgentEngine:
                 settings=settings,
                 query=query,
             )
-            return text
         except Exception:
-            return ""
+            text = ""
+        lines = [text] if text else []
+        try:
+            mem0_items = await mem0_memory.search(
+                settings,
+                account_key=self.runtime.account_key,
+                query=query,
+                limit=max(1, int(settings.get("memory_context_items") or 8)),
+                group_id=group_id,
+            )
+            template = str(
+                settings.get("memory_prompt_template")
+                or DEFAULT_MEMORY_PROMPT_TEMPLATE
+            )
+            max_chars = max(
+                200, int(settings.get("memory_context_max_chars") or 1800)
+            )
+            used_chars = sum(len(line) + 1 for line in lines)
+            for item in mem0_items:
+                line = format_memory_line(item, template)
+                if not line or line in lines:
+                    continue
+                if used_chars + len(line) > max_chars:
+                    break
+                lines.append(line)
+                used_chars += len(line) + 1
+        except Exception:
+            pass
+        return "\n".join(lines)
 
     async def _load_sticker_catalog(
         self, db: AsyncSession, config: GroupConfig
@@ -511,6 +545,9 @@ class AgentEngine:
                 if config.multi_message_enabled
                 else "通常 1 条，最多 1 个表情包。"
             )
+            proactive_extra = (
+                str(settings.get("group_prompt_extra") or "").strip() or "无"
+            )
             system_prompt = f"""{persona}
 
 # 群聊信息
@@ -526,6 +563,9 @@ class AgentEngine:
 不要编造事实；只输出一个 JSON：
 {format_line}
 {{"action":"none"}}
+
+# 用户自定义提示词（高优先级，必须遵守）
+{proactive_extra}
 
 # 可用表情包
 {sticker_catalog}"""
@@ -652,14 +692,48 @@ class AgentEngine:
                 '{"action": "reply", "messages": '
                 '[{"text": "第一句"}, {"sticker": 3}, {"text": "第二句"}]}'
             )
-        system_prompt = f"""{persona}
-
-# 群聊信息
+        group_info = f"""# 群聊信息
 - 群名：{group.name or '未知群聊'}
 - 你的名字：{self.runtime.bot_name or '小助手'}
 - 当前时间：{now_local}（{settings.get('timezone')}）
 - 触发方式：{trigger_label}
-- 群成员昵称参考：{'、'.join(members[:30]) or '暂未同步'}
+- 群成员昵称参考：{'、'.join(members[:30]) or '暂未同步'}"""
+        memory_block = f"""# 长期记忆（每次对话自动注入）
+以下是过去总结的群聊记忆，可作为背景参考；不要机械复述，也不要编造记忆里没有的内容：
+{memory_text or '无'}"""
+        extra_prompt = str(settings.get("group_prompt_extra") or "").strip()
+        extra_block = (
+            f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
+            if extra_prompt
+            else ""
+        )
+        json_block = f"""# JSON 格式（必须遵守）
+{multi_format}
+{{"action": "none"}}
+其中 sticker 填表情包 id 或标签，也可为 null。只有当表情包确实贴合语境时才使用。"""
+        custom_prompt = str(settings.get("group_system_prompt") or "").strip()
+        if custom_prompt:
+            system_prompt = f"""# 用户自定义群聊系统提示词
+{custom_prompt}
+
+# 人设（每次对话自动注入）
+{persona}
+
+{group_info}
+
+{memory_block}
+{extra_block}
+# 可用表情包
+{sticker_catalog}
+
+{json_block}
+{tool_section}"""
+        else:
+            system_prompt = f"""{persona}
+
+{group_info}
+
+{memory_block}
 
 # 回复规则
 1. 你是在微信群里自然地接话，回复最新一条消息，不要像客服或机器人。
@@ -669,14 +743,12 @@ class AgentEngine:
 5. 可以结合上下文和成员昵称，但不要叫错人。
 6. 普通模式最多选择一个表情包；连续消息模式可穿插表情包，但不要每条都发。
 7. 只输出一个 JSON 对象，不要输出 Markdown 代码块或其他文字。
-
+{extra_block}
 # 可用表情包
 {sticker_catalog}
 
-# JSON 格式
-{multi_format}
-{{"action": "none"}}
-其中 sticker 填表情包 id 或标签，也可为 null。只有当表情包确实贴合语境时才使用。"""
+{json_block}
+{tool_section}"""
 
         user_prompt = f"""以下是「{group.name}」最近的群聊记录（从早到晚）：
 

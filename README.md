@@ -223,6 +223,8 @@ powershell -ExecutionPolicy Bypass -File .\stop-background.ps1
 .\.venv312\Scripts\python.exe -m pip install -r requirements-replica.txt
 .\.venv312\Scripts\python.exe -m pip install -r requirements-ocr.txt
 .\.venv312\Scripts\python.exe -m pip install -r requirements-bilibili.txt
+# 可选：Mem0 语义记忆（未安装时自动回退 SQLite）
+.\.venv312\Scripts\python.exe -m pip install -r requirements-memory.txt
 ```
 
 最后一行是推荐的高精度离线 OCR（RapidOCR）；不安装时会回退到 Windows OCR。
@@ -386,6 +388,38 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 
 `sticker` 支持表情包 id、名称、标签；没有合适表情时填 `null`。解析失败或模型请求失败会记录到「Agent 动态」，不会向群里发送错误信息。
 
+### 7.1 提示词与记忆注入
+
+「设置 → 提示词与人设」提供以下可编辑项：
+
+- **Operator 全局人设**：后台 Agent、管理员微信私聊每轮都会注入；联系人专属人设会叠加在它上面。
+- **Operator 额外提示词**：追加在内置 Operator 提示词之后，优先级更高。
+- **群聊 Agent 额外提示词**：追加到每个群的回复提示词；主动发起话题时也会带上。
+- **记忆注入模板**：控制长期记忆如何进入上下文，支持 `{importance}`、`{category}`、`{title}`、`{content}`、`{scope}` 等占位符。
+- **每次对话都注入最重要的长期记忆**：默认开启；即使当前消息没有关键词命中，也会带上最重要的记忆。
+- **高级：覆盖 Operator / 群聊系统提示词**：留空使用内置提示词；填写后作为核心提示词，系统仍会追加人设、记忆、可用工具、表情包和 JSON 协议，避免破坏 Agent 调用。
+
+群聊回复现在也会注入长期记忆（之前只有主动发起话题时带记忆）；Operator 的记忆除了按当前消息检索，还会额外合并最重要的长期记忆。
+
+#### Mem0 语义记忆与遗忘
+
+项目集成了 [Mem0 OSS](https://github.com/mem0ai/mem0)（GitHub 约 6 万 star）作为可选的长期记忆层：
+
+- 记忆引擎：`auto`（Mem0 可用时优先）/ `mem0` / `sqlite`。
+- Mem0 使用 DeepSeek 做事实提取，FastEmbed `BAAI/bge-small-zh-v1.5` 做中文向量，ChromaDB 本地持久化。
+- 群聊总结批次会写入 Mem0，并带上 `group_id` / `group_name` 元数据；群聊回复检索时按群过滤。
+- Operator 对话、管理员私聊会按 `scope=operator` / `scope=contact` 写入并检索。
+- Mem0 自身的记忆衰减用于检索排序；另外每天最多执行一次旧记忆清理，默认删除超过 180 天的记忆，可在设置页手动执行。
+- 未安装 Mem0 或调用失败时自动回退到原 SQLite 记忆，不影响聊天。
+
+安装：
+
+```powershell
+.\.venv312\Scripts\python.exe -m pip install -r requirements-memory.txt
+```
+
+> Mem0 会调用 LLM 做记忆提取，产生额外模型费用；可以在设置页把记忆引擎切回 `sqlite` 关闭它。
+
 ---
 
 ## 8. 表情包
@@ -429,7 +463,8 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 │   │   ├── bili_knowledge.py   # ChromaDB B站视频知识库
 │   │   ├── capabilities.py     # 能力发现与双作用域开关
 │   │   ├── desktop.py          # 截屏、OCR、鼠标键盘
-│   │   ├── memory.py           # 群聊长期记忆
+│   │   ├── memory.py           # 群聊长期记忆、总结、遗忘
+│   │   ├── mem0_memory.py      # Mem0 语义记忆适配器（可选）
 │   │   ├── llm.py              # OpenAI Compatible 客户端
 │   │   ├── stickers.py         # 表情库、示例生成、上传
 │   │   ├── settings.py         # 运行时设置
@@ -443,6 +478,7 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 ├── requirements-replica.txt
 ├── requirements-ocr.txt
 ├── requirements-bilibili.txt
+├── requirements-memory.txt
 ├── requirements-wcf.txt
 ├── start.bat
 ├── start-background.ps1
@@ -591,6 +627,7 @@ ALL SMOKE TESTS PASSED
 - [chatgpt-on-wechat](https://github.com/zhayujie/chatgpt-on-wechat) — 微信 LLM 机器人实践
 - [LangBot](https://github.com/RockChinQ/LangBot) — 多平台 Agent 机器人
 - [WeChat3.9-32bit-Compatibility-Launcher](https://github.com/Skyler1n/WeChat3.9-32bit-Compatibility-Launcher) — 32 位微信 3.9 在 64 位 Windows 的兼容启动方案
+- [Mem0](https://github.com/mem0ai/mem0) — 通用 Agent 记忆层（记忆提取、语义检索、衰减与遗忘）
 
 ---
 

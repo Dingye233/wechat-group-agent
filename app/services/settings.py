@@ -18,6 +18,13 @@ PUBLIC_KEYS = {
     "llm_json_mode",
     "llm_api_key",
     "default_persona",
+    "operator_persona",
+    "operator_prompt_extra",
+    "operator_system_prompt",
+    "group_prompt_extra",
+    "group_system_prompt",
+    "memory_prompt_template",
+    "memory_always_include",
     "default_trigger_mode",
     "default_keywords",
     "context_messages",
@@ -29,6 +36,10 @@ PUBLIC_KEYS = {
     "read_media_download_enabled",
     "pinned_group_id",
     "memory_enabled",
+    "memory_engine",
+    "mem0_collection",
+    "memory_forgetting_enabled",
+    "memory_forgetting_days",
     "memory_summary_max_input_chars",
     "memory_summary_max_tokens",
     "memory_summary_max_items",
@@ -55,6 +66,13 @@ DEFAULT_PERSONA = (
     "可以偶尔配一个合适的表情包让聊天更生动，但不要每条消息都发。"
 )
 
+DEFAULT_OPERATOR_PERSONA = (
+    "你是一个可靠、直接、有执行力的中文 Operator。"
+    "先理解目标，再动手执行；能自己判断的默认值就直接选，不要反复追问。"
+)
+
+DEFAULT_MEMORY_PROMPT_TEMPLATE = "- [{importance}★ {category}] {title}：{content}"
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "llm_base_url": app_settings.llm_base_url,
     "llm_model": app_settings.llm_model,
@@ -63,6 +81,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "llm_max_tokens": 300,
     "llm_json_mode": True,
     "default_persona": DEFAULT_PERSONA,
+    "operator_persona": DEFAULT_OPERATOR_PERSONA,
+    "operator_prompt_extra": "",
+    "operator_system_prompt": "",
+    "group_prompt_extra": "",
+    "group_system_prompt": "",
+    "memory_prompt_template": DEFAULT_MEMORY_PROMPT_TEMPLATE,
+    "memory_always_include": True,
     "default_trigger_mode": "mention",
     "default_keywords": [],
     "context_messages": 18,
@@ -78,6 +103,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "read_media_download_enabled": False,
     "pinned_group_id": 0,
     "memory_enabled": True,
+    "memory_engine": "auto",
+    "mem0_collection": "agent_memory",
+    "memory_forgetting_enabled": True,
+    "memory_forgetting_days": 180,
     "memory_summary_max_input_chars": 6000,
     "memory_summary_max_tokens": 500,
     "memory_summary_max_items": 5,
@@ -100,6 +129,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 VALID_TRIGGER_MODES = {"mention", "keyword", "all"}
 VALID_ADAPTERS = {"", "mock", "replica", "wcf"}
 MAX_STRING = 2000
+MAX_PROMPT = 12000
 
 _TIMEZONES: dict[str, str] = {
     "Asia/Shanghai": "北京时间 (UTC+8)",
@@ -145,6 +175,15 @@ def _clean_str(value: Any, key: str) -> str:
     return value
 
 
+def _clean_prompt(value: Any, key: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{key} 必须是字符串")
+    value = value.strip()
+    if len(value) > MAX_PROMPT:
+        raise ValueError(f"{key} 不能超过 {MAX_PROMPT} 字")
+    return value
+
+
 async def update_settings(
     db: AsyncSession, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -154,7 +193,6 @@ async def update_settings(
     for key in (
         "llm_base_url",
         "llm_model",
-        "default_persona",
         "timezone",
         "bot_aliases",
         "wcf_wechat_exe",
@@ -163,9 +201,23 @@ async def update_settings(
         "assistant_workspace",
         "auto_login",
         "default_trigger_mode",
+        "memory_engine",
+        "mem0_collection",
     ):
         if key in payload and payload[key] is not None:
             updates[key] = _clean_str(payload[key], key)
+
+    for key in (
+        "default_persona",
+        "operator_persona",
+        "operator_prompt_extra",
+        "operator_system_prompt",
+        "group_prompt_extra",
+        "group_system_prompt",
+        "memory_prompt_template",
+    ):
+        if key in payload and payload[key] is not None:
+            updates[key] = _clean_prompt(payload[key], key)
 
     if "llm_base_url" in updates:
         url = updates["llm_base_url"]
@@ -205,6 +257,7 @@ async def update_settings(
         "memory_summary_max_items": (1, 12, int),
         "memory_context_items": (1, 30, int),
         "memory_context_max_chars": (200, 8000, int),
+        "memory_forgetting_days": (7, 3650, int),
         "assistant_max_steps": (0, 500, int),
         "assistant_max_tokens": (128, 3000, int),
         "assistant_shell_timeout": (5, 600, int),
@@ -221,6 +274,18 @@ async def update_settings(
 
     if "llm_json_mode" in payload and payload["llm_json_mode"] is not None:
         updates["llm_json_mode"] = bool(payload["llm_json_mode"])
+    if (
+        "memory_always_include" in payload
+        and payload["memory_always_include"] is not None
+    ):
+        updates["memory_always_include"] = bool(payload["memory_always_include"])
+    if (
+        "memory_forgetting_enabled" in payload
+        and payload["memory_forgetting_enabled"] is not None
+    ):
+        updates["memory_forgetting_enabled"] = bool(
+            payload["memory_forgetting_enabled"]
+        )
     if "seed_sample_stickers" in payload and payload["seed_sample_stickers"] is not None:
         updates["seed_sample_stickers"] = bool(payload["seed_sample_stickers"])
     if (

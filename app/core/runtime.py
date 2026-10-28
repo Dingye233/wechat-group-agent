@@ -1488,6 +1488,7 @@ class RuntimeManager:
                     return
                 temperature: float | None = None
                 persona = ""
+                contact_name = wxid
                 async with SessionLocal() as db:
                     contact = await db.get(Contact, contact_id)
                     if contact is not None:
@@ -1497,6 +1498,7 @@ class RuntimeManager:
                             else 0.3
                         )
                         persona = contact.persona or ""
+                        contact_name = contact.name or contact.remark or wxid
                 service = AssistantService(self.llm, self)
                 progress_state: dict[str, Any] = {
                     "sent": 0,
@@ -1519,6 +1521,12 @@ class RuntimeManager:
                     persona=persona,
                     channel="wechat",
                     progress=emit_progress,
+                    memory_scope="contact",
+                    memory_metadata={
+                        "contact_id": str(contact_id),
+                        "wxid": wxid,
+                        "name": contact_name,
+                    },
                 )
                 if result.get("queued"):
                     return
@@ -1740,6 +1748,14 @@ class RuntimeManager:
                             },
                         )
                     await asyncio.sleep(2)
+                try:
+                    from app.services import mem0_memory
+
+                    await mem0_memory.maybe_forget(
+                        settings, account_key=self.account_key
+                    )
+                except Exception:
+                    logger.warning("Mem0 遗忘清理失败", exc_info=True)
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%2307c160'/%3E%3Cstop offset='1' stop-color='%2300d4ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%23081511'/%3E%3Cpath d='M18 22c0-4 4-7 9-7h10c5 0 9 3 9 7v8c0 4-4 7-9 7h-5l-7 6v-6c-4-1-7-4-7-7z' fill='url(%23g)'/%3E%3Ccircle cx='27' cy='26' r='2.4' fill='%23081511'/%3E%3Ccircle cx='38' cy='26' r='2.4' fill='%23081511'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/styles.css?v=20261028-25">
+  <link rel="stylesheet" href="/styles.css?v=20261028-29">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -691,6 +691,19 @@
               <div class="card-head"><div><span class="eyebrow">OPERATOR MEMORY</span><h2>Agent 记忆</h2></div></div>
               <div class="form-grid">
                 <label class="check-row field-span"><input type="checkbox" id="set-memory-enabled"><span>开启自动记忆（LLM 总结）</span></label>
+                <label class="field"><span>记忆引擎</span><select id="set-memory-engine">
+                  <option value="auto">自动（Mem0 优先）</option>
+                  <option value="mem0">Mem0 OSS</option>
+                  <option value="sqlite">SQLite（仅本地）</option>
+                </select></label>
+                <label class="field"><span>Mem0 collection</span><input id="set-mem0-collection" placeholder="agent_memory"></label>
+                <label class="check-row field-span"><input type="checkbox" id="set-memory-forgetting"><span>自动遗忘旧记忆（Mem0，每天最多一次）</span></label>
+                <label class="field"><span>遗忘天数</span><input type="number" id="set-memory-forgetting-days" min="7" max="3650" step="1" value="180"></label>
+                <div class="inline-actions field-span">
+                  <button class="btn btn-ghost" id="forget-memories-btn">立即执行遗忘清理</button>
+                  <span class="inline-result" id="mem0-status">Mem0 状态读取中…</span>
+                </div>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>Mem0 OSS（GitHub 约 6 万 star）负责语义记忆提取、检索和衰减；未安装或调用失败时自动回退到本地 SQLite 记忆。遗忘清理只删除超过指定天数的旧记忆，不会删除当前会话上下文。</p></div>
                 <label class="field"><span>单次总结最大输入字符</span><input type="number" id="set-memory-input" min="1000" max="30000" step="500" value="6000"></label>
                 <label class="field"><span>单次总结最大 tokens</span><input type="number" id="set-memory-tokens" min="100" max="2000" step="50" value="500"></label>
                 <label class="field"><span>单次总结最多记忆条数</span><input type="number" id="set-memory-items" min="1" max="12" step="1" value="5"></label>
@@ -699,6 +712,20 @@
                 <label class="field"><span>Operator 最大步数 <small>0 = 不限制（安全上限 500 步 / 30 分钟）</small></span><input type="number" id="set-assistant-steps" min="0" max="500" step="1" value="0"></label>
                 <label class="field"><span>Operator 最大 tokens</span><input type="number" id="set-assistant-tokens" min="128" max="3000" step="64" value="900"></label>
                 <div class="hint-box field-span"><span data-icon="info"></span><p>记忆按 1–5 星重要度筛选并自动去重；建议每次总结保留 4–5 条、上下文注入 8 条左右。</p></div>
+              </div>
+            </section>
+
+            <section class="surface form-card">
+              <div class="card-head"><div><span class="eyebrow">PROMPTS</span><h2>提示词与人设</h2></div><span class="pill-soft">每轮注入</span></div>
+              <div class="form-grid">
+                <label class="field field-span"><span>Operator 全局人设 <small>后台 Agent 和管理员私聊每次都会注入</small></span><textarea id="set-operator-persona" rows="4"></textarea></label>
+                <label class="field field-span"><span>Operator 额外提示词 <small>追加在内置提示词之后，优先级更高</small></span><textarea id="set-operator-extra" rows="4"></textarea></label>
+                <label class="field field-span"><span>群聊 Agent 额外提示词 <small>追加到每个群的回复提示词</small></span><textarea id="set-group-extra" rows="4"></textarea></label>
+                <label class="field field-span"><span>记忆注入模板 <small>支持 {importance} {category} {title} {content} {scope}</small></span><textarea id="set-memory-template" rows="3"></textarea></label>
+                <label class="check-row field-span"><input type="checkbox" id="set-memory-always"><span>每次对话都注入最重要的长期记忆（不只按关键词命中）</span></label>
+                <label class="field field-span"><span>高级：覆盖 Operator 系统提示词 <small>留空使用内置；系统仍会追加工具、记忆和 JSON 协议</small></span><textarea id="set-operator-system" rows="10"></textarea></label>
+                <label class="field field-span"><span>高级：覆盖群聊回复系统提示词 <small>留空使用内置；系统仍会追加群信息、记忆、表情包和 JSON 协议</small></span><textarea id="set-group-system" rows="10"></textarea></label>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>人设和记忆每轮都会进入上下文。记忆模板支持占位符；高级覆盖只替换核心提示词，工具协议和 JSON 格式仍由系统追加，避免破坏 Agent 调用。</p></div>
               </div>
             </section>
 
@@ -825,6 +852,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-25" defer></script>
+  <script src="/app.js?v=20261028-29" defer></script>
 </body>
 </html>

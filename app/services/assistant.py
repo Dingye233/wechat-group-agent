@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -18,15 +19,23 @@ from app.models import (
     Message,
     utcnow,
 )
-from app.services import assistant_tools
+from app.services import assistant_tools, mem0_memory
 from app.services.capabilities import (
     catalog_for_scope,
     check_tool_allowed,
     execute_capability,
 )
 from app.services.llm import LLMError, LLMService, parse_json_object
-from app.services.memory import memory_dict, save_memory, search_memories
+from app.services.memory import (
+    DEFAULT_MEMORY_PROMPT_TEMPLATE,
+    format_memory_line,
+    memory_dict,
+    save_memory,
+    search_memories,
+)
 from app.services.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 MAX_HISTORY_CHARS = 9000
 MAX_OBSERVATION_CHARS = 7000
@@ -115,6 +124,27 @@ def _extract_json_string_field(content: str, field: str) -> str:
                 return ""
         index += 1
     return ""
+
+
+def _merge_memories(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*primary, *secondary]:
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        key = content[:240]
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+        if len(merged) >= max(1, int(limit)):
+            break
+    return merged
 
 
 def _dedupe_image_markdown(text: str) -> str:
@@ -406,10 +436,23 @@ class AssistantService:
     ) -> str:
         workspace = str(assistant_tools.workspace_root())
         catalog = json.dumps(capability_payload.get("tools") or [], ensure_ascii=False)
-        memory_lines = "\n".join(
-            f"- [{item['importance']}★ {item['category']}] {item['content']}"
-            for item in remembers
-        ) or "无"
+        memory_template = str(
+            settings.get("memory_prompt_template")
+            or DEFAULT_MEMORY_PROMPT_TEMPLATE
+        )
+        memory_max_chars = max(
+            200, int(settings.get("memory_context_max_chars") or 1800)
+        )
+        memory_rows: list[str] = []
+        memory_used = 0
+        for item in remembers:
+            line = format_memory_line(item, memory_template)
+            if memory_used + len(line) > memory_max_chars:
+                break
+            memory_rows.append(line)
+            memory_used += len(line) + 1
+        memory_lines = "\n".join(memory_rows) or "无"
+
         resources = []
         for item in capability_payload.get("skills") or []:
             resources.append(f"- skill:{item['name']} — {item.get('description', '')}")
@@ -420,16 +463,28 @@ class AssistantService:
         for item in capability_payload.get("apis") or []:
             resources.append(f"- api:{item['name']} — {item.get('description', '')}")
         resource_lines = "\n".join(resources) or "无（用户尚未在能力列表启用）"
+
         admin_text = "是" if is_admin else "否（需要管理员权限时会触发 UAC；正式使用建议用 start-admin.ps1 启动服务）"
-        persona_block = (
-            "\n# 当前联系人专属人设\n"
-            f"{contact_persona.strip()}\n"
-            "（人设只影响说话语气和称呼；当它与 Operator 的任务执行、"
-            "工具调用、结果汇报冲突时，以 Operator 职责为准。"
-            "执行任务时可以多说几句，把工具和结果讲清楚。）\n"
-            if contact_persona.strip()
-            else ""
-        )
+
+        persona_parts: list[str] = []
+        global_persona = str(settings.get("operator_persona") or "").strip()
+        if global_persona:
+            persona_parts.append(global_persona)
+        contact_persona = str(contact_persona or "").strip()
+        if contact_persona:
+            persona_parts.append(
+                "当前联系人专属人设（叠加在全局人设之上）：\n" + contact_persona
+            )
+        persona_block = ""
+        if persona_parts:
+            persona_block = (
+                "\n# 人设（每次对话自动注入）\n"
+                + "\n\n".join(persona_parts)
+                + "\n（人设只影响语气和称呼；当它与 Operator 的任务执行、"
+                "工具调用、结果汇报冲突时，以 Operator 职责为准。"
+                "执行任务时可以多说几句，把工具和结果讲清楚。）\n"
+            )
+
         if unlimited:
             limit_text = (
                 f"不限制；系统仍保留 {MAX_SAFETY_STEPS} 步 / "
@@ -450,18 +505,9 @@ class AssistantService:
                 "你在群伴后台的 Agent 对话中。可以使用 Markdown，"
                 "但保持简洁、可执行，优先说结果和下一步。"
             )
-        return f"""你是「群伴 Operator」，一个能直接操作本机、持续自我迭代的中文 Agent。
+
+        default_core = f"""你是「群伴 Operator」，一个能直接操作本机、持续自我迭代的中文 Agent。
 你不是只会聊天的客服：你可以读写文件、执行 PowerShell、调用外部 HTTP、创建技能、创建任务，并在真实系统里完成多步任务。
-
-# 当前通道
-{channel_text}
-
-# 工作区
-{workspace}
-技能目录：{workspace}\\skills
-项目目录：{workspace}\\projects
-脚本目录：{workspace}\\scripts
-当前进程管理员权限：{admin_text}
 
 # 工作方式（参考 opencode / Codex 的 agent loop）
 1. 先理解目标、约束和成功标准；信息不够时先做最小必要探查，不要凭空猜测。
@@ -484,14 +530,36 @@ class AssistantService:
 - 需要管理员权限的命令，把 admin=true 传给 run_powershell；会弹 UAC。
 - 自我迭代不是改主程序源码：优先在 skills/、projects/、scripts/ 下创建可复用能力；需要长期任务时用 create_task 记录。
 - 外部接口用 web_request，只允许 http/https。
-- 不要把密钥、密码、Token 写入普通文件或记忆；只记录“配置在哪里”。
+- 不要把密钥、密码、Token 写入普通文件或记忆；只记录“配置在哪里”。"""
 
-# 长期记忆（自动注入，供参考）
-{memory_lines}
+        custom_core = str(settings.get("operator_system_prompt") or "").strip()
+        core_text = custom_core or default_core
+        extra_prompt = str(settings.get("operator_prompt_extra") or "").strip()
+        extra_block = (
+            f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
+            if extra_prompt
+            else ""
+        )
+
+        return f"""{core_text}
+
+# 当前通道
+{channel_text}
+
+# 工作区
+{workspace}
+技能目录：{workspace}\\skills
+项目目录：{workspace}\\projects
+脚本目录：{workspace}\\scripts
+当前进程管理员权限：{admin_text}
 {persona_block}
+# 长期记忆（每次对话自动注入，供参考）
+以下是从过去对话总结的记忆。把它们当作背景，不要机械复述，也不要编造记忆里没有的内容：
+{memory_lines}
+
 # 已启用的技能 / MCP / 接口
 {resource_lines}
-
+{extra_block}
 # 可用工具（JSON，只有这里列出的才能调用）
 {catalog}
 
@@ -519,6 +587,8 @@ class AssistantService:
         persona: str = "",
         channel: str = "dashboard",
         progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        memory_scope: str = "operator",
+        memory_metadata: dict[str, Any] | None = None,
         store_user: bool = True,
         store_assistant: bool = True,
         emit_final: bool = True,
@@ -557,12 +627,38 @@ class AssistantService:
         account_key = str(
             (self.runtime.account or {}).get("wxid") if self.runtime else ""
         )
+        memory_limit = max(
+            1, min(30, int(settings.get("memory_context_items") or 8))
+        )
         remembers = await search_memories(
             query=message,
             group_id=None,
             account_key=account_key,
-            limit=8,
+            limit=memory_limit,
         )
+        if settings.get("memory_always_include", True):
+            # Always carry the most important long-term memories, even when
+            # the current message has no keyword overlap with them.
+            always = await search_memories(
+                query="",
+                group_id=None,
+                account_key=account_key,
+                limit=memory_limit,
+            )
+            remembers = _merge_memories(remembers, always, memory_limit)
+        try:
+            mem0_items = await mem0_memory.search(
+                settings,
+                account_key=account_key,
+                query=message,
+                limit=memory_limit,
+            )
+            if mem0_items:
+                remembers = _merge_memories(
+                    remembers, mem0_items, memory_limit
+                )
+        except Exception as exc:
+            logger.debug("Mem0 上下文检索跳过：%s", exc)
         rows = await history(session_id, limit=30)
         transcript = []
         used = 0
@@ -971,6 +1067,31 @@ class AssistantService:
             await emit({"phase": "final", "message": "任务完成"})
         if store_assistant:
             await _store(session_id, "assistant", final)
+        if (
+            store_assistant
+            and final
+            and not final.startswith("模型返回格式异常")
+        ):
+            memory_meta = {
+                "scope": memory_scope,
+                "source": "assistant",
+                "importance": 3,
+                "category": "conversation",
+                "title": "对话记忆",
+            }
+            memory_meta.update(memory_metadata or {})
+            memory_user_text = "\n".join(
+                [message, *insertions, *pending_followup]
+            ).strip()
+            mem0_memory.schedule_add_turn(
+                settings,
+                account_key=account_key,
+                messages=[
+                    {"role": "user", "content": memory_user_text},
+                    {"role": "assistant", "content": final},
+                ],
+                metadata=memory_meta,
+            )
         return {
             "reply": final,
             "trace": trace,

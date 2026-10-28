@@ -12,6 +12,42 @@ from app.db import SessionLocal
 from app.models import AgentMemory, Group, GroupConfig, Message, utcnow
 from app.services.llm import LLMError, LLMService, parse_json_object
 
+DEFAULT_MEMORY_PROMPT_TEMPLATE = "- [{importance}★ {category}] {title}：{content}"
+
+
+def format_memory_line(item: Any, template: str = "") -> str:
+    """Render one memory with the user-editable injection template.
+
+    Supported placeholders: {importance}, {category}, {title}, {content},
+    {scope}, {group_id}, {account_key}.
+    """
+    if isinstance(item, dict):
+        def value(name: str, default: Any = "") -> Any:
+            return item.get(name, default)
+    else:
+        def value(name: str, default: Any = "") -> Any:
+            return getattr(item, name, default)
+
+    values = {
+        "importance": value("importance", 1),
+        "category": value("category", "fact"),
+        "title": value("title", ""),
+        "content": value("content", ""),
+        "scope": value("scope", "global"),
+        "group_id": value("group_id", ""),
+        "account_key": value("account_key", ""),
+    }
+    text = str(template or DEFAULT_MEMORY_PROMPT_TEMPLATE)
+    try:
+        line = text.format_map(values)
+    except Exception:
+        line = (
+            f"[{values['importance']}★ {values['category']}] "
+            f"{values['title']}：{values['content']}"
+        )
+    return str(line).strip()
+
+
 MEMORY_SYSTEM = """你是长期记忆压缩器。把微信群聊压缩成少量、可复用、不会过期的记忆。
 要求：
 1. 只输出 JSON：{"memories":[{"importance":1-5,"category":"fact|preference|relationship|task|event|style","title":"短标题","content":"不超过80字"}]}
@@ -190,8 +226,11 @@ async def build_memory_context(
     lines = []
     used_ids = []
     used_chars = 0
+    template = str(
+        settings.get("memory_prompt_template") or DEFAULT_MEMORY_PROMPT_TEMPLATE
+    )
     for _score, item in scored[:limit]:
-        line = f"[{item.importance}★ {item.category}] {item.content}"
+        line = format_memory_line(item, template)
         if used_chars + len(line) > max_chars:
             break
         lines.append(line)
@@ -343,6 +382,39 @@ async def summarize_group_memories(
                 saved.append(memory_dict(memory))
             except Exception:
                 continue
+    mem0_added = False
+    if selected:
+        try:
+            from app.services import mem0_memory
+
+            if mem0_memory.enabled(settings):
+                mem_messages = [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[{row.sender_name or '群成员'}] "
+                            f"{str(row.content or '').strip()[:800]}"
+                        ),
+                    }
+                    for row in selected
+                    if str(row.content or "").strip()
+                ]
+                mem0_added = await mem0_memory.add_turn(
+                    settings,
+                    account_key=account_key,
+                    messages=mem_messages,
+                    metadata={
+                        "scope": "group",
+                        "group_id": str(group_id),
+                        "group_name": group_name,
+                        "source": "summary_batch",
+                        "importance": 3,
+                        "category": "conversation",
+                        "title": f"{group_name} 群聊记忆",
+                    },
+                )
+        except Exception:
+            mem0_added = False
     if selected:
         last_selected_id = selected[-1].id
         async with SessionLocal() as db:
@@ -354,6 +426,7 @@ async def summarize_group_memories(
         "saved": saved,
         "count": len(saved),
         "input_messages": len(selected),
+        "mem0_added": mem0_added,
         "model": result.get("model"),
         "prompt_tokens": result.get("prompt_tokens", 0),
         "completion_tokens": result.get("completion_tokens", 0),

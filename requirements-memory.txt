@@ -1,0 +1,6 @@
+# Optional Mem0 OSS semantic memory layer.
+# Install:
+#   .\.venv312\Scripts\python.exe -m pip install -r requirements-memory.txt
+mem0ai>=2.2.1
+fastembed>=0.9.1
+chromadb>=1.5.9

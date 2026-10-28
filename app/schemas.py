@@ -98,7 +98,14 @@ class SettingsUpdate(BaseModel):
     llm_temperature: float | None = Field(default=None, ge=0, le=2)
     llm_max_tokens: int | None = Field(default=None, ge=64, le=2000)
     llm_json_mode: bool | None = None
-    default_persona: str | None = None
+    default_persona: str | None = Field(default=None, max_length=12000)
+    operator_persona: str | None = Field(default=None, max_length=12000)
+    operator_prompt_extra: str | None = Field(default=None, max_length=12000)
+    operator_system_prompt: str | None = Field(default=None, max_length=12000)
+    group_prompt_extra: str | None = Field(default=None, max_length=12000)
+    group_system_prompt: str | None = Field(default=None, max_length=12000)
+    memory_prompt_template: str | None = Field(default=None, max_length=12000)
+    memory_always_include: bool | None = None
     default_trigger_mode: Literal["mention", "keyword", "all"] | None = None
     default_keywords: list[str] | None = None
     context_messages: int | None = Field(default=None, ge=4, le=50)
@@ -109,6 +116,10 @@ class SettingsUpdate(BaseModel):
     read_poll_interval_seconds: float | None = Field(default=None, ge=1, le=300)
     read_media_download_enabled: bool | None = None
     memory_enabled: bool | None = None
+    memory_engine: Literal["auto", "mem0", "sqlite"] | None = None
+    mem0_collection: str | None = Field(default=None, max_length=120)
+    memory_forgetting_enabled: bool | None = None
+    memory_forgetting_days: int | None = Field(default=None, ge=7, le=3650)
     memory_summary_max_input_chars: int | None = Field(default=None, ge=1000, le=30000)
     memory_summary_max_tokens: int | None = Field(default=None, ge=100, le=2000)
     memory_summary_max_items: int | None = Field(default=None, ge=1, le=12)
@@ -126,11 +137,19 @@ class SettingsUpdate(BaseModel):
     auto_login: Literal["", "mock", "replica", "wcf"] | None = None
     seed_sample_stickers: bool | None = None
 
-    @field_validator("default_persona")
+    @field_validator(
+        "default_persona",
+        "operator_persona",
+        "operator_prompt_extra",
+        "operator_system_prompt",
+        "group_prompt_extra",
+        "group_system_prompt",
+        "memory_prompt_template",
+    )
     @classmethod
-    def _persona(cls, value: str | None) -> str | None:
-        if value is not None and len(value) > 5000:
-            raise ValueError("默认人设不能超过 5000 字")
+    def _prompt_length(cls, value: str | None) -> str | None:
+        if value is not None and len(value) > 12000:
+            raise ValueError("提示词不能超过 12000 字")
         return value
 
 
