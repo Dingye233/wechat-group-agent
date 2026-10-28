@@ -538,8 +538,9 @@ class OpenCodeRuntime:
         started = time.monotonic()
         last_event_at = started
         try:
-            stall_timeout = float(
-                settings.get("opencode_stall_timeout_seconds") or 600.0
+            raw_stall = settings.get("opencode_stall_timeout_seconds")
+            stall_timeout = (
+                600.0 if raw_stall in (None, "") else float(raw_stall)
             )
         except (TypeError, ValueError):
             stall_timeout = 600.0
