@@ -48,7 +48,7 @@
 
 - **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。模型请求只使用群伴设置里每个用户自己的 Base URL / API Key / 模型，不读取 OpenCode 官方账号或内置 Key。
 - **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode，并注册为独立工具（如 `qunban_read_file`、`qunban_run_powershell`）；群伴 MCP 项目、技能和接口分别通过 `qunban_run_mcp`、`qunban_run_skill`、`qunban_call_interface` 调用。工具调用仍经过群伴的 capability 权限网关。
-- **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。群伴原生工具清单在 `data/opencode/tools.json`，OpenCode 可通过 `qunban_tool_admin` 新增别名、改描述、停用/启用、删除和同步工具。
+- **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。群伴原生工具清单在 `data/opencode/tools.json`，OpenCode 可通过 `qunban_tool_admin` 新增别名、改描述、停用/启用、删除和同步工具；也可以把新脚本写到 `data/opencode/tools/`，用 `handler_type="script"` 注册成真正的新工具，无需改 Python 主程序。
 
 
 - 文件读写、PowerShell（可选 UAC 管理员）、HTTP 接口、技能、MCP、自我迭代任务。

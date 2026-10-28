@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "data" / "opencode" / "tools.json"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 HANDLER_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
+SCRIPT_ROOT = ROOT / "data" / "opencode" / "tools"
 
 _SPECIAL_HANDLERS = {
     "bili_last_opinion",
@@ -58,6 +59,7 @@ def _seed_entry(item: dict[str, Any]) -> dict[str, Any]:
         "name": name,
         "description": f"{desc}。参数示例：{json.dumps(args, ensure_ascii=False)}",
         "handler": name,
+        "handler_type": "native",
         "args_example": args,
         "enabled": True,
         "source": "qunban-native",
@@ -86,6 +88,7 @@ def default_entries() -> list[dict[str, Any]]:
                 "name": name,
                 "description": f"{description}。参数示例：{json.dumps(example, ensure_ascii=False)}",
                 "handler": handler,
+                "handler_type": "native",
                 "args_example": example,
                 "enabled": True,
                 "source": "qunban-native",
@@ -140,16 +143,44 @@ def _normalise_tool(payload: dict[str, Any], existing: dict[str, Any] | None = N
     name = str(payload.get("name") or row.get("name") or "").strip()
     if not NAME_RE.match(name):
         raise ValueError("工具名只能包含字母、数字、下划线和短横线，长度 1-64")
-    handler = str(payload.get("handler") or row.get("handler") or name).strip()
-    if not HANDLER_RE.match(handler):
-        raise ValueError("handler 名称非法")
-    if handler not in _handler_names():
-        raise ValueError(
-            f"handler 不存在：{handler}。只能引用群伴已存在的原生工具。"
-        )
+    handler_type = str(
+        payload.get("handler_type") or row.get("handler_type") or "native"
+    ).strip().lower()
+    if handler_type not in {"native", "script"}:
+        raise ValueError("handler_type 只能是 native 或 script")
+    script = ""
+    if handler_type == "native":
+        handler = str(payload.get("handler") or row.get("handler") or name).strip()
+        if not HANDLER_RE.match(handler):
+            raise ValueError("handler 名称非法")
+        if handler not in _handler_names():
+            raise ValueError(
+                f"handler 不存在：{handler}。只能引用群伴已存在的原生工具。"
+            )
+    else:
+        raw_script = str(payload.get("script") or row.get("script") or "").strip()
+        if not raw_script:
+            raise ValueError("script 工具必须提供 script 路径")
+        candidate = Path(raw_script)
+        if not candidate.is_absolute():
+            candidate = SCRIPT_ROOT / candidate
+        SCRIPT_ROOT.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved = candidate.resolve()
+            relative = resolved.relative_to(SCRIPT_ROOT.resolve())
+        except Exception as exc:
+            raise ValueError(
+                "script 必须位于 data/opencode/tools 目录内"
+            ) from exc
+        if not resolved.is_file():
+            raise ValueError(f"script 文件不存在：{resolved}")
+        if resolved.suffix.lower() not in {".py", ".ps1"}:
+            raise ValueError("script 只支持 .py 或 .ps1")
+        script = str(relative).replace("\\", "/")
+        handler = "script"
     description = str(payload.get("description") or row.get("description") or "").strip()
     if not description:
-        description = f"群伴原生工具 {name}"
+        description = f"群伴工具 {name}"
     args_example = payload.get("args_example", row.get("args_example", {}))
     if not isinstance(args_example, dict):
         raise ValueError("args_example 必须是对象")
@@ -159,6 +190,8 @@ def _normalise_tool(payload: dict[str, Any], existing: dict[str, Any] | None = N
             "name": name,
             "description": description[:1200],
             "handler": handler,
+            "handler_type": handler_type,
+            "script": script,
             "args_example": args_example,
             "enabled": bool(enabled),
             "source": row.get("source") or "opencode",

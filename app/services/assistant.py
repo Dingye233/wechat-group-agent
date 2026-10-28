@@ -584,7 +584,8 @@ class AssistantService:
 - 专用工具使用命名参数，例如 `qunban_read_group(group_id=211, limit=30)`。
 - 自动注册的通用工具使用 `args` 对象，例如 `qunban_read_file(args={{"path": "a.txt"}})`、`qunban_run_powershell(args={{"command": "Get-Date"}})`。
 - 不确定工具名或参数时先调用 `qunban_capabilities`，它会返回可直接使用的 `call_tool`、`call_args`、说明和示例参数；也可以用通用入口 `qunban_tool(name="工具名", args={{...}})`。
-- 群伴原生工具的清单由你管理：需要新增别名、改描述、停用/启用、删除或同步工具时，调用 `qunban_tool_admin`。`handler` 只能引用群伴已有的原生工具。
+- 群伴原生工具的清单由你管理：需要新增别名、改描述、停用/启用、删除或同步工具时，调用 `qunban_tool_admin`。`handler` 只能引用群伴已有的原生工具；要造真正的新功能，写 `handler_type="script"` 的脚本工具。
+- 新建工具后，当前轮立刻用 `qunban_tool(name="新工具", args={...})` 调用；直接入口 `qunban_<新工具>` 会在本轮空闲后自动刷新，下一轮才可用。
 - 也可以在需要时使用 OpenCode 自带的 read/grep/glob/webfetch 等工具。
 - 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
 - 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。

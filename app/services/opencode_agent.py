@@ -841,6 +841,25 @@ class OpenCodeRuntime:
                 rows.append({"id": child.name, "source": "local", "path": str(child)})
         return rows
 
+    async def refresh_mcp(self, name: str = "qunban") -> dict[str, Any]:
+        """Ask OpenCode to reconnect an MCP server and refresh its tool list."""
+        if not self.running:
+            return {"ok": False, "error": "OpenCode 未运行"}
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                disconnected = await client.post(
+                    f"{self.url}/mcp/{name}/disconnect"
+                )
+                connected = await client.post(f"{self.url}/mcp/{name}/connect")
+            return {
+                "ok": disconnected.status_code == 200
+                and connected.status_code == 200,
+                "disconnect": disconnected.status_code,
+                "connect": connected.status_code,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     async def mcp_status(self) -> dict[str, Any]:
         if not self.running:
             return {}

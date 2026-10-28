@@ -23,8 +23,15 @@
   `qunban_tool(name, args)`。MCP 工具最终仍走群伴的 capability 权限网关。
 - 原生工具清单：`data/opencode/tools.json` 由 `app/services/tool_registry.py`
   管理，OpenCode 可以调用 `qunban_tool_admin` 执行
-  `list/get/upsert/remove/enable/disable/sync/reload`。新增工具时 `handler`
-  必须引用已存在的群伴原生工具；原生实现仍由群伴执行。
+  `list/get/upsert/remove/enable/disable/sync/reload/refresh`。
+- 真正的新功能：`handler_type="native"` 只能引用已有原生工具；要新增实际能力，
+  用 `handler_type="script"`，把 `.py` / `.ps1` 写到
+  `data/opencode/tools/` 并注册。脚本从 stdin 读取 JSON 参数、输出结果，
+  由群伴以 admin 范围执行。新脚本工具可以立即通过
+  `qunban_tool(name="工具名", args={...})` 调用；当前任务结束后会自动
+  重连 MCP，下一轮直接入口 `qunban_<工具名>` 可用。也可以显式调用
+  `qunban_tool_admin(action="refresh")`，它会等当前任务空闲后再刷新，不会
+  切断正在执行的步骤。
 - 群伴 MCP 项目 / 技能 / 接口：分别通过 `qunban_run_mcp`、
   `qunban_run_skill`、`qunban_call_interface` 调用；`qunban_capabilities`
   会返回可直接使用的工具名、示例参数和 `call_tool` / `call_args` 提示。

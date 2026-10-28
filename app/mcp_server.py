@@ -407,8 +407,11 @@ def _add_manifest_tool(entry: dict[str, Any]) -> None:
         server.remove_tool(name)
     except Exception:
         pass
+    # Call the manifest name, not the underlying handler.  The Qunban gateway
+    # resolves aliases and script/http handlers; this also makes newly created
+    # aliases callable through qunban_tool without a direct MCP snapshot.
     server.add_tool(
-        _make_tool(handler),
+        _make_tool(name),
         name=name,
         description=_entry_description(entry),
     )
@@ -464,13 +467,31 @@ async def _admin_call(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": f"工具管理 API 不可用：{exc}"}
 
 
+async def _refresh_mcp() -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{API_BASE}/api/opencode/refresh-mcp",
+                headers={"x-qunban-token": TOKEN},
+            )
+        if response.status_code >= 400:
+            return {"ok": False, "error": response.text[:4000]}
+        return response.json()
+    except Exception as exc:
+        return {"ok": False, "error": f"MCP 刷新 API 不可用：{exc}"}
+
+
 @server.tool(
     name="tool_admin",
     description=(
-        "管理群伴原生工具清单。action 支持 list/get/upsert/remove/enable/disable/sync/reload。"
-        "upsert 时在 tool 对象里传 name、description、handler、args_example、enabled；"
-        "handler 必须是群伴已存在的原生工具。示例："
-        '{"action":"upsert","tool":{"name":"read_file_fast","handler":"read_file","description":"快速读取文件","args_example":{"path":"a.txt"}}}'
+        "管理群伴工具清单。action 支持 list/get/upsert/remove/enable/disable/sync/reload/refresh。"
+        "refresh 会让 OpenCode 重连 MCP，使新建工具的直接入口进入工具列表。"
+        "upsert 时在 tool 对象里传 name、description、handler_type、handler/script、args_example、enabled。"
+        "handler_type=native 时 handler 引用群伴原生工具；handler_type=script 时 script 指向 "
+        "data/opencode/tools 下的 .py/.ps1 脚本，脚本从 stdin 读 JSON 参数并输出结果。"
+        "upsert 后当前任务内用 qunban_tool(name=..., args=...) 立即调用；直接入口 qunban_<name> "
+        "会在本轮空闲后自动刷新 MCP，下一轮可用。示例："
+        '{"action":"upsert","tool":{"name":"now_time","handler_type":"script","script":"now_time.py","description":"返回当前时间","args_example":{}}}'
     ),
 )
 async def qunban_tool_admin(
@@ -483,6 +504,8 @@ async def qunban_tool_admin(
         payload["name"] = name
     if tool:
         payload["tool"] = tool
+    if action.strip().lower() == "refresh":
+        return json.dumps(await _refresh_mcp(), ensure_ascii=False, default=str)
     result = await _admin_call(payload)
     if action.strip().lower() in {"upsert", "remove", "enable", "disable", "sync", "reload"}:
         try:
@@ -490,6 +513,11 @@ async def qunban_tool_admin(
             result["active_manifest_tools"] = len(names)
         except Exception as exc:
             result["reload_error"] = str(exc)
+        result["direct_tool_note"] = (
+            "当前任务内请用 qunban_tool(name=\"工具名\", args={...}) 立即调用；"
+            "直接入口会在本轮空闲后自动刷新 MCP，下一轮可用。"
+        )
+        await _refresh_mcp()
     return json.dumps(result, ensure_ascii=False, default=str)
 
 

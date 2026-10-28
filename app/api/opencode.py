@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import logging
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
-from app.services import tool_registry
+from app.services import assistant_tools, tool_registry
 from app.services.assistant import AssistantService
 from app.services.capabilities import list_capabilities
 from app.services.opencode_agent import (
@@ -25,6 +31,66 @@ router = APIRouter(tags=["opencode"])
 
 def _runtime():
     return get_opencode_runtime()
+
+
+def _manifest_entry(name: str) -> dict[str, Any] | None:
+    try:
+        return tool_registry.get_entry(name)
+    except Exception:
+        return None
+
+
+async def _run_script_tool(
+    entry: dict[str, Any], args: dict[str, Any]
+) -> dict[str, Any]:
+    root = (Path(tool_registry.ROOT) / "data" / "opencode" / "tools").resolve()
+    try:
+        script = (root / str(entry.get("script") or "")).resolve()
+        script.relative_to(root)
+    except Exception as exc:
+        raise ValueError("脚本路径非法") from exc
+    if not script.is_file():
+        raise ValueError(f"脚本不存在：{script}")
+    suffix = script.suffix.lower()
+    if suffix == ".py":
+        command = [sys.executable, str(script)]
+    elif suffix == ".ps1":
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+        ]
+    else:
+        raise ValueError("脚本只支持 .py 或 .ps1")
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(assistant_tools.workspace_root()),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    payload = json.dumps(args or {}, ensure_ascii=False).encode("utf-8")
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(payload), timeout=120
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("脚本工具执行超过 120 秒")
+    out = stdout.decode("utf-8", "replace").strip()
+    err = stderr.decode("utf-8", "replace").strip()
+    return {
+        "exit_code": proc.returncode,
+        "stdout": out[:20000],
+        "stderr": err[:8000],
+        "script": entry.get("script"),
+    }
 
 
 @router.get("/opencode/status")
@@ -183,6 +249,43 @@ async def opencode_tools_admin(
     return {"ok": True, "action": action, **result}
 
 
+@router.post("/opencode/refresh-mcp")
+async def opencode_refresh_mcp(request: Request) -> dict:
+    """Schedule an MCP reconnect after the current tool result is returned."""
+    supplied = request.headers.get("x-qunban-token", "")
+    expected = tool_token()
+    if not expected or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="无效的 OpenCode 工具令牌")
+
+    runtime = _runtime()
+
+    async def later() -> None:
+        # Never cut an active agent turn.  A direct MCP tool entry only needs
+        # to become available for the next turn; qunban_tool already resolves
+        # newly created aliases/scripts immediately.
+        deadline = asyncio.get_running_loop().time() + 300
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    response = await client.get(f"{runtime.url}/session/status")
+                statuses = response.json() if response.status_code == 200 else {}
+                busy = any(
+                    str((value or {}).get("type") or "") == "busy"
+                    for value in statuses.values()
+                    if isinstance(value, dict)
+                )
+            except Exception:
+                busy = False
+            if not busy:
+                break
+            await asyncio.sleep(1.0)
+        result = await runtime.refresh_mcp()
+        logger.info("OpenCode MCP refresh: %s", result)
+
+    asyncio.create_task(later(), name="opencode-mcp-refresh")
+    return {"ok": True, "scheduled": True, "wait_for_idle": True}
+
+
 @router.post("/opencode/tool")
 async def opencode_tool(
     request: Request,
@@ -207,6 +310,39 @@ async def opencode_tool(
         settings = await get_settings(db)
     account_key = str((runtime.account or {}).get("wxid") or "")
     service = AssistantService(runtime.llm, runtime)
+    original_name = name
+    entry = _manifest_entry(name)
+    if entry is not None:
+        if not entry.get("enabled", True):
+            return {"ok": False, "tool": original_name, "error": "工具已停用"}
+        handler_type = str(entry.get("handler_type") or "native").lower()
+        if handler_type == "script":
+            if scope != "admin":
+                return {
+                    "ok": False,
+                    "tool": original_name,
+                    "error": "脚本工具只允许 admin 范围调用",
+                }
+            try:
+                result = await _run_script_tool(entry, args)
+            except Exception as exc:
+                logger.warning("OpenCode 脚本工具 %s 失败：%s", original_name, exc)
+                return {"ok": False, "tool": original_name, "error": str(exc)}
+            if int(result.get("exit_code") or 0) != 0:
+                return {
+                    "ok": False,
+                    "tool": original_name,
+                    "error": result.get("stderr") or result.get("stdout") or "脚本执行失败",
+                    "result": result,
+                }
+            return {
+                "ok": True,
+                "tool": original_name,
+                "handler_type": "script",
+                "result": result,
+            }
+        # Native alias: route to the underlying Qunban capability.
+        name = str(entry.get("handler") or name)
     try:
         result = await service._tool_result(
             name,
@@ -217,6 +353,6 @@ async def opencode_tool(
             scope=scope,
         )
     except Exception as exc:
-        logger.warning("OpenCode 工具 %s 失败：%s", name, exc)
-        return {"ok": False, "tool": name, "error": str(exc)}
-    return {"ok": True, "tool": name, "result": result}
+        logger.warning("OpenCode 工具 %s 失败：%s", original_name, exc)
+        return {"ok": False, "tool": original_name, "error": str(exc)}
+    return {"ok": True, "tool": original_name, "result": result}
