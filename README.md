@@ -81,7 +81,7 @@
 - **发送校验与重发**：每条发送在微信数据库确认落库后才算成功。暂停、界面异常或超时导致未送达的消息会保存为「发送失败」并进入待重发队列；重新接管时先查数据库确认是否其实已送达，再重发未送达的消息，避免重复。失败消息在聊天区显示「发送失败 · 点击重发」，也可以单独重发。
 - **任务进度**：助手执行高复杂度任务时，会通过 WebSocket 推送「第 N 步、正在调用哪个工具、成功/失败」等关键节点，显示在对话框上方；工具调用记录仍会持久化。管理员私聊会同步收到精简的微信进度。
 - **无人值守循环**：默认不限制步数，Agent 会持续「规划 → 调工具 → 看结果 → 继续」直到完成；用户可以随时点「停止」或在微信发「停止」打断，也可以在执行中继续发新要求，Agent 会合并处理。同一工具相同参数连续失败 3 次、或连续 5 次返回相同结果时，Agent 会自行停止并说明原因。
-- **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。
+- **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。DeepSeek Harness 的群聊接入评估见 [docs/dsh-group-agent.md](docs/dsh-group-agent.md)。
 - **连续消息**：群配置新增「允许连续发送多条消息」和最多条数（2–6）。模型可以输出文字 + 表情包混合的多段回复，Agent 会按顺序逐条发送。
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
 - **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。群聊默认开放只读的 `bili_knowledge_search` / `bili_last_opinion` / `bili_video_info` / `bili_comments`，让 Agent 能回答“你看了什么/学到了什么”，且没有知识库结果时禁止编造具体视频内容。
