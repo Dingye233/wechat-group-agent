@@ -208,17 +208,12 @@ def _fast_rebuild(
                 # appended while we were building, the result may be a torn
                 # generation; retry instead of publishing it.
                 try:
+                    # A WAL append during the merge is harmless: the next
+                    # incremental poll applies the new frames.  Only a main-DB
+                    # checkpoint invalidates the decrypted pages.
                     if (
                         os.path.getmtime(src) != src_mtime
                         or os.path.getsize(src) != src_size
-                        or (
-                            wal
-                            and os.path.exists(wal)
-                            and (
-                                os.path.getmtime(wal) != wal_mtime
-                                or os.path.getsize(wal) != wal_size
-                            )
-                        )
                     ):
                         continue
                 except OSError:

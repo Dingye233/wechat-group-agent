@@ -43,7 +43,10 @@ class AgentEngine:
         self._last_reply: dict[int, float] = {}
         self._reply_times: dict[int, deque[float]] = defaultdict(deque)
         self._next_reply_at: dict[int, float] = {}
-        self._latest_trigger: dict[int, int] = {}
+        # Coalesce a burst per sender, not per group.  A group-wide key let a
+        # message from another member cancel an earlier member's pending
+        # question while a slow multi-segment reply was being sent.
+        self._latest_trigger: dict[tuple[int, str], int] = {}
         self._global_lock = asyncio.Lock()
         self._global_next_reply = 0.0
         self._processed: deque[int] = deque(maxlen=3000)
@@ -103,14 +106,17 @@ class AgentEngine:
 
             lock = self._locks.setdefault(group_id, asyncio.Lock())
 
-        # Merge a burst of triggering messages: wait a short, random settling
-        # window and only let the newest trigger for this group reply. This
-        # avoids two or three answers for messages sent seconds apart.
-        self._latest_trigger[group_id] = message_id
+        # Merge a burst from the same sender only.  Different members must not
+        # cancel each other just because one reply's UI send is still running.
+        trigger_key = (
+            group_id,
+            str(message.sender_wxid or message.sender_name or message.id),
+        )
+        self._latest_trigger[trigger_key] = message_id
         # Short burst-coalescing window. The previous 1.0-2.5s window made a
         # normal group reply feel noticeably delayed.
         await asyncio.sleep(random.uniform(0.3, 0.9))
-        if self._latest_trigger.get(group_id) != message_id:
+        if self._latest_trigger.get(trigger_key) != message_id:
             return
 
         async with lock:
@@ -231,6 +237,7 @@ class AgentEngine:
                             text=str(segment.get("text") or ""),
                             sticker=segment.get("sticker"),
                             meta=segment_meta,
+                            reuse_chat=index > 0,
                         )
                         if sent:
                             sent_any = True
@@ -688,6 +695,7 @@ class AgentEngine:
                         "segment": index + 1,
                         "segment_count": len(segments),
                     },
+                    reuse_chat=index > 0,
                 )
                 sent_any = sent_any or bool(sent)
             if sent_any:
@@ -857,6 +865,7 @@ class AgentEngine:
 6. 普通模式最多选择一个表情包；连续消息模式可穿插表情包，但不要每条都发。
 7. 只输出一个 JSON 对象，不要输出 Markdown 代码块或其他文字。
 8. 先直接回应最后一条消息的具体问题；不要用玩笑、人设或旧话题回避。用户在反馈卡顿、答非所问或工具问题时，先说明你实际看到了什么、准备怎么处理。
+9. 同一个人连续发多条时，把它们当成一个完整意图回答，不要只抓最后两个字。涉及查询/泄露他人个人信息、手机号、住址等隐私时，明确说明群聊里不能提供，不要编造。
 {extra_block}
 # 可用表情包
 {sticker_catalog}

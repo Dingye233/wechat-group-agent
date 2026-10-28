@@ -1919,6 +1919,26 @@ class RuntimeManager:
         """Stable key of the currently active WeChat account."""
         return str((self.account or {}).get("wxid") or "")
 
+    async def _adapter_send_text(
+        self, room_id: str, text: str, *, reuse_chat: bool = False
+    ) -> None:
+        if self.adapter is None:
+            raise RuntimeError("微信账号未登录")
+        if reuse_chat and self.adapter_id == "replica":
+            await self.adapter.send_text(room_id, text, reuse_chat=True)
+        else:
+            await self.adapter.send_text(room_id, text)
+
+    async def _adapter_send_sticker(
+        self, room_id: str, path: Path, *, reuse_chat: bool = False
+    ) -> None:
+        if self.adapter is None:
+            raise RuntimeError("微信账号未登录")
+        if reuse_chat and self.adapter_id == "replica":
+            await self.adapter.send_sticker(room_id, path, reuse_chat=True)
+        else:
+            await self.adapter.send_sticker(room_id, path)
+
     async def send_agent_message(
         self,
         group_id: int,
@@ -1926,6 +1946,7 @@ class RuntimeManager:
         text: str = "",
         sticker: Sticker | None = None,
         meta: dict[str, Any] | None = None,
+        reuse_chat: bool = False,
     ) -> bool:
         if not self.is_online or self.adapter is None:
             raise RuntimeError("微信账号未登录")
@@ -1942,7 +1963,9 @@ class RuntimeManager:
         if text.strip():
             try:
                 self._ensure_attached()
-                await self.adapter.send_text(group.external_id, text.strip())
+                await self._adapter_send_text(
+                    group.external_id, text.strip(), reuse_chat=reuse_chat
+                )
             except Exception as exc:
                 await self._record_failed_send(
                     group,
@@ -2005,7 +2028,11 @@ class RuntimeManager:
             sticker_meta = {**meta, "sticker_id": sticker.id}
             try:
                 self._ensure_attached()
-                await self.adapter.send_sticker(group.external_id, path)
+                await self._adapter_send_sticker(
+                    group.external_id,
+                    path,
+                    reuse_chat=reuse_chat or sent_any,
+                )
             except Exception as exc:
                 await self._record_failed_send(
                     group,
@@ -2053,7 +2080,7 @@ class RuntimeManager:
         if text.strip():
             try:
                 self._ensure_attached()
-                await self.adapter.send_text(group.external_id, text.strip())
+                await self._adapter_send_text(group.external_id, text.strip())
             except Exception as exc:
                 await self._record_failed_send(
                     group,

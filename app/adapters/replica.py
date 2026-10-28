@@ -1907,10 +1907,16 @@ class ReplicaAdapter(BaseAdapter):
                 break
         raise RuntimeError(f"{action}失败：{last_error}")
 
-    async def send_text(self, room_id: str, text: str) -> None:
-        await asyncio.to_thread(self._send_text_sync, room_id, text)
+    async def send_text(
+        self, room_id: str, text: str, *, reuse_chat: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self._send_text_sync, room_id, text, reuse_chat
+        )
 
-    def _prepare_send_gui(self, raw: str, name: str = "") -> Any:
+    def _prepare_send_gui(
+        self, raw: str, name: str = "", reuse: bool = False
+    ) -> Any:
         """Bind wechatauto to the current WeChat window and pre-open the chat.
 
         Group/contact lookup deliberately uses the display name, never the raw
@@ -1925,6 +1931,24 @@ class ReplicaAdapter(BaseAdapter):
             or "@chatroom" in display_name.lower()
         ):
             raise RuntimeError("没有可用的群名，已取消发送，避免用 chatroom ID 搜索")
+        if reuse:
+            wx = self._wx
+            gui = getattr(wx, "_gui", None) if wx is not None else None
+            if (
+                wx is not None
+                and gui is not None
+                and str(getattr(wx, "_wxid", "") or "") == raw
+                and str(getattr(gui, "_current_chat", "") or "") == display_name
+            ):
+                try:
+                    gui.ensure_visible()
+                except Exception:
+                    pass
+                try:
+                    if gui.get_input_box():
+                        return wx
+                except Exception:
+                    pass
         hwnd = 0
         try:
             hwnd = self.recover_window()
@@ -1997,13 +2021,15 @@ class ReplicaAdapter(BaseAdapter):
             self._run_ui, task, 90.0, True
         )
 
-    def _send_text_sync(self, room_id: str, text: str) -> None:
+    def _send_text_sync(
+        self, room_id: str, text: str, reuse_chat: bool = False
+    ) -> None:
         self._ensure_attached()
         raw = self._room_raw(room_id)
         name = self._group_name(raw)
 
         def task() -> Any:
-            wx = self._prepare_send_gui(raw, name)
+            wx = self._prepare_send_gui(raw, name, reuse=reuse_chat)
             return wx.SendMsg(text, who=name, exact=True)
 
         self._send_with_retry(
@@ -2015,10 +2041,16 @@ class ReplicaAdapter(BaseAdapter):
         )
         self.log(f"已发送文本到「{self._group_name(raw)}」")
 
-    async def send_sticker(self, room_id: str, path: Path) -> None:
-        await asyncio.to_thread(self._send_sticker_sync, room_id, path.resolve())
+    async def send_sticker(
+        self, room_id: str, path: Path, *, reuse_chat: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self._send_sticker_sync, room_id, path.resolve(), reuse_chat
+        )
 
-    def _send_sticker_sync(self, room_id: str, path: Path) -> None:
+    def _send_sticker_sync(
+        self, room_id: str, path: Path, reuse_chat: bool = False
+    ) -> None:
         self._ensure_attached()
         if not path.exists():
             raise RuntimeError(f"表情文件不存在：{path}")
@@ -2026,7 +2058,7 @@ class ReplicaAdapter(BaseAdapter):
         name = self._group_name(raw)
 
         def task() -> Any:
-            wx = self._prepare_send_gui(raw, name)
+            wx = self._prepare_send_gui(raw, name, reuse=reuse_chat)
             # Use the replica public API for sticker/image delivery. WeChat
             # stores the resulting message as an image row, which the DB
             # listener reads back normally.
