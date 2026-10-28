@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui7">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui7">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui10">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui10">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -197,7 +197,7 @@
                   <button class="composer-btn" id="attachment-btn" title="发送图片 / 文件"><span data-icon="upload"></span></button>
                   <input type="file" id="attachment-input" hidden>
                   <button class="composer-btn" id="sticker-pick-btn" title="发送表情包"><span data-icon="smile"></span></button>
-                  <textarea id="composer-input" rows="1" placeholder="以账号身份发送消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+                  <textarea id="composer-input" rows="1" placeholder="以账号身份发送消息…"></textarea>
                   <button class="btn btn-primary send-btn" id="send-btn">发送</button>
                 </div>
                 <div class="composer-foot">
@@ -550,6 +550,125 @@
                 <p class="field-hint">运行时：<code>data/dsh/runtimes</code>；Harness home：<code>data/dsh/home</code>；源码/版本来源：<a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noreferrer">deepseek-ai/deepseek-harness</a></p>
               </div>
               </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- STICKERS -->
+      <section class="tab-panel" id="tab-plugins" hidden>
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">PLUGIN STUDIO</span>
+              <h1>插件与能力</h1>
+              <p>统一管理 DSH 插件和群伴能力：内置插件、导入包、DSH 生成插件、技能、MCP、外部接口和脚本工具。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost" id="plugins-refresh"><span data-icon="refresh"></span>刷新全部</button>
+            </div>
+          </div>
+
+          <div class="plugin-stats" id="plugin-stats">
+            <div class="plugin-stat"><span>DSH 版本</span><strong id="plugin-stat-version">—</strong></div>
+            <div class="plugin-stat"><span>DSH 内置</span><strong id="plugin-stat-builtin">—</strong></div>
+            <div class="plugin-stat"><span>DSH 启用</span><strong id="plugin-stat-active">—</strong></div>
+            <div class="plugin-stat"><span>已安装 / 生成</span><strong id="plugin-stat-custom">—</strong></div>
+            <div class="plugin-stat"><span>群伴能力</span><strong id="plugin-stat-qunban">—</strong></div>
+          </div>
+
+          <div class="plugin-mode-tabs" id="plugin-mode-tabs">
+            <button class="active" type="button" data-plugin-mode="dsh"><span data-icon="plug"></span>DSH 插件<span class="plugin-tab-count" id="plugin-tab-dsh-count">—</span></button>
+            <button type="button" data-plugin-mode="qunban"><span data-icon="sparkles"></span>群伴能力<span class="plugin-tab-count" id="plugin-tab-qunban-count">—</span></button>
+          </div>
+
+          <div class="plugin-layout">
+            <div class="plugin-main">
+              <div id="plugin-mode-dsh">
+                <div class="plugin-toolbar">
+                  <label class="search-box search-box-wide"><span data-icon="search"></span><input id="plugin-search" placeholder="搜索插件名、ID 或说明"></label>
+                  <div class="tag-row" id="plugin-categories"></div>
+                  <label class="check-row plugin-active-only"><input type="checkbox" id="plugin-active-only"><span>只看启用</span></label>
+                </div>
+                <div class="plugin-catalog" id="plugin-catalog"></div>
+                <div class="empty-state" id="plugin-empty" hidden>
+                  <span data-icon="plug"></span>
+                  <h3>没有匹配的插件</h3>
+                  <p>换个关键词，或者取消「只看启用」。</p>
+                </div>
+              </div>
+
+              <div id="plugin-mode-qunban" hidden>
+                <div class="plugin-toolbar">
+                  <label class="search-box search-box-wide"><span data-icon="search"></span><input id="qunban-plugin-search" placeholder="搜索技能、MCP、接口或工具"></label>
+                  <div class="tag-row" id="qunban-plugin-filters"></div>
+                  <button class="btn btn-ghost" id="qunban-capability-sync"><span data-icon="refresh"></span>重新识别</button>
+                </div>
+                <div class="qunban-capability-list" id="qunban-capability-list"></div>
+                <div class="empty-state" id="qunban-plugin-empty" hidden>
+                  <span data-icon="sparkles"></span>
+                  <h3>还没有群伴能力</h3>
+                  <p>在「助手 → 技能 / 能力」里创建工作区技能或 MCP 项目。</p>
+                </div>
+              </div>
+            </div>
+
+            <aside class="plugin-side">
+              <div class="plugin-side-group" data-plugin-side="dsh">
+                <section class="plugin-card">
+                  <div class="plugin-card-head"><strong>已安装 DSH 插件</strong><span class="plugin-count" id="plugin-installed-count">0</span></div>
+                  <div class="plugin-mini-list" id="plugin-installed"></div>
+                  <p class="field-hint">群伴原生插件、导入包和生成插件都在这里。DSH 内置插件只读。</p>
+                </section>
+
+                <section class="plugin-card">
+                  <div class="plugin-card-head"><strong>导入 DSH 插件</strong><span class="plugin-badge">npm / git / 本地</span></div>
+                  <label class="field-label">包名或路径
+                    <input id="plugin-import-spec" placeholder="@scope/pkg、github:user/repo 或 C:\path\plugin">
+                  </label>
+                  <label class="check-row"><input type="checkbox" id="plugin-import-enabled" checked><span>导入后立即启用</span></label>
+                  <button class="btn btn-primary plugin-wide" id="plugin-import-btn"><span data-icon="upload"></span>导入到 qunban profile</button>
+                  <p class="field-hint">导入的插件会执行任意 JavaScript，只安装你信任的包。安装后下一次 DSH 任务生效。</p>
+                </section>
+
+                <section class="plugin-card plugin-create-card">
+                  <div class="plugin-card-head"><strong>DSH 创造模式</strong><span class="plugin-badge accent">自扩展</span></div>
+                  <div class="plugin-form-grid">
+                    <label class="field-label">插件名
+                      <input id="plugin-create-name" placeholder="例如 ticket-helper">
+                    </label>
+                    <label class="field-label">一句话说明
+                      <input id="plugin-create-desc" placeholder="这个插件帮群伴做什么">
+                    </label>
+                    <label class="field-label plugin-span-2">需求
+                      <textarea id="plugin-create-requirements" rows="3" placeholder="描述输入、输出、调用条件。DSH 会据此写 lib/index.js，并自检。"></textarea>
+                    </label>
+                  </div>
+                  <label class="check-row"><input type="checkbox" id="plugin-create-agent" checked><span>让 DSH 编写实现（较慢，但会按需求生成）</span></label>
+                  <label class="check-row"><input type="checkbox" id="plugin-create-enabled" checked><span>生成后立即启用</span></label>
+                  <button class="btn btn-primary plugin-wide" id="plugin-create-btn"><span data-icon="sparkles"></span>生成并安装</button>
+                  <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件，方便之后继续改。</p>
+                </section>
+              </div>
+
+              <div class="plugin-side-group" data-plugin-side="qunban" hidden>
+                <section class="plugin-card">
+                  <div class="plugin-card-head"><strong>群伴能力</strong><span class="plugin-badge accent">技能 / MCP / 接口</span></div>
+                  <div class="qunban-plugin-counts" id="qunban-plugin-counts"></div>
+                  <p class="field-hint">这些能力来自群伴工作区，和 DSH 内置插件分开管理。助手列给 Operator 用，群聊列给群任务用。</p>
+                  <button class="btn btn-ghost plugin-wide" id="qunban-capability-sync-side"><span data-icon="refresh"></span>重新扫描工作区</button>
+                </section>
+                <section class="plugin-card">
+                  <div class="plugin-card-head"><strong>新增能力</strong><span class="plugin-badge">工作区</span></div>
+                  <p class="field-hint">技能放在 <code>data/agent_workspace/skills/&lt;name&gt;/SKILL.md</code>；MCP 项目放在 <code>data/agent_workspace/projects/</code>；接口放在 <code>data/agent_workspace/interfaces/</code>。</p>
+                  <button class="btn btn-ghost plugin-wide" id="qunban-open-assistant"><span data-icon="sparkles"></span>去助手创建</button>
+                </section>
+              </div>
+
+              <section class="plugin-card plugin-job-card" id="plugin-job-card" hidden>
+                <div class="plugin-card-head"><strong id="plugin-job-title">任务</strong><span class="plugin-badge" id="plugin-job-status">running</span></div>
+                <div class="plugin-job-log" id="plugin-job-log"></div>
+              </section>
             </aside>
           </div>
         </div>
@@ -1038,6 +1157,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui7" defer></script>
+  <script src="/app.js?v=20261029-ui10" defer></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 /* ============================================================
    群伴 · WeChat Group Agent — frontend
@@ -65,6 +65,10 @@ const state = {
   pluginQuery: '',
   pluginCategory: '全部',
   pluginActiveOnly: false,
+  pluginMode: 'dsh',
+  qunbanCapabilities: [],
+  qunbanQuery: '',
+  qunbanFilter: '全部',
   pluginJobId: '',
   pluginJobTimer: null,
   toolMoments: [],
@@ -874,7 +878,7 @@ function updateComposerState() {
     input.placeholder = state.detached
       ? '群伴已脱离控制，请先点击「重新接管」'
       : online
-        ? '以账号身份发送消息…（Enter 发送，Shift + Enter 换行）'
+        ? '以账号身份发送消息…'
         : '登录微信后可发送消息';
   }
   if (send) send.disabled = !attached;
@@ -3457,7 +3461,7 @@ async function switchAssistantConversation(value) {
   if (step) step.hidden = false;
   if (attach) attach.hidden = false;
   const input = $('#assistant-input');
-  if (input) input.placeholder = '告诉 Agent 要做什么…（Enter 发送，Shift + Enter 换行）';
+  if (input) input.placeholder = '告诉 Agent 要做什么…';
   const send = $('#assistant-send');
   if (send) send.textContent = state.assistantBusy ? '插入' : '发送';
   if (stop) stop.hidden = !state.assistantBusy;
@@ -3748,6 +3752,21 @@ function switchAssistantPanel(name, options = {}) {
       }
     }, 4000);
   }
+  if (state.currentTab === 'assistant') loadAssistantPanel(name);
+}
+
+function loadAssistantPanel(name) {
+  if (name === 'workspace') loadAssistantFiles();
+  if (name === 'skills') loadAssistantSkills();
+  if (name === 'memory') loadAssistantMemories();
+  if (name === 'tasks') loadAssistantTasks();
+  if (name === 'contacts') loadAssistantContacts();
+  if (name === 'bili') {
+    loadBiliStatus();
+    loadBiliAutopilot();
+  }
+  if (name === 'capabilities') loadAssistantCapabilities();
+  if (name === 'dsh') loadDSH();
 }
 
 let dshPollTimer = null;
@@ -3819,12 +3838,26 @@ async function loadDSH() {
 
 async function loadPlugins() {
   if (!$('#plugin-catalog')) return;
-  const catalog = await api('/dsh/plugins');
+  const [catalog, capabilityData] = await Promise.all([
+    api('/dsh/plugins'),
+    api('/capabilities'),
+  ]);
   state.plugins = catalog;
+  state.qunbanCapabilities = capabilityData.capabilities || [];
   renderPluginStats();
   renderPluginCategories();
   renderPluginCatalog();
   renderInstalledPlugins();
+  renderQunbanFilters();
+  renderQunbanCapabilities();
+  renderPluginMode();
+}
+
+function qunbanPluginItems() {
+  return (state.qunbanCapabilities || []).filter((row) => {
+    if (row.type === 'skill' || row.type === 'mcp' || row.type === 'api') return true;
+    return row.type === 'tool' && !row.builtin;
+  });
 }
 
 function renderPluginStats() {
@@ -3835,6 +3868,7 @@ function renderPluginStats() {
     const node = $(id);
     if (node) node.textContent = value;
   };
+  const qunbanCount = qunbanPluginItems().length;
   set('#plugin-stat-version', runtime.version ? `v${runtime.version}` : '—');
   set('#plugin-stat-builtin', String(counts.builtin ?? '—'));
   set('#plugin-stat-active', String(counts.active ?? '—'));
@@ -3842,6 +3876,9 @@ function renderPluginStats() {
     '#plugin-stat-custom',
     `${counts.imported ?? 0} / ${counts.generated ?? 0}`,
   );
+  set('#plugin-stat-qunban', String(qunbanCount));
+  set('#plugin-tab-dsh-count', String(counts.builtin ?? ''));
+  set('#plugin-tab-qunban-count', String(qunbanCount));
 }
 
 function renderPluginCategories() {
@@ -3989,6 +4026,157 @@ async function togglePlugin(id, enabled) {
   }
 }
 
+function renderPluginMode() {
+  const mode = state.pluginMode === 'qunban' ? 'qunban' : 'dsh';
+  for (const button of $$('#plugin-mode-tabs [data-plugin-mode]')) {
+    button.classList.toggle('active', button.dataset.pluginMode === mode);
+  }
+  const dsh = $('#plugin-mode-dsh');
+  const qunban = $('#plugin-mode-qunban');
+  if (dsh) dsh.hidden = mode !== 'dsh';
+  if (qunban) qunban.hidden = mode !== 'qunban';
+  for (const group of $$('[data-plugin-side]')) {
+    group.hidden = group.dataset.pluginSide !== mode;
+  }
+  if (mode === 'qunban') {
+    renderQunbanFilters();
+    renderQunbanCapabilities();
+  }
+}
+
+function qunbanTypeLabel(type) {
+  return {
+    skill: '技能',
+    mcp: 'MCP',
+    api: '接口',
+    tool: '工具',
+  }[type] || type;
+}
+
+function renderQunbanFilters() {
+  const root = $('#qunban-plugin-filters');
+  if (!root) return;
+  const rows = qunbanPluginItems();
+  const types = ['全部', ...Array.from(new Set(rows.map((row) => qunbanTypeLabel(row.type))))];
+  root.replaceChildren();
+  for (const label of types) {
+    const button = el(
+      'button',
+      `tag-chip${state.qunbanFilter === label ? ' active' : ''}`,
+      label,
+    );
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      state.qunbanFilter = label;
+      renderQunbanFilters();
+      renderQunbanCapabilities();
+    });
+    root.appendChild(button);
+  }
+}
+
+function renderQunbanCapabilities() {
+  const root = $('#qunban-capability-list');
+  if (!root) return;
+  const query = state.qunbanQuery.trim().toLowerCase();
+  const rows = qunbanPluginItems().filter((row) => {
+    if (state.qunbanFilter !== '全部' && qunbanTypeLabel(row.type) !== state.qunbanFilter) {
+      return false;
+    }
+    if (!query) return true;
+    return `${row.name || ''} ${row.key || ''} ${row.description || ''}`
+      .toLowerCase()
+      .includes(query);
+  });
+  root.replaceChildren();
+  const empty = $('#qunban-plugin-empty');
+  if (empty) empty.hidden = rows.length > 0;
+  const counts = $('#qunban-plugin-counts');
+  if (counts) {
+    const grouped = {};
+    for (const row of qunbanPluginItems()) {
+      const label = qunbanTypeLabel(row.type);
+      grouped[label] = (grouped[label] || 0) + 1;
+    }
+    counts.textContent = Object.entries(grouped)
+      .map(([label, value]) => `${label} ${value}`)
+      .join(' · ');
+  }
+  if (!rows.length) return;
+  for (const row of rows) {
+    const item = el('article', 'qunban-cap-item');
+    const iconWrap = el('div', 'qunban-cap-icon');
+    iconWrap.innerHTML = icon(row.type === 'mcp' ? 'plug' : 'sparkles', 17);
+    item.appendChild(iconWrap);
+    const body = el('div', 'qunban-cap-body');
+    const title = el('div', 'qunban-cap-title');
+    title.appendChild(el('strong', null, row.name || row.key));
+    title.appendChild(el('span', 'plugin-badge', qunbanTypeLabel(row.type)));
+    if (row.risk === 'high') title.appendChild(el('span', 'plugin-badge danger', '高风险'));
+    body.appendChild(title);
+    body.appendChild(el('code', 'plugin-package', row.key || ''));
+    if (row.description) body.appendChild(el('p', 'plugin-desc', row.description));
+    if (row.source) {
+      body.appendChild(el('p', 'qunban-cap-source', String(row.source).replace(/^.*agent_workspace[\\/]/, 'agent_workspace/')));
+    }
+    item.appendChild(body);
+    const toggles = el('div', 'qunban-cap-toggles');
+    for (const [scope, field, label] of [
+      ['assistant', 'enabled_assistant', '助手'],
+      ['group', 'enabled_group', '群聊'],
+    ]) {
+      const wrapper = el('label', 'qunban-toggle');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(row[field]);
+      input.addEventListener('change', () => {
+        toggleQunbanCapability(row.key, { [field]: input.checked });
+      });
+      wrapper.appendChild(input);
+      wrapper.appendChild(el('span', null, label));
+      toggles.appendChild(wrapper);
+    }
+    item.appendChild(toggles);
+    root.appendChild(item);
+  }
+}
+
+async function toggleQunbanCapability(key, payload) {
+  try {
+    const data = await api('/capabilities', {
+      method: 'PATCH',
+      body: JSON.stringify({ key, ...payload }),
+    });
+    state.qunbanCapabilities = state.qunbanCapabilities.map((row) =>
+      row.key === key ? { ...row, ...payload, ...(data || {}) } : row,
+    );
+    renderPluginStats();
+    renderQunbanFilters();
+    renderQunbanCapabilities();
+    toast('能力开关已保存');
+  } catch (error) {
+    toast(error.message, 'error');
+    renderQunbanCapabilities();
+  }
+}
+
+async function syncQunbanCapabilities() {
+  try {
+    const data = await api('/capabilities/sync', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    state.qunbanCapabilities = data.capabilities || [];
+    renderPluginStats();
+    renderQunbanFilters();
+    renderQunbanCapabilities();
+    toast('群伴能力已重新扫描');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+
 function setPluginJob(job) {
   state.pluginJobId = job?.id || '';
   const card = $('#plugin-job-card');
@@ -4103,6 +4291,12 @@ function bindPluginEvents() {
   $('#plugins-refresh')?.addEventListener('click', () => {
     loadPlugins().catch((error) => toast(error.message, 'error'));
   });
+  $$('#plugin-mode-tabs [data-plugin-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.pluginMode = button.dataset.pluginMode === 'qunban' ? 'qunban' : 'dsh';
+      renderPluginMode();
+    });
+  });
   $('#plugin-search')?.addEventListener('input', (event) => {
     state.pluginQuery = event.target.value;
     renderPluginCatalog();
@@ -4110,6 +4304,16 @@ function bindPluginEvents() {
   $('#plugin-active-only')?.addEventListener('change', (event) => {
     state.pluginActiveOnly = Boolean(event.target.checked);
     renderPluginCatalog();
+  });
+  $('#qunban-plugin-search')?.addEventListener('input', (event) => {
+    state.qunbanQuery = event.target.value;
+    renderQunbanCapabilities();
+  });
+  $('#qunban-capability-sync')?.addEventListener('click', syncQunbanCapabilities);
+  $('#qunban-capability-sync-side')?.addEventListener('click', syncQunbanCapabilities);
+  $('#qunban-open-assistant')?.addEventListener('click', () => {
+    showTab('assistant');
+    switchAssistantPanel('skills');
   });
   $('#plugin-import-btn')?.addEventListener('click', startPluginImport);
   $('#plugin-create-btn')?.addEventListener('click', startPluginCreate);
@@ -5244,20 +5448,7 @@ function bindAssistantActions() {
   });
   $$('.assistant-side-tabs button').forEach((button) => {
     button.addEventListener('click', () => {
-      const name = button.dataset.assistantPanel;
-      switchAssistantPanel(name);
-      if (name === 'workspace') loadAssistantFiles();
-      if (name === 'skills') loadAssistantSkills();
-      if (name === 'memory') loadAssistantMemories();
-      if (name === 'tasks') loadAssistantTasks();
-      if (name === 'contacts') loadAssistantContacts();
-      if (name === 'bili') {
-        loadBiliStatus();
-        loadBiliAutopilot();
-      }
-      if (name === 'capabilities') loadAssistantCapabilities();
-      if (name === 'opencode') loadOpenCode();
-      if (name === 'dsh') loadDSH();
+      switchAssistantPanel(button.dataset.assistantPanel);
     });
   });
   $('#opencode-refresh')?.addEventListener('click', loadOpenCode);
@@ -5529,6 +5720,7 @@ function showTab(tab, options = {}) {
     }
     loadAssistantConversationOptions().catch(() => {});
     loadAssistantFiles().catch(() => {});
+    loadAssistantPanel(state.assistantPanel);
   }
   if (tab === 'chats') {
     syncWorkspaceLayout(Boolean(state.selectedGroupId));

@@ -1,14 +1,18 @@
-# DSH 插件工作室
+﻿# DSH 插件工作室
 
-「插件」是群伴新增的顶层选项卡，用来查看 DeepSeek Harness 的内置插件、导入外部插件，以及让 DSH 按需求现场写一个群伴插件。
+「插件」是群伴新增的顶层选项卡，用来统一管理两类能力：
+
+- **DSH 插件**：Harness 内置插件、群伴原生插件、npm/git/本地导入包、DSH 现场生成的插件。
+- **群伴能力**：工作区里的 skills、MCP 项目、外部接口和自定义脚本工具，按「助手 / 群聊」两个作用域开关。
 
 ## 1. 页面结构
 
-- **统计**：DSH 版本、内置插件数、当前启用数、导入/生成数。
-- **目录**：从 DSH 的 `--dump-config` 读取真实组合结果，不是硬编码。支持关键词、分类和「只看启用」。
-- **已安装**：群伴原生插件、导入包、DSH 生成插件；非内置项可以启用/停用。
-- **导入插件**：npm 包、GitHub 简写、git URL、本地绝对路径。
-- **创造模式**：填写插件名、说明和需求，让 DSH Operator 写 `lib/index.js`，校验后安装。
+- **统计**：DSH 版本、内置插件数、当前启用数、导入/生成数、群伴能力数。
+- **DSH 插件页**：从 DSH 的 `--dump-config` 读取真实组合结果，不是硬编码。支持关键词、分类和「只看启用」。
+- **群伴能力页**：从 `/api/capabilities` 读取 skills、MCP、接口和自定义工具；每项有「助手 / 群聊」两个开关，高风险项会标记。
+- **已安装 DSH 插件**：群伴原生插件、导入包、DSH 生成插件；非内置项可以启用/停用。
+- **导入 DSH 插件**：npm 包、GitHub 简写、git URL、本地绝对路径。
+- **DSH 创造模式**：填写插件名、说明和需求，让 DSH Operator 写 `lib/index.js`，校验后安装。
 - **任务日志**：导入/创建是后台任务，页面每 1.5 秒轮询日志。
 
 ## 2. 内置插件从哪来
@@ -25,7 +29,20 @@ node <runtime>/lib/bin.js --profile qunban --dump-config
 
 内置 DSH 插件在群伴里是**只读**的：不建议从网页停用核心插件。需要高级 profile 调整时直接改 `cordis.patch.yml`。
 
-## 3. 导入插件
+## 3. 群伴能力
+
+「群伴能力」页把原本分散在「助手 → 技能 / 能力」的入口集中起来：
+
+- `skill`：`data/agent_workspace/skills/<name>/SKILL.md`
+- `mcp`：`data/agent_workspace/projects/<name>`
+- `api`：`data/agent_workspace/interfaces/*.json`
+- `tool`：非内置的自定义脚本工具
+
+每项直接调用现有的 `PATCH /api/capabilities`，同时更新助手和群聊两个 scope；高风险能力（屏幕控制等）默认只给助手，群聊默认关闭。`重新识别` 会执行 `/api/capabilities/sync`。
+
+这样插件页既有 DSH 的 npm/Cordis 插件，也有群伴自己的技能/MCP/接口，不需要在两个页面之间来回找。
+
+## 4. 导入插件
 
 后端：
 
@@ -42,7 +59,7 @@ POST /api/dsh/plugins/import
 
 > `pnpm` 不是全局命令；群伴使用 Node 自带的 `corepack pnpm`，不要求用户单独安装 pnpm。
 
-## 4. 创造模式
+## 5. 创造模式
 
 ```text
 POST /api/dsh/plugins/create
@@ -77,7 +94,7 @@ POST /api/dsh/plugins/create
 - **Operator 自扩展**：`qunban` profile 暴露 `qunban_plugin_install(path, enabled)`。用户明确要求“做一个插件”时，DSH 可以在 `data/dsh/studio/<slug>` 写文件、`node --check`，再调用该工具安装/更新；后端会再次校验并限制路径必须在 studio 目录下。
 - 自动检测能力缺口并发起安装仍然保持关闭：当前由用户需求触发，避免模型在闲聊里自行安装任意代码。
 
-## 5. 安全边界
+## 6. 安全边界
 
 - 只有用户点击「生成并安装 / 导入」才会安装代码。
 - 创建任务使用 `qunban` Operator profile，权限为 `danger-full-access`，因此生成代码等同本机代码执行；不要在不可信需求下勾选“让 DSH 编写”。
@@ -85,7 +102,7 @@ POST /api/dsh/plugins/create
 - `_preserved_plugin_rows()` 会在每次 DSH 任务重建 profile 时保留用户插件行，避免“下一次任务插件消失”。
 - 内置插件只读；群伴原生插件 `@qunban/dsh-native` 固定挂载。
 
-## 6. 代码位置
+## 7. 代码位置
 
 | 文件 | 职责 |
 | --- | --- |
@@ -97,7 +114,7 @@ POST /api/dsh/plugins/create
 | [`frontend/ui.css`](../frontend/ui.css) | 插件页样式 |
 | `data/dsh/studio/` | 生成插件源码和 manifest |
 
-## 7. API
+## 8. API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -108,7 +125,7 @@ POST /api/dsh/plugins/create
 | GET | `/api/dsh/plugins/jobs/{id}` | 任务日志与结果 |
 | POST | `/api/dsh/plugins/toggle` | 启用/停用非内置插件 |
 
-## 8. 已知限制
+## 9. 已知限制
 
 - 任务日志只保存在内存，服务重启后丢失；源码和安装结果会保留。
 - npm/git 导入依赖网络和 corepack 缓存，首次可能较慢。

@@ -114,12 +114,13 @@
 
 ### 1.4 DSH 插件工作室
 
-「插件」选项卡专门管理 DeepSeek Harness 插件：
+「插件」选项卡专门统一管理 DSH 插件和群伴能力：
 
-- **内置目录**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、86 个启用），按核心/工具/技能/服务/运行时/集成/界面分类，支持搜索和「只看启用」。
-- **导入插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包直接复制到 `profiles/qunban/node_modules`，npm/git 通过 `corepack pnpm add` 安装。
+- **DSH 插件**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、86 个启用），按核心/工具/技能/服务/运行时/集成/界面分类，支持搜索和「只看启用」。
+- **群伴能力**：把工作区 skills、MCP 项目、外部接口和自定义脚本工具集中到同一页；每项可直接切换「助手 / 群聊」作用域，高风险能力默认不对群聊开放。
+- **导入 DSH 插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包直接复制到 `profiles/qunban/node_modules`，npm/git 通过 `corepack pnpm add` 安装。
 - **创造模式**：填写插件名和需求，DSH Operator 会在 `data/dsh/studio/<slug>` 写一个合法 Cordis 插件，自动 `node --check`、安装到 profile、写入 patch；同名学生重新提交即更新。DSH 在用户明确要求时也可以自己写插件并调用 `qunban_plugin_install` 安装。
-- **安全**：生成/导入的插件只挂到 `qunban` Operator profile，不进群聊 profile；只有用户点击才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
+- **安全**：生成/导入的 DSH 插件只挂到 `qunban` Operator profile，不进群聊 profile；只有用户点击或明确要求才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
 
 ---
 
