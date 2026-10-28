@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import os
 import re
@@ -177,6 +178,14 @@ async def _run_authed(coro: Any, *, account_key: str, action: str) -> Any:
 
 
 def _account_payload(row: BiliAccount | None) -> dict[str, Any]:
+    cookie_count = 0
+    if row is not None:
+        try:
+            parsed = json.loads(row.cookie_json or "{}")
+            if isinstance(parsed, dict):
+                cookie_count = len(parsed)
+        except Exception:
+            cookie_count = 0
     if row is None or not row.sessdata:
         return {
             "logged_in": False,
@@ -185,6 +194,8 @@ def _account_payload(row: BiliAccount | None) -> dict[str, Any]:
             "mid": "",
             "sessdata_hint": "",
             "message": "",
+            "cookie_saved": False,
+            "cookie_count": 0,
         }
     return {
         "logged_in": True,
@@ -193,6 +204,8 @@ def _account_payload(row: BiliAccount | None) -> dict[str, Any]:
         "mid": row.mid or "",
         "sessdata_hint": f"••••{row.sessdata[-6:]}" if len(row.sessdata) >= 6 else "••••",
         "message": "",
+        "cookie_saved": cookie_count > 0,
+        "cookie_count": cookie_count,
     }
 
 
@@ -216,14 +229,32 @@ async def _load_row(account_key: str = "") -> BiliAccount | None:
 
 def _credential(row: BiliAccount) -> Any:
     _require()
-    return Credential(
-        sessdata=row.sessdata or None,
-        bili_jct=row.bili_jct or None,
-        buvid3=row.buvid3 or None,
-        buvid4=row.buvid4 or None,
-        dedeuserid=row.dedeuserid or None,
-        ac_time_value=row.ac_time_value or None,
-    )
+    cookie_map: dict[str, str] = {}
+    raw_cookies = str(getattr(row, "cookie_json", "") or "")
+    if raw_cookies:
+        try:
+            parsed = json.loads(raw_cookies)
+            if isinstance(parsed, dict):
+                cookie_map = {
+                    str(key): str(value)
+                    for key, value in parsed.items()
+                    if value is not None and str(value) != ""
+                }
+        except Exception:
+            cookie_map = {}
+    # Individual columns are the source of truth; restore them on top of the
+    # stored cookie jar so old rows keep working after a migration.
+    for key, value in (
+        ("SESSDATA", row.sessdata),
+        ("bili_jct", row.bili_jct),
+        ("buvid3", row.buvid3),
+        ("buvid4", row.buvid4),
+        ("DedeUserID", row.dedeuserid),
+        ("ac_time_value", row.ac_time_value),
+    ):
+        if value:
+            cookie_map[key] = str(value)
+    return Credential.from_cookies(cookie_map)
 
 
 async def _credential_or_raise(account_key: str = "") -> Any:
@@ -255,7 +286,11 @@ async def status(account_key: str = "", *, verify: bool = True) -> dict[str, Any
     return _account_payload(row)
 
 
-async def _save_credential(cred: Any, account_key: str = "") -> dict[str, Any]:
+async def _save_credential(
+    cred: Any,
+    account_key: str = "",
+    cookie_map: dict[str, str] | None = None,
+) -> dict[str, Any]:
     _require()
     if not str(getattr(cred, "sessdata", "") or ""):
         raise RuntimeError("B站登录未返回 SESSDATA，请重新登录")
@@ -274,6 +309,31 @@ async def _save_credential(cred: Any, account_key: str = "") -> dict[str, Any]:
             )
         except Exception:
             pass
+    stored_cookies = {
+        str(key): str(value)
+        for key, value in (cookie_map or {}).items()
+        if value is not None and str(value) != ""
+    }
+    try:
+        for key, value in (cred.get_cookies() or {}).items():
+            # Credential.get_cookies() exposes both SESSDATA and the internal
+            # sessdata attribute; keep only the canonical cookie names.
+            if str(key) in {"sessdata", "dedeuserid", "proxy"}:
+                continue
+            if value is not None and str(value) != "":
+                stored_cookies[str(key)] = str(value)
+    except Exception:
+        pass
+    for key, value in (
+        ("SESSDATA", getattr(cred, "sessdata", "")),
+        ("bili_jct", getattr(cred, "bili_jct", "")),
+        ("buvid3", getattr(cred, "buvid3", "")),
+        ("buvid4", getattr(cred, "buvid4", "")),
+        ("DedeUserID", getattr(cred, "dedeuserid", "")),
+        ("ac_time_value", getattr(cred, "ac_time_value", "")),
+    ):
+        if value:
+            stored_cookies[key] = str(value)
     name = ""
     mid = ""
     verified = False
@@ -302,6 +362,11 @@ async def _save_credential(cred: Any, account_key: str = "") -> dict[str, Any]:
         row.buvid4 = str(getattr(cred, "buvid4", "") or "")
         row.dedeuserid = str(getattr(cred, "dedeuserid", "") or "")
         row.ac_time_value = str(getattr(cred, "ac_time_value", "") or "")
+        row.cookie_json = (
+            json.dumps(stored_cookies, ensure_ascii=False, separators=(",", ":"))
+            if stored_cookies
+            else ""
+        )
         row.name = name or row.name
         row.mid = mid or row.mid
         row.enabled = True
@@ -354,7 +419,18 @@ async def save_cookie(
         dedeuserid=dedeuserid or None,
         ac_time_value=ac_time_value or None,
     )
-    payload = await _save_credential(cred, account_key)
+    payload = await _save_credential(
+        cred,
+        account_key,
+        {
+            "SESSDATA": sessdata,
+            "bili_jct": bili_jct,
+            "buvid3": buvid3,
+            "buvid4": buvid4,
+            "DedeUserID": dedeuserid,
+            "ac_time_value": ac_time_value,
+        },
+    )
     if not payload.get("verified"):
         await clear_account(account_key)
         raise RuntimeError("B站 Cookie 校验失败，请重新复制 SESSDATA / bili_jct")
@@ -514,7 +590,7 @@ async def poll_qr_login(key: str, account_key: str = "") -> dict[str, Any]:
             "message": "B站返回登录成功，但没有拿到 SESSDATA；请重新扫码",
         }
     try:
-        account = await _save_credential(cred, account_key)
+        account = await _save_credential(cred, account_key, cookie_map)
     except Exception as exc:
         return {"status": "error", "message": f"保存 B站登录失败：{exc}"}
     if not account.get("verified"):

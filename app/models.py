@@ -213,6 +213,10 @@ class BiliAccount(Base):
     buvid4: Mapped[str] = mapped_column(String(256), default="")
     dedeuserid: Mapped[str] = mapped_column(String(64), default="")
     ac_time_value: Mapped[str] = mapped_column(String(256), default="")
+    # Full cookie jar captured at login. The individual fields above are kept
+    # for compatibility and quick display; this preserves extra cookies such
+    # as buvid_fp, b_nut, sid and bili_ticket.
+    cookie_json: Mapped[str] = mapped_column(Text, default="")
     name: Mapped[str] = mapped_column(String(160), default="")
     mid: Mapped[str] = mapped_column(String(64), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

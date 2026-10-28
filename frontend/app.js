@@ -3762,10 +3762,13 @@ function biliRenderStatus(account) {
   state.biliAccount = account || null;
   const line = $('#bili-status-line');
   if (line) {
+    const cookieHint = account?.cookie_saved
+      ? ` · Cookie 已保存 ${account.cookie_count || 0} 项`
+      : '';
     if (account?.logged_in) {
-      line.textContent = `已登录：${account.name || account.mid || 'B站账号'} ${account.sessdata_hint || ''}`;
+      line.textContent = `已登录：${account.name || account.mid || 'B站账号'} ${account.sessdata_hint || ''}${cookieHint}`;
     } else if (account?.expired) {
-      line.textContent = `登录已失效：${account.name || account.mid || 'B站账号'} · 请重新扫码`;
+      line.textContent = `登录已失效：${account.name || account.mid || 'B站账号'}${cookieHint} · 请重新扫码`;
     } else {
       line.textContent = '未登录 · 扫码或填写 Cookie 后可用点赞/评论';
     }

@@ -75,7 +75,8 @@
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
 - **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。
 - **自动刷 B站**：在「助手 → B站」开启后，Agent 会自行选择主题和视频、转写音频、理解内容，并按自己的判断决定是否点赞/收藏/评论/回复评论；兴趣关键词可以留空，由 Agent 按自己的喜好选择。不会默认对每个视频三连，操作可以全部不做。面板会实时显示完整过程。
-- **登录有效性**：`/api/bili/status` 会真实调用 B站校验 SESSDATA；过期时显示「登录已失效」，点赞/收藏/评论/回复会返回明确提示，不再只报 `-101` 或假装成功。扫码登录会同时保存 `buvid3` / `buvid4`，提高写接口兼容性。
+- **登录有效性**：`/api/bili/status` 会真实调用 B站校验 SESSDATA；过期时显示「登录已失效」，点赞/收藏/评论/回复会返回明确提示，不再只报 `-101` 或假装成功。
+- **Cookie 持久化**：扫码登录成功后会把完整 Cookie（`SESSDATA`、`bili_jct`、`buvid3`、`buvid4`、`DedeUserID`、`ac_time_value` 以及 `buvid_fp`、`b_nut`、`sid` 等额外字段）保存到本地 `bili_accounts.cookie_json`，重启服务后自动复用；原始 Cookie 不会返回前端，只在本地数据库和接口请求中使用。
 - **音频转文字**：优先使用 B站字幕/AI 总结（需登录）；没有字幕时用 `faster-whisper`（small 模型，CPU）把下载的音频转成中文文本。模型默认从 hf-mirror 下载，首次使用会慢一些。
 - **视频知识库**：转写文本、总结和主题会写入本地 **ChromaDB** 向量库，中文 embedding 使用 **BGE-small-zh-v1.5**（fastembed）。Agent 可以用 `bili_knowledge_search` 检索已刷过的视频内容。
 - B站实现参考 [bilibili-api-python](https://github.com/Nemo2011/bilibili-api)（GitHub 高星 B站 API 库）；ASR 参考 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 与 [FunASR/SenseVoice](https://github.com/modelscope/FunASR)（中文场景更优的备选）；知识库使用 [ChromaDB](https://github.com/chroma-core/chroma)（约 2.7 万 star）。主动对话设计参考 [Thoughtful Agents](https://github.com/xybruceliu/thoughtful-agents) 与 Proactive Conversational Agents（Inner Thoughts）的思路。
