@@ -106,33 +106,81 @@ class AgentEngine:
             f"- {item['name']}: {item.get('desc', '')} args={json.dumps(item.get('args') or {}, ensure_ascii=False)}"
             for item in tools
         ]
-        system_prompt = """你是群聊意图分析器，不负责回复用户，只输出一个 JSON。
-分析最后一条消息，判断：
-1. 是否值得你参与（should_reply）；
-2. 用户意图（intent）：chat/question/task/emotional/complaint/privacy/spam；
-3. 是否需要调用工具（need_tools），只能从给定工具列表选择；
-4. 用户当前情绪（user_emotion）和强度（0-1）；
-5. 最合适的回复语气（tone）；
-6. 如果需要工具，给一句自然过渡语（ack），例如“我去看看”“我查一下”；
-7. 对这个用户的简短新印象（impression_note）和性格/偏好标签（traits）；
-8. 如果明确缺少能完成任务的工具，在 missing_capability 里写缺少什么；
-9. 是否需要交给后台 OpenCode 执行器（delegate_to_opencode），以及给它的具体需求（opencode_brief）。
+        system_prompt = """你是群伴的「群聊意图分类器」。你不负责回复用户，只输出一个 JSON。
+你的任务不是判断“这句话像什么”，而是判断“群伴下一步应该做什么”。
 
-规则：
-- 拿不准时 should_reply=true。
-- 被叫到名字、@、提问、求助、任务、明显情绪表达，should_reply=true。
-- 群友之间互相聊天且不需要你参与、纯灌水，可以 should_reply=false。
-- 不因消息短就跳过。
-- 涉及查询/泄露他人个人信息、手机号、住址等隐私，intent=privacy，need_tools=false。
-- 普通闲聊不要调用工具；只有需要外部事实/动作时才 need_tools=true。
-- 只有工具描述明确匹配任务时才选；不能为了凑数选 run_skill、run_mcp 或无关工具。
-- 做表格 / Excel / 点检表并要发到群里时，选 create_excel，把用户给的内容整理成 sheets[].rows；不要选屏幕控制类工具。
-- 工具列表里没有能完成任务的工具时，need_tools=false，并在 missing_capability 里写明缺少什么，不要假装能完成。
-- 需要写代码、写脚本、运行命令、读写工作区文件、生成 PPT/复杂文档、操作桌面或多个应用、多步工具编排，或现有群聊工具明显不够时，delegate_to_opencode=true，并把具体需求写进 opencode_brief。
-- 用户明确说“让 opencode 做 / 交给后台执行器 / 让后台跑 / 你负责盯着”时，必须 delegate_to_opencode=true，intent=task，opencode_brief 写清目标和已有文件；不要回答“不能驱动 opencode”。
-- 简单查天气、B站、点检表用群聊工具即可，不要委派；委派时 need_tools 可以为 false，should_reply=true。
-- 不要输出任何解释，只输出 JSON：
-{"should_reply":true,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.0,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}"""
+# 一、决策顺序（必须按顺序判断）
+1. 这句话是不是在对群伴说？
+   - 叫名字、@、提问、求助、派活、明显对着机器人说话 → should_reply=true。
+   - 群友之间互相聊天、灌水、已经有人回答且不需要群伴 → should_reply=false。
+   - 拿不准 → true。不要因为消息短就跳过。
+2. 用户要的是聊天，还是一件可执行的事？
+   - 要查、做、找、改、下载、发、运行、生成、保存、整理、操作、盯着 → intent=task。
+   - 只是表达情绪、吐槽、评价 → intent=emotional/complaint。
+   - 问事实/建议，且不需要外部动作 → intent=question/chat。
+   - 查人、手机号、住址、身份证、泄露隐私 → intent=privacy。
+   - 广告、刷屏、纯灌水 → intent=spam。
+3. 这件事群聊现有工具能不能做？
+   - 查天气 → call_interface。
+   - B站视频/评论/知识库 → bili_*。
+   - 简单表格/点检表/Excel，只要把给定内容生成文件 → create_excel。
+   - 工具描述明确匹配 → need_tools=true，tools 只选真正要用的 1-3 个。
+4. 现有工具做不了，或者任务复杂/多步 → delegate_to_opencode=true。
+   - 写代码、写脚本、运行命令、批量处理文件。
+   - 找数据集、Kaggle、下载、爬取、抓取、标注、训练集。
+   - 生成 PPT、复杂文档、图表、宏、多个文件。
+   - 操作桌面、多个应用、需要多步工具编排。
+   - 用户明确说“让 opencode 做 / 交给后台执行器 / 让后台跑 / 你负责盯着”。
+   - 需要修改/读取现有文件，而群聊工具只有生成能力。
+5. 判断情绪、语气、对这个人的印象。
+6. 输出 JSON。
+
+# 二、硬规则
+- 一条消息如果 intent=task，就不能既 need_tools=false 又不 delegate_to_opencode；必须二选一。
+- 能匹配工具就选工具；匹配不了就 delegate，不要回答“做不到/没能力/不能驱动 opencode”。
+- 不要为了凑 need_tools 选 run_skill、run_mcp 或无关工具。
+- 用户说“让opencode做/交给后台/你负责盯”时，必须 delegate_to_opencode=true，即使你觉得本地工具也能做。
+- 找数据集、Kaggle、下载到桌面、爬取/标注数据，即使你觉得自己能搜，也必须 delegate。
+- 简单表格/Excel/点检表 → create_excel；复杂格式、宏、图表、读取并修改现有 Excel → delegate。
+- 普通闲聊不调用工具；纯聊天不要 delegate。
+- 隐私请求：should_reply=true，intent=privacy，need_tools=false，delegate=false，不调用工具。
+- 纯灌水/广告：intent=spam，should_reply=false。
+- 短句必须结合最近上下文理解。“你让opencode做啊”“继续”“就这个”不是普通聊天，它们承接上文任务。
+- 不确定要不要参与 → should_reply=true；不确定是否需要外部动作 → 按 task 处理，匹配不到工具就 delegate。
+- 只输出 JSON，不要解释，不要 Markdown。
+
+# 三、输出字段
+{
+  "should_reply": true,
+  "intent": "chat|question|task|emotional|complaint|privacy|spam",
+  "need_tools": false,
+  "tools": [],
+  "user_emotion": "neutral|happy|excited|playful|confused|anxious|frustrated|angry|sad|disappointed",
+  "emotion_intensity": 0.0,
+  "tone": "warm|calm|professional|playful|apologetic",
+  "ack": "",
+  "traits": [],
+  "impression_note": "",
+  "missing_capability": "",
+  "delegate_to_opencode": false,
+  "opencode_brief": ""
+}
+
+# 四、示例
+例1 用户：@小助手 帮我查一下武夷山今天天气
+输出：{"should_reply":true,"intent":"question","need_tools":true,"tools":["call_interface"],"user_emotion":"neutral","emotion_intensity":0.3,"tone":"warm","ack":"我去查一下","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}
+
+例2 用户：给我做一份点检表，5行，发群里
+输出：{"should_reply":true,"intent":"task","need_tools":true,"tools":["create_excel"],"user_emotion":"neutral","emotion_intensity":0.3,"tone":"warm","ack":"我这就整理成表格发群里","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}
+
+例3 用户：帮我在Kaggle找个表情包数据集，下载到桌面
+输出：{"should_reply":true,"intent":"task","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.4,"tone":"warm","ack":"我去Kaggle翻一下，找到合适的就下载到你桌面","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":true,"opencode_brief":"在Kaggle搜索表情包meme数据集，筛选2026年10月前、带label标注的数据集，下载到用户桌面，并汇报名称、链接、大小、label说明和保存路径。"}
+
+例4 用户：你让opencode做啊
+输出：{"should_reply":true,"intent":"task","need_tools":false,"tools":[],"user_emotion":"neutral","emotion_intensity":0.4,"tone":"calm","ack":"好，我交给后台执行器处理","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":true,"opencode_brief":"根据上文任务，交给OpenCode执行；先确认上文的具体目标、文件和数据来源，完成后由群伴发送结果。"}
+
+例5 用户：哈哈哈
+输出：{"should_reply":false,"intent":"chat","need_tools":false,"tools":[],"user_emotion":"happy","emotion_intensity":0.5,"tone":"warm","ack":"","traits":[],"impression_note":"","missing_capability":"","delegate_to_opencode":false,"opencode_brief":""}"""
         user_prompt = f"""# 群聊
 - 群名：{group.name or '未知'}
 - 机器人：{self.runtime.bot_name or '小助手'}
@@ -163,7 +211,7 @@ class AgentEngine:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.1,
-                max_tokens=260,
+                max_tokens=420,
                 json_mode=True,
             )
         except LLMError:
@@ -237,7 +285,11 @@ class AgentEngine:
             "宏",
         )
         explicit_opencode = self._wants_opencode(str(message.content or ""))
-        if explicit_opencode and intent not in {"privacy", "spam"}:
+        hard_delegate = self._wants_file_research(str(message.content or ""))
+        if (explicit_opencode or hard_delegate) and intent not in {
+            "privacy",
+            "spam",
+        }:
             delegate = True
             need_tools = False
             selected = []
@@ -254,6 +306,17 @@ class AgentEngine:
             brief = brief or str(message.content or "")[:600]
             if intent == "chat":
                 intent = "task"
+        # A task with no usable group tool must not be answered with a fake
+        # "I can't" reply. Hand it to the background executor instead.
+        if (
+            intent == "task"
+            and not delegate
+            and not need_tools
+            and not selected
+        ):
+            delegate = True
+            should_reply = True
+            brief = brief or str(message.content or "")[:600]
         if intent in {"privacy", "spam"}:
             delegate = False
             brief = ""
@@ -285,6 +348,29 @@ class AgentEngine:
             "opencode_brief": brief,
             "source": "planner",
         }
+
+    @staticmethod
+    def _wants_file_research(text: str) -> bool:
+        value = str(text or "").lower()
+        if not value:
+            return False
+        return any(
+            word in value
+            for word in (
+                "数据集",
+                "kaggle",
+                "下载",
+                "爬取",
+                "抓取",
+                "训练集",
+                "标注",
+                "label",
+                "放到桌面",
+                "放到我的桌面",
+                "保存到桌面",
+                "存到桌面",
+            )
+        )
 
     @staticmethod
     def _wants_opencode(text: str) -> bool:
@@ -402,6 +488,7 @@ class AgentEngine:
             and (
                 any(word in text for word in complex_words)
                 or self._wants_opencode(str(message.content or ""))
+                or self._wants_file_research(str(message.content or ""))
             )
         )
         if delegate:
@@ -836,6 +923,7 @@ class AgentEngine:
 - 运行 Python 项目脚本时优先用：{sys.executable}（已安装项目依赖，包括 openpyxl）。
 - 如果任务是优化已有 Excel，先在 `data/agent_workspace/exports/` 找最新的相关文件，改好后写到：{output_dir}
 - 需要生成新文件时写到：{output_dir}
+- 如果用户要求“放到桌面/保存到桌面”，最终文件要同时复制到桌面和输出目录；群伴只会自动发送输出目录里的文件。
 - 不要直接给群友发消息，不要操作微信窗口；群伴 Agent 会统一发送结果。
 - 遇到权限确认或选择题，群伴 Agent 会自动确认；你按最合理的方案继续，不要停下来反复追问。
 - 最终说明实际做了什么、结果、文件路径、未完成项；不要声称未执行的事情。
@@ -1143,7 +1231,12 @@ class AgentEngine:
                         plan["tools"] = []
                         plan["ack"] = ""
                     if (
-                        self._wants_opencode(str(message.content or ""))
+                        (
+                            self._wants_opencode(str(message.content or ""))
+                            or self._wants_file_research(
+                                str(message.content or "")
+                            )
+                        )
                         and plan.get("intent") not in {"privacy", "spam"}
                     ):
                         plan["should_reply"] = True
