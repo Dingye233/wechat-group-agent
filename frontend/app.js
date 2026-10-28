@@ -4019,6 +4019,55 @@ function pluginChannelSwitches(row, disabled = false) {
   return wrap;
 }
 
+function pluginToolChannelNode(pluginRow, tool, channel, labelText) {
+  const label = el('label', 'plugin-switch plugin-tool-switch');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = Boolean(tool.channels?.[channel]);
+  input.setAttribute(
+    'aria-label',
+    `${pluginRow.name || pluginRow.id} / ${tool.name} ${labelText}开关`,
+  );
+  input.addEventListener('change', () => {
+    const next = {
+      private: Boolean(tool.channels?.private),
+      group: Boolean(tool.channels?.group),
+      [channel]: input.checked,
+    };
+    setPluginToolChannels(pluginRow.id, tool.name, next);
+  });
+  label.appendChild(input);
+  label.appendChild(el('span', 'plugin-switch-track'));
+  label.appendChild(el('span', 'plugin-switch-text', labelText));
+  return label;
+}
+
+function pluginFunctions(row) {
+  const tools = Array.isArray(row.tools) ? row.tools : [];
+  if (!tools.length) return null;
+  const details = el('details', 'plugin-functions');
+  if (tools.length <= 6) details.open = true;
+  const summary = el('summary', 'plugin-functions-head');
+  summary.appendChild(el('strong', null, `功能拆分 · ${tools.length}`));
+  summary.appendChild(el('span', null, 'DSH 读取 README 后拆分，可分别开关私聊/群聊'));
+  details.appendChild(summary);
+  for (const tool of tools) {
+    const item = el('div', 'plugin-function');
+    const info = el('div', 'plugin-function-info');
+    info.appendChild(el('code', null, tool.name));
+    if (tool.description) info.appendChild(el('span', null, tool.description));
+    item.appendChild(info);
+    const switches = el('div', 'plugin-function-switches');
+    switches.appendChild(
+      pluginToolChannelNode(row, tool, 'private', '私聊'),
+    );
+    switches.appendChild(pluginToolChannelNode(row, tool, 'group', '群聊'));
+    item.appendChild(switches);
+    details.appendChild(item);
+  }
+  return details;
+}
+
 function pluginCard(row, options = {}) {
   const channels = row.channels || {
     private: !row.disabled,
@@ -4050,6 +4099,8 @@ function pluginCard(row, options = {}) {
   body.appendChild(title);
   body.appendChild(el('code', 'plugin-package', row.name || ''));
   if (row.description) body.appendChild(el('p', 'plugin-desc', row.description));
+  const functions = pluginFunctions(row);
+  if (functions) body.appendChild(functions);
   card.appendChild(body);
   const meta = el('div', 'plugin-meta');
   meta.appendChild(el('span', 'plugin-cat', row.category || '其他'));
@@ -4104,6 +4155,7 @@ function renderInstalledPlugins() {
   ];
   for (const row of rows) {
     const item = el('div', 'plugin-mini');
+    const main = el('div', 'plugin-mini-main');
     const info = el('div', 'plugin-mini-info');
     info.appendChild(el('strong', null, row.name || row.slug || 'plugin'));
     info.appendChild(
@@ -4113,9 +4165,31 @@ function renderInstalledPlugins() {
         `${row.source === 'studio' ? 'DSH 生成' : row.source === 'native' ? '群伴原生' : '导入'}${row.version ? ` · v${row.version}` : ''}`,
       ),
     );
-    item.appendChild(info);
-    item.appendChild(pluginChannelSwitches(row));
+    main.appendChild(info);
+    main.appendChild(pluginChannelSwitches(row));
+    item.appendChild(main);
+    const functions = pluginFunctions(row);
+    if (functions) item.appendChild(functions);
     root.appendChild(item);
+  }
+}
+
+async function setPluginToolChannels(id, tool, channels) {
+  try {
+    await api('/dsh/plugins/tool-channels', {
+      method: 'POST',
+      body: JSON.stringify({
+        id,
+        tool,
+        private: Boolean(channels.private),
+        group: Boolean(channels.group),
+      }),
+    });
+    toast(`功能「${tool}」通道已保存；重启对应 DSH 链路后完全生效`);
+    await loadPlugins();
+  } catch (error) {
+    toast(error.message, 'error');
+    await loadPlugins();
   }
 }
 

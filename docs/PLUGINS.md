@@ -56,8 +56,8 @@ POST /api/dsh/plugins/import
 
 - 本地路径：读取 `package.json`，复制到 `data/dsh/home/profiles/qunban/node_modules/<name>`，写入 profile 依赖和 patch 行。
 - npm/git：通过 `corepack pnpm add <spec>` 在 profile 目录安装，再把新增依赖挂到 patch。
-- **导入审查**：安装前读取 README 和 package 信息，交给 DSH Operator 输出私聊/群聊默认策略、工具拆分和风险摘要。默认 `group=false`；不确定就只允许私聊。
-- **功能分离**：策略写入 `plugin-policies.json`；`qunban` profile 只挂载 `private=true` 的插件，`qunban-primary` 只挂载 `group=true` 的插件；工具级 split 通过 `QUNBAN_DENY_TOOLS` + `ctx.tools.restrict` 执行，不改第三方源码。
+- **导入审查（功能拆分）**：安装前读取 README 和 package 信息，交给 DSH Operator 列出插件功能/工具、描述和分组，用于插件页展示和通道开关。这里不做安全审查，所有功能默认私聊/群聊都启用。
+- **功能开关**：策略写入 `plugin-policies.json`；`qunban` profile 只挂载 `private=true` 的插件，`qunban-primary` 只挂载 `group=true` 的插件；功能级开关通过 `QUNBAN_DENY_TOOLS` + `ctx.tools.restrict` 实现，用于把某个功能从指定通道隐藏，不是安全审查。
 - 安装后下一次 DSH 任务生效；`qunban-primary` 启动时会同步 qunban profile 的导入/生成插件。
 - 导入的插件是任意 JavaScript，和 DSH 同权限执行。只安装可信来源。
 
@@ -86,7 +86,7 @@ POST /api/dsh/plugins/create
    - 必须导出 `name`、`inject = ['tools']`、`apply(ctx)`；
    - 通过 `QUNBAN_DSH_RUNTIME_ROOT` 动态 import `@deepseek-ai/dsh-tools`；
    - 工具 schema 显式写 `additionalProperties`，output 必须提供 `render`；
-   - **按通道拆分工具**：群聊工具不得包含微信发送、删除文件等高风险能力；
+   - **按功能拆分工具**，并在 `qunban.tools` 里写展示名称/描述，供插件页分组和分别开关；
    - 完成后 `node --check lib/index.js` 自检。
 3. 后端再次校验 package 名、入口和语法。
 4. 复制到 `profiles/qunban/node_modules/@qunban/<slug>`，写 profile 依赖和 patch 行，并写入 `plugin-policies.json` 的私聊/群聊策略。

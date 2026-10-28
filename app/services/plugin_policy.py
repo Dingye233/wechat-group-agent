@@ -129,6 +129,76 @@ def locked(plugin_id: str) -> dict[str, bool]:
     }
 
 
+def tool_channels(plugin_id: str, tool_name: str) -> dict[str, bool] | None:
+    row = get(plugin_id)
+    if not isinstance(row, dict):
+        return None
+    tools = row.get("tools")
+    if not isinstance(tools, dict):
+        return None
+    value = tools.get(tool_name)
+    if not isinstance(value, dict):
+        return None
+    return {
+        "private": bool(value.get("private", True)),
+        "group": bool(value.get("group", True)),
+    }
+
+
+def tools_for(plugin_id: str) -> list[dict[str, Any]]:
+    row = get(plugin_id)
+    if not isinstance(row, dict):
+        return []
+    tools = row.get("tools")
+    if not isinstance(tools, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for name, value in tools.items():
+        if not isinstance(value, dict):
+            continue
+        result.append(
+            {
+                "name": str(name),
+                "description": str(value.get("description") or ""),
+                "channels": {
+                    "private": bool(value.get("private", True)),
+                    "group": bool(value.get("group", True)),
+                },
+            }
+        )
+    result.sort(key=lambda item: item["name"])
+    return result
+
+
+def set_tool_channels(
+    plugin_id: str,
+    tool_name: str,
+    *,
+    private: bool,
+    group: bool,
+) -> dict[str, Any]:
+    plugin_id = str(plugin_id or "").strip()
+    tool_name = str(tool_name or "").strip()
+    if not plugin_id or not tool_name:
+        raise ValueError("plugin id / tool name 不能为空")
+    data = _read()
+    row = data.get(plugin_id)
+    if not isinstance(row, dict):
+        row = {"private": True, "group": True, "tools": {}}
+    tools = row.get("tools")
+    if not isinstance(tools, dict):
+        tools = {}
+    current = tools.get(tool_name)
+    value = dict(current) if isinstance(current, dict) else {}
+    value["private"] = bool(private)
+    value["group"] = bool(group)
+    tools[tool_name] = value
+    row["tools"] = tools
+    data[plugin_id] = row
+    _write(data)
+    return {"name": tool_name, **value}
+
+
 def channels(plugin_id: str, *, name: str = "", default: bool = True) -> dict[str, bool]:
     row = get(plugin_id, name=name)
     if not isinstance(row, dict):

@@ -71,6 +71,20 @@ async def dsh_plugins_install(body: dict | None = Body(default=None)) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/dsh/plugins/tool-channels")
+async def dsh_plugins_tool_channels(body: dict | None = Body(default=None)) -> dict:
+    payload = body or {}
+    try:
+        return dsh_plugins.set_tool_channels(
+            str(payload.get("id") or ""),
+            str(payload.get("tool") or ""),
+            private=bool(payload.get("private", True)),
+            group=bool(payload.get("group", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/dsh/plugins/channels")
 async def dsh_plugins_channels(body: dict | None = Body(default=None)) -> dict:
     payload = body or {}

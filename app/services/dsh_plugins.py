@@ -446,6 +446,7 @@ def catalog() -> dict[str, Any]:
                 "core": _category(entry) == "核心"
                 or plugin_id in _CRITICAL_IDS,
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "tools": plugin_policy.tools_for(plugin_id),
                 "locked": plugin_policy.locked(plugin_id),
             }
         )
@@ -497,6 +498,7 @@ def catalog() -> dict[str, Any]:
                 "core": True,
                 "critical": True,
                 "channels": plugin_policy.channels("qunban-native", name="@qunban/dsh-native"),
+                "tools": plugin_policy.tools_for("qunban-native"),
             }
         )
     for name in sorted(dependencies):
@@ -505,7 +507,7 @@ def catalog() -> dict[str, Any]:
         package = _read_json(PROFILE_DIR / "node_modules" / name / "package.json", {})
         row = entries.get(name, {})
         plugin_id = str(row.get("id") or _slug(name.split("/")[-1]))
-        plugin_policy.ensure(plugin_id, name=name, private=True, group=False)
+        plugin_policy.ensure(plugin_id, name=name, private=True, group=True)
         installed.append(
             {
                 "id": plugin_id,
@@ -517,6 +519,7 @@ def catalog() -> dict[str, Any]:
                 "source": "imported",
                 "installed": _package_installed(name),
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "tools": plugin_policy.tools_for(plugin_id),
             }
         )
 
@@ -530,7 +533,7 @@ def catalog() -> dict[str, Any]:
         name = str(item.get("name") or "")
         row = entries.get(name, {})
         plugin_id = str(item.get("id") or f"studio-{item.get('slug') or _slug(name)}")
-        plugin_policy.ensure(plugin_id, name=name, private=True, group=False)
+        plugin_policy.ensure(plugin_id, name=name, private=True, group=True)
         generated.append(
             {
                 **item,
@@ -540,6 +543,7 @@ def catalog() -> dict[str, Any]:
                 "installed": _package_installed(name),
                 "source": "studio",
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "tools": plugin_policy.tools_for(plugin_id),
             }
         )
 
@@ -756,33 +760,46 @@ async def _review_import(
     package_name: str,
     source: Path,
 ) -> dict[str, Any]:
-    """Ask DSH to read the plugin README and split its tools by channel."""
+    """Ask DSH to read the plugin README and separate its functions.
+
+    This is a functional inventory, not a security review: every discovered
+    function starts enabled in both channels, and the user controls the two
+    switches afterwards.
+    """
     readme = _read_readme(package_name, source)
     package = _read_json(source / "package.json", {})
-    default = {"private": True, "group": False, "tools": {}, "summary": "默认仅私聊"}
+    default = {
+        "private": True,
+        "group": True,
+        "tools": {},
+        "summary": "默认两个通道都启用；功能拆分结果为空",
+    }
     if not readme:
-        return {**default, "summary": "未找到 README，保守起见默认仅私聊"}
-    _log(job, f"读取 README（{len(readme)} 字符），交给 DSH 做插件校验和功能分离…")
-    prompt = f"""你是 DSH 插件导入审查器。阅读下面的插件 README 和 package 信息，判断这个第三方插件应该允许在哪些通道使用，并把它的工具按通道拆分。
+        return {**default, "summary": "未找到 README，插件整体启用；功能拆分结果为空"}
+    _log(job, f"读取 README（{len(readme)} 字符），交给 DSH 拆分插件功能…")
+    prompt = f"""你是 DSH 插件功能拆分器。阅读下面的插件 README 和 package 信息，把这个插件对外提供的功能/工具列出来，生成用于展示和通道开关的功能清单。
 
 # 输出要求
 只输出一个 JSON 对象，不要 Markdown 代码块：
 {{
   "private": true,
-  "group": false,
+  "group": true,
   "tools": {{
-    "tool_name": {{"private": true, "group": false}}
+    "tool_name": {{
+      "description": "这个工具做什么",
+      "private": true,
+      "group": true
+    }}
   }},
-  "summary": "一句话说明",
-  "risk": "主要风险"
+  "summary": "一句话概括插件功能"
 }}
 
 规则：
-1. 默认 group=false；只有当 README 明确说明该插件适合群聊、且没有群发/删除/写文件等高风险能力时，才允许 group=true。
-2. private 可以是 true；如果插件会发微信消息、操作系统、读敏感文件，private 也应保守评估。
-3. tools 必须列出 README 中出现或能从 package 推断的工具名；无法确定时留空。
-4. 工具名要能与插件注册到 DSH 的 name 对上；不要编造不存在的工具。
-5. 这是安全审查，不确定就收紧权限。
+1. 这不是安全审查，不要判断风险，也不要因为工具危险就关闭它。
+2. 所有发现的工具默认 private=true、group=true；通道开关交给用户。
+3. tools 必须使用 README 中出现或能从 package 推断的真实工具名；无法确定时留空。
+4. description 要简短、面向展示，不要写风险评级。
+5. 按功能拆分；一个插件可以有多个工具。
 
 # package.json
 {json.dumps(package, ensure_ascii=False)[:4000]}
@@ -808,7 +825,7 @@ async def _review_import(
         reply = str(result.get("reply") or "")
         value = _json_from_reply(reply)
         if not value:
-            return {**default, "summary": "DSH 未返回可解析结果，默认仅私聊"}
+            return {**default, "summary": "DSH 未返回可解析结果，插件整体启用"}
         tools = value.get("tools")
         clean_tools: dict[str, Any] = {}
         if isinstance(tools, dict):
@@ -816,25 +833,25 @@ async def _review_import(
                 if not name or not isinstance(policy, dict):
                     continue
                 clean_tools[str(name)] = {
+                    "description": str(policy.get("description") or "")[:300],
                     "private": bool(policy.get("private", True)),
-                    "group": bool(policy.get("group", False)),
+                    "group": bool(policy.get("group", True)),
                 }
         _log(
             job,
-            "DSH 校验完成："
-            f"{str(value.get('summary') or '')[:120]}；工具 {len(clean_tools)} 个",
+            "DSH 功能拆分完成："
+            f"{str(value.get('summary') or '')[:120]}；功能 {len(clean_tools)} 个",
         )
         return {
             "private": bool(value.get("private", True)),
-            "group": bool(value.get("group", False)),
+            "group": bool(value.get("group", True)),
             "tools": clean_tools,
             "summary": str(value.get("summary") or "")[:500],
-            "risk": str(value.get("risk") or "")[:500],
         }
     except Exception as exc:
-        logger.warning("DSH 插件导入审查失败: %s", exc, exc_info=True)
-        _log(job, f"DSH 审查失败，使用保守默认（仅私聊）：{exc}")
-        return {**default, "summary": "审查失败，默认仅私聊"}
+        logger.warning("DSH 插件功能拆分失败: %s", exc, exc_info=True)
+        _log(job, f"DSH 功能拆分失败，插件整体启用：{exc}")
+        return {**default, "summary": "功能拆分失败，插件整体启用"}
 
 
 async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
@@ -890,7 +907,7 @@ async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
                 plugin_id,
                 name=package_name,
                 private=bool(review.get("private", True)) and bool(enabled),
-                group=bool(review.get("group", False)) and bool(enabled),
+                group=bool(review.get("group", True)) and bool(enabled),
                 tools=review.get("tools") if isinstance(review.get("tools"), dict) else {},
             )
             _DUMP_CACHE = None
@@ -901,11 +918,10 @@ async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
                     "id": plugin_id,
                     "enabled": enabled,
                     "private": bool(review.get("private", True)),
-                    "group": bool(review.get("group", False)),
+                    "group": bool(review.get("group", True)),
                     "tools": review.get("tools") or {},
                     "summary": review.get("summary") or "",
-                    "risk": review.get("risk") or "",
-                    "next": "已按通道策略挂载；私聊/群聊开关可随时调整。",
+                    "next": "已按功能拆分安装；私聊/群聊开关可随时调整。",
                 },
             )
         except Exception as exc:
@@ -1111,7 +1127,7 @@ async def _create_job(
 - 只写这个目录，不要安装、不要修改群伴其他文件、不要直接操作微信。
 - 完成后运行 `node --check lib/index.js` 自检，最后回复 DONE。
 - 通道要求：私聊可用={"是" if private else "否"}，群聊可用={"是" if group else "否"}。
-- 在 package.json 写入 `"qunban": {{"tools": {{}}}}`，并在 lib/index.js 中把只允许私聊的工具、只允许群聊的工具分开；群聊工具不得调用微信发送、删除文件等高风险能力。
+- 在 package.json 写入 `"qunban": {{"channels": {{"private": true, "group": false}}, "tools": {{}}}}`，并按功能拆分工具；每个工具写入 `qunban.tools` 的展示名称和描述，方便插件页展示和分别开关。
 用户需求：
 {requirements}
 """
@@ -1202,6 +1218,25 @@ def _resolve_plugin(plugin_id: str) -> tuple[dict[str, Any], str, bool, bool]:
         raise ValueError("未找到该插件条目")
     critical = bool(found.get("critical")) or plugin_id == "qunban-native"
     return found, name, core, critical
+
+
+def set_tool_channels(
+    plugin_id: str,
+    tool_name: str,
+    *,
+    private: bool,
+    group: bool,
+) -> dict[str, Any]:
+    global _DUMP_CACHE
+    _found, name, _core, _critical = _resolve_plugin(plugin_id)
+    value = plugin_policy.set_tool_channels(
+        plugin_id,
+        tool_name,
+        private=private,
+        group=group,
+    )
+    _DUMP_CACHE = None
+    return {"id": plugin_id, "name": name, "tool": value}
 
 
 def set_channels(

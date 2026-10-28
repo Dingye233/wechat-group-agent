@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui21">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui21">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui24">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui24">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -613,7 +613,7 @@
                   </label>
                   <label class="check-row"><input type="checkbox" id="plugin-import-enabled" checked><span>导入后立即启用</span></label>
                   <button class="btn btn-primary plugin-wide" id="plugin-import-btn"><span data-icon="upload"></span>导入到 DSH profile</button>
-                  <p class="field-hint">导入后 DSH 会先读 README、校验插件并按私聊/群聊拆分工具；默认偏保守，可在插件行里再调整两个通道开关。</p>
+                  <p class="field-hint">导入后 DSH 会先读 README，把插件功能拆分出来用于展示和私聊/群聊开关；默认两个通道都启用，可在插件行和功能行里再调整。</p>
                 </section>
 
                 <section class="plugin-card plugin-create-card">
@@ -636,7 +636,7 @@
                   <label class="check-row"><input type="checkbox" id="plugin-create-agent" checked><span>让 DSH 编写实现（会同时按通道要求拆分工具）</span></label>
                   <label class="check-row"><input type="checkbox" id="plugin-create-enabled" checked><span>生成后立即启用</span></label>
                   <button class="btn btn-primary plugin-wide" id="plugin-create-btn"><span data-icon="sparkles"></span>生成并安装</button>
-                  <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件。群聊插件不得包含微信发送、删除文件等高风险工具。</p>
+                  <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件。DSH 会把功能拆分出来，通道开关之后可随时调整。</p>
                 </section>
               </div>
 
@@ -1052,6 +1052,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui21" defer></script>
+  <script src="/app.js?v=20261029-ui24" defer></script>
 </body>
 </html>

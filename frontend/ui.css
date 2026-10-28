@@ -2769,3 +2769,84 @@ dialog.modal::backdrop {
   gap: 2px 14px;
   margin: 2px 0 4px;
 }
+.plugin-functions {
+  margin-top: 7px;
+  border-top: 1px dashed var(--line);
+  padding-top: 5px;
+}
+.plugin-functions-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  font-size: 10px;
+}
+.plugin-functions-head::-webkit-details-marker {
+  display: none;
+}
+.plugin-functions-head strong {
+  color: var(--text);
+  font-size: 10.5px;
+}
+.plugin-function {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.plugin-function:last-child {
+  border-bottom: 0;
+}
+.plugin-function-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.plugin-function-info code {
+  font-size: 10.5px;
+}
+.plugin-function-info span {
+  color: var(--muted);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-function-switches {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.plugin-tool-switch .plugin-switch-track {
+  width: 22px;
+  height: 13px;
+}
+.plugin-tool-switch .plugin-switch-track::after {
+  width: 7px;
+  height: 7px;
+}
+.plugin-tool-switch input:checked + .plugin-switch-track::after {
+  transform: translateX(9px);
+}
+.plugin-mini {
+  flex-direction: column;
+  align-items: stretch;
+}
+.plugin-mini-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.plugin-mini .plugin-functions {
+  width: 100%;
+}
+.plugin-mini .plugin-functions-head span {
+  display: none;
+}
