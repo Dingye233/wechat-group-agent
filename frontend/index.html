@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>群伴 · WeChat Group Agent</title>
-  <link rel="icon" type="image/jpeg" href="/qunban-icon.jpg?v=1">
-  <link rel="apple-touch-icon" href="/qunban-icon.jpg?v=1">
-  <link rel="stylesheet" href="/styles.css?v=20261028-47">
+  <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
+  <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
+  <link rel="stylesheet" href="/styles.css?v=20261028-50">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -18,7 +18,7 @@
     <div class="login-shell">
       <section class="login-hero">
         <div class="brand brand-lg">
-          <img class="brand-mark" src="/qunban-icon.jpg?v=1" alt="群伴">
+          <img class="brand-mark" src="/qunban-icon.png?v=2" alt="群伴">
           <div>
             <strong>群伴</strong>
             <span>WeChat Group Agent</span>
@@ -709,10 +709,16 @@
                 <label class="field"><span>启动时自动登录</span><select id="set-auto-login">
                   <option value="">不自动登录</option><option value="replica">微信 PC 4.x（wechatauto-replica）</option><option value="wcf">微信 PC（WeChatFerry）</option><option value="mock">演示模式</option>
                 </select></label>
+                <label class="field"><span>关闭后台窗口时</span><select id="set-tray-close">
+                  <option value="tray">隐藏到右下角托盘（推荐）</option>
+                  <option value="exit">直接停止服务</option>
+                </select></label>
+                <label class="field"><span>暂停自动操作快捷键</span><input id="set-takeover-hotkey" placeholder="Alt+P" autocomplete="off"></label>
+                <label class="check-row field-span"><input type="checkbox" id="set-auto-retry-sends"><span>重新接管后自动校验并重发未发送消息</span></label>
                 <label class="field field-span"><span>微信 4.x Weixin.exe 路径 <small>留空自动查找</small></span><input id="set-replica-exe" placeholder="D:\Weixin\Weixin.exe"></label>
                 <label class="field field-span"><span>微信 4.x 数据目录 <small>留空自动检测，通常为 ...\xwechat_files</small></span><input id="set-replica-db-dir" placeholder="C:\Users\...\Documents\xwechat_files"></label>
                 <label class="field field-span"><span>微信 3.9 WeChat.exe 路径 <small>旧版界面自动化 / WeChatFerry 使用</small></span><input id="set-wcf-exe" placeholder="C:\Program Files\Tencent\WeChat\WeChat.exe"></label>
-                <div class="hint-box field-span"><span data-icon="info"></span><p>推荐使用「微信 PC 4.x（wechatauto-replica）」+ 微信 4.1.12 以上（本机已验证 4.1.15.13）。消息从本地数据库读取，微信在后台或最小化也能实时收消息；发送时短暂唤起微信，检测到你操作鼠标会自动暂停。旧版界面自动化需要微信 3.9.x，WeChatFerry 仅匹配 3.9.12.51。</p></div>
+                <div class="hint-box field-span"><span data-icon="info"></span><p>推荐使用「微信 PC 4.x（wechatauto-replica）」+ 微信 4.1.12 以上（本机已验证 4.1.15.13）。消息从本地数据库读取，微信在后台或最小化也能实时收消息；发送时短暂唤起微信。按 Alt+P（可改）立即暂停自动操作；暂停后必须回网页点击「重新接管」才会继续，并会校验、重发未成功送达的消息。旧版界面自动化需要微信 3.9.x，WeChatFerry 仅匹配 3.9.12.51。</p></div>
                 <div class="hint-box field-span"><span data-icon="info"></span><p>回复节奏：基础延迟 + 随机追加延迟；连续触发会合并为最新一条；跨群发送有最小间隔；每次回复后额外随机冷却；接近每小时上限时会随机降频。</p></div>
                 <div class="inline-actions field-span"><button class="btn btn-primary" id="save-settings-btn">保存全部设置</button><span class="inline-result" id="settings-save-result"></span></div>
               </div>
@@ -820,8 +826,8 @@
       <div class="detach-icon"><span data-icon="alert"></span></div>
       <span class="eyebrow">AUTOMATION PAUSED</span>
       <h2>群伴已脱离控制</h2>
-      <p class="detach-reason" id="detached-reason">检测到你在使用鼠标或键盘，自动操作已暂停。</p>
-      <p class="detach-hint">为不抢占鼠标，群伴已停止读取和自动回复。确认暂时不需要操作微信后，再点击下方按钮恢复。</p>
+      <p class="detach-reason" id="detached-reason">自动操作已暂停。</p>
+      <p class="detach-hint">按 Alt+P（可在设置中修改）可随时暂停。暂停后群伴不会自动恢复，必须点击下方「重新接管」；接管时会先校验数据库，再重发未成功送达的消息，避免重复。</p>
       <button class="btn btn-primary btn-wide" id="reattach-btn">重新接管</button>
     </div>
   </dialog>
@@ -883,6 +889,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-47" defer></script>
+  <script src="/app.js?v=20261028-50" defer></script>
 </body>
 </html>

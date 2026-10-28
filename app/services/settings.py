@@ -50,6 +50,9 @@ PUBLIC_KEYS = {
     "assistant_max_tokens",
     "assistant_shell_timeout",
     "opencode_enabled",
+    "tray_close_action",
+    "takeover_hotkey",
+    "auto_retry_failed_sends",
     "timezone",
     "bot_aliases",
     "wcf_wechat_exe",
@@ -121,6 +124,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Use the official OpenCode server for the Operator loop. The legacy
     # in-process loop remains as a fallback when this is disabled.
     "opencode_enabled": True,
+    # tray = closing the background window hides to the notification area;
+    # exit = closing stops the service.
+    "tray_close_action": "tray",
+    # Global pause hotkey.  Resuming always requires the dashboard button.
+    "takeover_hotkey": "Alt+P",
+    # After the user clicks "重新接管", retry messages that never reached
+    # WeChat.  The retry verifies the database first to avoid duplicates.
+    "auto_retry_failed_sends": True,
     "timezone": "Asia/Shanghai",
     "bot_aliases": "",
     "wcf_wechat_exe": "",
@@ -207,6 +218,8 @@ async def update_settings(
         "default_trigger_mode",
         "memory_engine",
         "mem0_collection",
+        "tray_close_action",
+        "takeover_hotkey",
     ):
         if key in payload and payload[key] is not None:
             updates[key] = _clean_str(payload[key], key)
@@ -242,6 +255,19 @@ async def update_settings(
     if "memory_engine" in updates:
         if updates["memory_engine"] not in {"auto", "mem0", "sqlite"}:
             raise ValueError("memory_engine 只能是 auto、mem0 或 sqlite")
+    if "tray_close_action" in updates:
+        if updates["tray_close_action"] not in {"tray", "exit"}:
+            raise ValueError("tray_close_action 只能是 tray 或 exit")
+    if "takeover_hotkey" in updates:
+        hotkey = str(updates["takeover_hotkey"] or "").strip()
+        if hotkey:
+            try:
+                from app.services.hotkey import parse_hotkey
+
+                parse_hotkey(hotkey)
+                updates["takeover_hotkey"] = parse_hotkey(hotkey)[2]
+            except ValueError as exc:
+                raise ValueError(f"暂停快捷键无效：{exc}") from exc
 
     if "llm_api_key" in payload and payload["llm_api_key"] is not None:
         key = _clean_str(payload["llm_api_key"], "llm_api_key")
@@ -297,6 +323,13 @@ async def update_settings(
         updates["seed_sample_stickers"] = bool(payload["seed_sample_stickers"])
     if "opencode_enabled" in payload and payload["opencode_enabled"] is not None:
         updates["opencode_enabled"] = bool(payload["opencode_enabled"])
+    if (
+        "auto_retry_failed_sends" in payload
+        and payload["auto_retry_failed_sends"] is not None
+    ):
+        updates["auto_retry_failed_sends"] = bool(
+            payload["auto_retry_failed_sends"]
+        )
     if (
         "read_media_download_enabled" in payload
         and payload["read_media_download_enabled"] is not None

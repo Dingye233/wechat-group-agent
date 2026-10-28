@@ -1,6 +1,22 @@
 # Start Group Agent in the background (Windows PowerShell)
+# -NoBrowser: do not open the dashboard automatically.
+# -NoTray:    do not launch the tray window (used by tray.ps1 itself).
+param(
+    [switch]$NoBrowser,
+    [switch]$NoTray
+)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+
+function Start-TrayWindow {
+    if ($NoTray) { return }
+    $trayScript = Join-Path $PSScriptRoot "tray.ps1"
+    if (-not (Test-Path $trayScript)) { return }
+    Start-Process -FilePath "powershell.exe" `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`"" `
+        -WorkingDirectory $PSScriptRoot `
+        -WindowStyle Hidden | Out-Null
+}
 
 $venvDir = Join-Path $PSScriptRoot ".venv"
 if (Test-Path (Join-Path $PSScriptRoot ".venv312\Scripts\python.exe")) {
@@ -44,7 +60,8 @@ if ($existingConnection) {
             $existingPid | Set-Content -Path $pidFile -Encoding ascii
             Write-Host "Group Agent is already running (PID $existingPid)."
             Write-Host "Open http://127.0.0.1:8000"
-            Start-Process "http://127.0.0.1:8000"
+            if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8000" }
+            Start-TrayWindow
             exit 0
         }
     } catch {
@@ -105,7 +122,8 @@ if ($healthy) {
     Write-Host "Dashboard: http://127.0.0.1:8000"
     Write-Host "Logs: $(Join-Path $PSScriptRoot 'data\server.log')"
     Write-Host "Process output: $outLog"
-    Start-Process "http://127.0.0.1:8000"
+    if (-not $NoBrowser) { Start-Process "http://127.0.0.1:8000" }
+    Start-TrayWindow
     exit 0
 }
 

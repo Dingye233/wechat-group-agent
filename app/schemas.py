@@ -130,6 +130,9 @@ class SettingsUpdate(BaseModel):
     assistant_max_tokens: int | None = Field(default=None, ge=128, le=3000)
     assistant_shell_timeout: int | None = Field(default=None, ge=5, le=600)
     opencode_enabled: bool | None = None
+    tray_close_action: Literal["tray", "exit"] | None = None
+    takeover_hotkey: str | None = Field(default=None, max_length=40)
+    auto_retry_failed_sends: bool | None = None
     timezone: str | None = None
     bot_aliases: str | None = None
     wcf_wechat_exe: str | None = None

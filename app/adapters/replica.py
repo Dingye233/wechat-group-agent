@@ -304,7 +304,11 @@ class ReplicaGuard:
             try:
                 pos = tuple(win32api.GetCursorPos())
                 now = time.time()
-                if self._synthetic_depth > 0 and self._expected is not None:
+                # While the adapter is authorised to drive WeChat, cursor
+                # movement belongs to the automation (wechatauto uses
+                # SetCursorPos/SendInput).  Recording it as "the user moved
+                # the mouse" caused false takeovers in the middle of sends.
+                if self._synthetic_depth > 0 or now < self._consent_until:
                     last_pos = pos
                 else:
                     if last_pos is not None:
@@ -1511,6 +1515,7 @@ class ReplicaAdapter(BaseAdapter):
             else room_id
         )
         try:
+            self._guard.allow(120.0)
             self._run_ui(
                 lambda: self._ensure_wx()._gui.open_chat(raw),
                 timeout=90.0,
@@ -1726,10 +1731,22 @@ class ReplicaAdapter(BaseAdapter):
         for attempt in range(2):
             self._ensure_attached()
             try:
+                # The whole open-chat / OCR / click sequence can take much
+                # longer than the old 30s consent window.  Without this the
+                # guard mistook wechatauto's own synthetic clicks for a human
+                # takeover and paused the send halfway through.
+                self._guard.allow(timeout + 45.0)
                 response = self._run_ui(
                     build, timeout=timeout, restore_foreground=True
                 )
                 self._check_response(response, action)
+                if content and not media:
+                    if not self._confirm_own_message(
+                        raw, baseline, content=content, timeout=6.0
+                    ):
+                        raise RuntimeError(
+                            "发送后未在微信数据库确认到消息，已加入待重发队列"
+                        )
                 self._restore_foreground(recovered_from)
                 return
             except AutomationDetached:
@@ -1866,6 +1883,7 @@ class ReplicaAdapter(BaseAdapter):
                 "confirmed_wxid": str(getattr(wx, "_wxid", "") or ""),
             }
 
+        self._guard.allow(150.0)
         return await asyncio.to_thread(
             self._run_ui, task, 90.0, True
         )
@@ -2002,7 +2020,7 @@ class ReplicaAdapter(BaseAdapter):
         func: Callable[[], Any],
         *,
         timeout: float = 180.0,
-        allow: float = 30.0,
+        allow: float = 90.0,
         restore_foreground: bool = True,
     ) -> Any:
         self._guard.allow(allow)
@@ -2015,7 +2033,7 @@ class ReplicaAdapter(BaseAdapter):
         name: str,
         *args: Any,
         timeout: float = 180.0,
-        allow: float = 30.0,
+        allow: float = 90.0,
         **kwargs: Any,
     ) -> Any:
         def task() -> Any:
@@ -2591,7 +2609,7 @@ class ReplicaAdapter(BaseAdapter):
         shard = message_meta.get("shard") or None
         mtype = str(message_meta.get("msg_type") or "")
         await asyncio.to_thread(self._download_dir.mkdir, parents=True, exist_ok=True)
-        self._guard.allow(60.0)
+        self._guard.allow(120.0)
         if mtype == "图片" and not self._image_key_checked:
             self._image_key_checked = True
             try:

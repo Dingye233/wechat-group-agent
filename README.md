@@ -28,6 +28,8 @@
 | 人设配置 | 全局默认人设 + 每个群独立人设，可覆盖模型 |
 | 表情包 | 上传、标签、描述、使用次数；模型输出 `sticker` 字段自动选择 |
 | 手动发送 | 在控制台以账号身份发文字或表情包 |
+| 暂停与接管 | 默认 `Alt+P` 全局暂停自动操作；暂停后必须回网页点「重新接管」，不会自动恢复 |
+| 发送校验 | 发送后确认微信数据库落库；失败消息进入待重发队列，接管时先校验再重发，避免重复 |
 | 演示模式 | 无需微信即可体验完整登录、群聊、Agent 回复、表情包流程 |
 | 可拓展 | 适配器接口、事件总线、服务分层；新增协议或触发规则不需要改前端 |
 
@@ -75,6 +77,8 @@
 
 ### 1.2 任务进度、连续消息与 B站
 
+- **暂停与人工接管**：默认按 `Alt+P` 立即暂停 Agent 的微信界面操作，设置页可改快捷键。暂停后不会自动恢复，必须回网页点「重新接管」。wechatauto 自己的鼠标/键盘事件不会再被误判成人工介入；真正的人为操作仍会触发暂停。
+- **发送校验与重发**：每条发送在微信数据库确认落库后才算成功。暂停、界面异常或超时导致未送达的消息会保存为「发送失败」并进入待重发队列；重新接管时先查数据库确认是否其实已送达，再重发未送达的消息，避免重复。失败消息在聊天区显示「发送失败 · 点击重发」，也可以单独重发。
 - **任务进度**：助手执行高复杂度任务时，会通过 WebSocket 推送「第 N 步、正在调用哪个工具、成功/失败」等关键节点，显示在对话框上方；工具调用记录仍会持久化。管理员私聊会同步收到精简的微信进度。
 - **无人值守循环**：默认不限制步数，Agent 会持续「规划 → 调工具 → 看结果 → 继续」直到完成；用户可以随时点「停止」或在微信发「停止」打断，也可以在执行中继续发新要求，Agent 会合并处理。同一工具相同参数连续失败 3 次、或连续 5 次返回相同结果时，Agent 会自行停止并说明原因。
 - **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。
@@ -165,11 +169,30 @@ http://127.0.0.1:8000
 
 macOS / Linux 可使用 `./start.sh`（演示模式或自定义适配器；WCF 仅 Windows）。
 
-### 后台运行
+### 后台运行与托盘
+
+双击 `start.bat` 会启动后台服务和托盘控制窗口。关闭托盘窗口默认**隐藏到右下角通知区**，服务继续运行；右键托盘图标可以「显示后台窗口」「打开群伴控制台」或「退出群伴」。不会再出现关掉窗口后找不到服务、也无法正常退出的情况。
+
+关闭窗口的行为可以在网页「设置 → 关闭后台窗口时」选择：
+
+- **隐藏到右下角托盘**（默认）：关闭窗口只隐藏，服务继续运行。
+- **直接停止服务**：关闭窗口即停止后台服务并退出托盘。
+
+也可以从 PowerShell 启动：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start-background.ps1
 ```
+
+它会同时打开托盘窗口；加 `-NoTray` 则只启动服务，不打开托盘。
+
+需要前台日志时使用：
+
+```text
+start-console.bat
+```
+
+`start-console.bat` 在当前终端运行 uvicorn，按 `Ctrl+C` 或关闭窗口即停止服务。
 
 真实微信（WeChatFerry）通常可以直接以当前用户启动；如果遇到注入权限错误，使用：
 
@@ -491,8 +514,10 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 ├── requirements-bilibili.txt
 ├── requirements-memory.txt
 ├── requirements-wcf.txt
-├── start.bat
-├── start-background.ps1
+├── start.bat                 # 后台服务 + 托盘
+├── start-console.bat         # 前台日志模式
+├── start-background.ps1      # 仅后台服务（可加 -NoTray）
+├── tray.ps1                  # 托盘窗口：关闭隐藏 / 右键退出
 ├── start-admin.ps1
 └── stop-background.ps1
 ```
@@ -525,6 +550,11 @@ DELETE /api/stickers/{id}
 GET    /api/settings
 PUT    /api/settings
 POST   /api/settings/test-llm
+GET    /api/outbox                 # 未发送成功的消息
+POST   /api/outbox/retry           # 校验并重发全部
+POST   /api/outbox/{id}/retry      # 校验并重发单条
+POST   /api/control/reattach       # 重新接管（自动触发失败消息校验/重发）
+POST   /api/control/detach         # 暂停自动操作
 GET    /api/contacts
 PATCH  /api/contacts/{id}          {"is_admin":true,"trigger_mode":"all|keyword","keywords":"a,b","temperature":0.3,"persona":"..."}
 GET    /api/contacts/{id}/messages

@@ -18,6 +18,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters import adapter_catalog, create_adapter
+from app.adapters.replica import AutomationDetached
 from app.adapters.base import (
     AdapterEvent,
     BaseAdapter,
@@ -47,6 +48,7 @@ from app.services.assistant import (
     is_session_active,
     take_session_inbox,
 )
+from app.services.hotkey import GlobalHotkey
 from app.services.llm import LLMService
 from app.services.memory import (
     maybe_forget_sqlite,
@@ -176,6 +178,10 @@ class RuntimeManager:
         self._admin_tasks: dict[str, asyncio.Task] = {}
         self._proactive_tasks: dict[int, asyncio.Task] = {}
         self._memory_loop: asyncio.Task | None = None
+        self._hotkey = GlobalHotkey()
+        self._hotkey_text = ""
+        self._outbox_task: asyncio.Task | None = None
+        self._outbox_lock: asyncio.Lock | None = None
 
     # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -187,6 +193,48 @@ class RuntimeManager:
         self._memory_loop = asyncio.create_task(
             self._memory_scheduler(), name="memory-scheduler"
         )
+        try:
+            async with SessionLocal() as db:
+                data = await get_settings(db)
+            self.apply_hotkey(str(data.get("takeover_hotkey") or "Alt+P"))
+        except Exception as exc:
+            logger.warning("暂停快捷键初始化失败: %s", exc)
+
+    def apply_hotkey(self, hotkey: str) -> dict[str, Any]:
+        """(Re)register the global pause hotkey.
+
+        The callback runs on the hotkey thread, so it is marshalled back to
+        the runtime event loop.  Pausing never resumes automatically.
+        """
+
+        text = str(hotkey or "").strip()
+        loop = self._loop
+
+        def on_hotkey() -> None:
+            if loop is None or loop.is_closed():
+                return
+            asyncio.run_coroutine_threadsafe(self._pause_from_hotkey(), loop)
+
+        previous = self._hotkey_text
+        result = self._hotkey.set(text, on_hotkey)
+        if not result.get("ok") and previous and previous != text:
+            restored = self._hotkey.set(previous, on_hotkey)
+            if restored.get("ok"):
+                result["restored"] = restored.get("hotkey") or previous
+                result["hotkey"] = result["restored"]
+                result["active"] = True
+        self._hotkey_text = str(
+            result.get("hotkey") or (self._hotkey.canonical or previous or text)
+        )
+        if result.get("error"):
+            logger.warning("暂停快捷键不可用: %s", result["error"])
+        return result
+
+    async def _pause_from_hotkey(self) -> None:
+        if self.detached:
+            return
+        label = self._hotkey_text or "Alt+P"
+        await self.detach(f"按下快捷键 {label}，自动操作已暂停")
 
     async def maybe_auto_login(self) -> None:
         if self._auto_login_done:
@@ -293,6 +341,13 @@ class RuntimeManager:
 
     async def close(self) -> None:
         with contextlib.suppress(Exception):
+            self._hotkey.stop()
+        if self._outbox_task and not self._outbox_task.done():
+            self._outbox_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._outbox_task
+            self._outbox_task = None
+        with contextlib.suppress(Exception):
             await self.logout(announce=False)
         if self._memory_loop:
             self._memory_loop.cancel()
@@ -352,6 +407,7 @@ class RuntimeManager:
 
     async def _handle_event(self, event: AdapterEvent) -> None:
         if event.type == "status":
+            was_online = self.state == "online"
             state = str(event.data.get("state") or "offline")
             message = str(event.data.get("message") or "")
             self.status_message = message or self.status_message
@@ -374,6 +430,10 @@ class RuntimeManager:
                 self.account = None
                 self.online_since = None
             self.broadcast("status", self.status_dict())
+            if state == "online" and not was_online and not self.detached:
+                # Give the adapter a few seconds to finish its initial sync,
+                # then verify and retry messages that never reached WeChat.
+                self._schedule_outbox_retry(6.0)
         elif event.type == "qr":
             encoded = event.data.get("image_b64") or ""
             try:
@@ -1637,7 +1697,7 @@ class RuntimeManager:
         self._ensure_attached()
         allow = getattr(self.adapter, "allow_ui_action", None)
         if callable(allow):
-            allow(60.0)
+            allow(120.0)
         await self.adapter.send_image(wxid, path)
 
     async def send_contact_message(
@@ -1869,7 +1929,6 @@ class RuntimeManager:
     ) -> bool:
         if not self.is_online or self.adapter is None:
             raise RuntimeError("微信账号未登录")
-        self._ensure_attached()
         group = await self._get_group(group_id)
         account = self.account or {}
         sent_any = False
@@ -1881,7 +1940,20 @@ class RuntimeManager:
             text = RuntimeManager._strip_inline_images(text)
 
         if text.strip():
-            await self.adapter.send_text(group.external_id, text.strip())
+            try:
+                self._ensure_attached()
+                await self.adapter.send_text(group.external_id, text.strip())
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="text",
+                    content=text.strip(),
+                    is_from_agent=True,
+                    meta=meta,
+                    account=account,
+                    error=str(exc),
+                )
+                raise
             await self._persist_outgoing(
                 group,
                 kind="text",
@@ -1897,14 +1969,29 @@ class RuntimeManager:
                 await asyncio.sleep(0.45)
             allow = getattr(self.adapter, "allow_ui_action", None)
             if callable(allow):
-                allow(60.0)
-            await self.adapter.send_image(group.external_id, path)
+                allow(120.0)
+            image_meta = {**meta, "source": "agent-image"}
+            try:
+                self._ensure_attached()
+                await self.adapter.send_image(group.external_id, path)
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="image",
+                    content="[图片]",
+                    is_from_agent=True,
+                    meta=image_meta,
+                    account=account,
+                    media_path=str(path),
+                    error=str(exc),
+                )
+                raise
             await self._persist_outgoing(
                 group,
                 kind="image",
                 content="[图片]",
                 is_from_agent=True,
-                meta={**meta, "source": "agent-image"},
+                meta=image_meta,
                 account=account,
             )
             sent_any = True
@@ -1915,13 +2002,29 @@ class RuntimeManager:
             from app.services.stickers import sticker_path
 
             path = await sticker_path(sticker)
-            await self.adapter.send_sticker(group.external_id, path)
+            sticker_meta = {**meta, "sticker_id": sticker.id}
+            try:
+                self._ensure_attached()
+                await self.adapter.send_sticker(group.external_id, path)
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="sticker",
+                    content=sticker.name or "[表情包]",
+                    is_from_agent=True,
+                    meta=sticker_meta,
+                    account=account,
+                    sticker=sticker,
+                    media_path=str(path),
+                    error=str(exc),
+                )
+                raise
             await self._persist_outgoing(
                 group,
                 kind="sticker",
                 content=sticker.name or "[表情包]",
                 is_from_agent=True,
-                meta={**meta, "sticker_id": sticker.id},
+                meta=sticker_meta,
                 sticker=sticker,
                 account=account,
             )
@@ -1938,7 +2041,6 @@ class RuntimeManager:
     ) -> list[dict[str, Any]]:
         if not self.is_online or self.adapter is None:
             raise RuntimeError("微信账号未登录")
-        self._ensure_attached()
         group = await self._get_group(group_id)
         account = self.account or {}
         results: list[dict[str, Any]] = []
@@ -1947,9 +2049,22 @@ class RuntimeManager:
             # A manual send is an explicit user request. Long OCR/UIA opens can
             # take tens of seconds; the guard still aborts if the cursor is
             # actually moved while automation is moving it.
-            allow(60.0)
+            allow(120.0)
         if text.strip():
-            await self.adapter.send_text(group.external_id, text.strip())
+            try:
+                self._ensure_attached()
+                await self.adapter.send_text(group.external_id, text.strip())
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="text",
+                    content=text.strip(),
+                    is_from_agent=False,
+                    meta={"source": "dashboard"},
+                    account=account,
+                    error=str(exc),
+                )
+                raise
             payload = await self._persist_outgoing(
                 group,
                 kind="text",
@@ -1965,13 +2080,29 @@ class RuntimeManager:
             from app.services.stickers import sticker_path
 
             path = await sticker_path(sticker)
-            await self.adapter.send_sticker(group.external_id, path)
+            sticker_meta = {"source": "dashboard", "sticker_id": sticker.id}
+            try:
+                self._ensure_attached()
+                await self.adapter.send_sticker(group.external_id, path)
+            except Exception as exc:
+                await self._record_failed_send(
+                    group,
+                    kind="sticker",
+                    content=sticker.name or "[表情包]",
+                    is_from_agent=False,
+                    meta=sticker_meta,
+                    sticker=sticker,
+                    media_path=str(path),
+                    account=account,
+                    error=str(exc),
+                )
+                raise
             payload = await self._persist_outgoing(
                 group,
                 kind="sticker",
                 content=sticker.name or "[表情包]",
                 is_from_agent=False,
-                meta={"source": "dashboard", "sticker_id": sticker.id},
+                meta=sticker_meta,
                 sticker=sticker,
                 account=account,
             )
@@ -2193,6 +2324,9 @@ class RuntimeManager:
             "pinned_group_id": self.pinned_group_id,
             "detached": self.detached,
             "detach_reason": self.detach_reason,
+            "takeover_hotkey": self._hotkey_text,
+            "takeover_hotkey_active": self._hotkey.active,
+            "takeover_hotkey_error": self._hotkey.error,
             "version": settings.version,
         }
 
@@ -2212,10 +2346,18 @@ class RuntimeManager:
         self.detached = False
         self.detach_reason = ""
         self.detach_at = 0.0
-        self.status_message = "已重新接管"
+        self.status_message = "已重新接管，正在校验并重发未发送消息"
         self.broadcast("adapter.reattached", {})
         self.broadcast("status", self.status_dict())
-        return {"detached": False}
+        retry_scheduled = False
+        try:
+            async with SessionLocal() as db:
+                data = await get_settings(db)
+            if bool(data.get("auto_retry_failed_sends", True)):
+                retry_scheduled = self._schedule_outbox_retry(0.4)
+        except Exception:
+            retry_scheduled = self._schedule_outbox_retry(0.4)
+        return {"detached": False, "outbox_retry_scheduled": retry_scheduled}
 
     async def detach(self, reason: str = "用户接管鼠标") -> dict[str, Any]:
         adapter = self.adapter
@@ -2235,6 +2377,324 @@ class RuntimeManager:
         )
         self.broadcast("status", self.status_dict())
         return {"detached": True, "reason": reason}
+
+    # ------------------------------------------------------------ send outbox
+    def _schedule_outbox_retry(self, delay: float = 0.0) -> bool:
+        if self._outbox_task and not self._outbox_task.done():
+            return False
+        if not self.is_online or self.detached:
+            return False
+        self._outbox_task = asyncio.create_task(
+            self._run_outbox_retry(delay), name="outbox-retry"
+        )
+        return True
+
+    async def _run_outbox_retry(self, delay: float = 0.0) -> None:
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if not self.is_online or self.detached:
+                return
+            result = await self.retry_failed_sends()
+            if result.get("retried") or result.get("failed"):
+                logger.info(
+                    "未发送消息校验完成：成功 %s，仍失败 %s，已确认重复 %s",
+                    result.get("retried", 0),
+                    result.get("failed", 0),
+                    result.get("duplicates", 0),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("重发未发送消息失败")
+        finally:
+            self._outbox_task = None
+
+    async def list_failed_sends(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = await self._pending_outbox_rows(limit=limit)
+        return [message_dict(row) for row in rows]
+
+    async def _pending_outbox_rows(
+        self, limit: int = 50, message_id: int | None = None
+    ) -> list[Message]:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(Message)
+                    .where(
+                        Message.is_self.is_(True),
+                        Message.created_at >= cutoff,
+                    )
+                    .order_by(Message.id.asc())
+                    .limit(3000)
+                )
+            ).scalars().all()
+        result: list[Message] = []
+        for row in rows:
+            meta = row.meta or {}
+            if not meta.get("_outbox"):
+                continue
+            if meta.get("_send_state") not in {"failed", "pending"}:
+                continue
+            if message_id is not None and int(row.id) != int(message_id):
+                continue
+            result.append(row)
+            if len(result) >= max(1, int(limit)):
+                break
+        return result
+
+    async def _record_failed_send(
+        self,
+        group: Group,
+        *,
+        kind: str,
+        content: str,
+        is_from_agent: bool,
+        meta: dict[str, Any],
+        account: dict[str, str],
+        sticker: Sticker | None = None,
+        media_path: str = "",
+        error: str = "",
+    ) -> dict[str, Any] | None:
+        async with SessionLocal() as db:
+            db_group = await db.get(Group, group.id)
+            if db_group is None:
+                return None
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            record_meta = dict(meta or {})
+            record_meta.update(
+                {
+                    "_outbox": True,
+                    "_send_state": "failed",
+                    "_send_error": str(error or "")[:600],
+                    "_outbox_created_at": now.isoformat(),
+                }
+            )
+            if media_path:
+                record_meta["_outbox_media_path"] = str(media_path)
+            if sticker is not None:
+                record_meta["sticker_id"] = sticker.id
+            row = Message(
+                external_id=None,
+                group_id=group.id,
+                sender_wxid=account.get("wxid", ""),
+                sender_name=account.get("name") or self.bot_name,
+                is_from_agent=is_from_agent,
+                is_self=True,
+                kind=kind,
+                content=content,
+                media_path=sticker.filename if sticker else "",
+                meta=record_meta,
+                created_at=now,
+            )
+            db.add(row)
+            db_group.last_message_at = now
+            await db.flush()
+            await db.refresh(row)
+            payload = message_dict(row)
+            await db.commit()
+        self.broadcast("message.new", payload)
+        self.log_agent_event(
+            "warn", f"消息未发送成功，已加入待重发：{str(error or '')[:160]}"
+        )
+        return payload
+
+    async def _mark_outbox_pending(self, message_id: int) -> None:
+        async with SessionLocal() as db:
+            row = await db.get(Message, message_id)
+            if row is None:
+                return
+            meta = dict(row.meta or {})
+            meta["_send_state"] = "pending"
+            meta["_send_error"] = ""
+            if self.adapter_id == "replica":
+                # Must be set before the UI send starts.  The database
+                # listener can otherwise see the echo first and insert a
+                # second row before we mark this one as awaiting confirmation.
+                meta["_replica_pending"] = True
+            row.meta = meta
+            await db.commit()
+            payload = message_dict(row)
+        self.broadcast("message.updated", payload)
+
+    async def _mark_outbox_sent(
+        self, message_id: int, duplicate_of: int | None = None
+    ) -> None:
+        async with SessionLocal() as db:
+            row = await db.get(Message, message_id)
+            if row is None:
+                return
+            group_id = row.group_id
+            if duplicate_of is not None:
+                await db.delete(row)
+                await db.commit()
+                self.broadcast("message.deleted", {"id": message_id, "group_id": group_id})
+                return
+            meta = dict(row.meta or {})
+            meta["_send_state"] = "sent"
+            meta["_send_error"] = ""
+            meta["_sent_verified_at"] = datetime.now(timezone.utc).replace(
+                tzinfo=None
+            ).isoformat()
+            if meta.get("_replica_confirmed"):
+                meta["_replica_pending"] = False
+            elif self.adapter_id == "replica":
+                meta["_replica_pending"] = True
+            row.meta = meta
+            await db.commit()
+            payload = message_dict(row)
+        self.broadcast("message.updated", payload)
+
+    async def _mark_outbox_error(self, message_id: int, error: str) -> None:
+        async with SessionLocal() as db:
+            row = await db.get(Message, message_id)
+            if row is None:
+                return
+            meta = dict(row.meta or {})
+            meta["_send_state"] = "failed"
+            meta["_send_error"] = str(error or "")[:600]
+            meta["_replica_pending"] = False
+            row.meta = meta
+            await db.commit()
+            payload = message_dict(row)
+        self.broadcast("message.updated", payload)
+
+    async def _find_confirmed_echo(self, row: Message) -> Message | None:
+        created = row.created_at
+        if created is None:
+            return None
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(Message)
+                    .where(
+                        Message.group_id == row.group_id,
+                        Message.id != row.id,
+                        Message.is_self.is_(True),
+                        Message.external_id.is_not(None),
+                        Message.created_at >= created - timedelta(seconds=8),
+                        Message.created_at <= created + timedelta(minutes=5),
+                    )
+                    .order_by(Message.id.desc())
+                    .limit(40)
+                )
+            ).scalars().all()
+        for other in rows:
+            if other.created_at is not None:
+                age = abs((other.created_at - created).total_seconds())
+                if age > 300:
+                    continue
+            if self._outgoing_matches(other, row.kind, row.content):
+                return other
+        return None
+
+    async def retry_failed_sends(
+        self, message_id: int | None = None, limit: int = 20
+    ) -> dict[str, Any]:
+        if not self.is_online or self.adapter is None:
+            return {"ok": False, "error": "微信账号未登录"}
+        if self.detached:
+            return {"ok": False, "error": "自动操作已暂停，请先重新接管"}
+        if self._outbox_lock is None:
+            self._outbox_lock = asyncio.Lock()
+        async with self._outbox_lock:
+            rows = await self._pending_outbox_rows(
+                limit=limit, message_id=message_id
+            )
+            if not rows:
+                return {
+                    "ok": True,
+                    "retried": 0,
+                    "failed": 0,
+                    "duplicates": 0,
+                    "remaining": 0,
+                }
+            retried = 0
+            failed = 0
+            duplicates = 0
+            remaining = 0
+            for index, row in enumerate(rows):
+                if self.detached or not self.is_online or self.adapter is None:
+                    remaining += len(rows) - index
+                    break
+                group = await self._get_group(row.group_id)
+                if row.external_id or (row.meta or {}).get("_replica_confirmed"):
+                    await self._mark_outbox_sent(row.id)
+                    duplicates += 1
+                    continue
+                echo = await self._find_confirmed_echo(row)
+                if echo is not None:
+                    # The previous attempt did land in WeChat even though the
+                    # caller saw an exception.  Keep the real echo, drop the
+                    # optimistic failed row.
+                    await self._mark_outbox_sent(row.id, duplicate_of=echo.id)
+                    duplicates += 1
+                    continue
+                try:
+                    meta = row.meta or {}
+                    await self._mark_outbox_pending(row.id)
+                    if row.kind == "text":
+                        await self.adapter.send_text(group.external_id, row.content)
+                    elif row.kind == "image":
+                        path = str(meta.get("_outbox_media_path") or "").strip()
+                        if not path:
+                            raise RuntimeError("待重发图片缺少本地文件路径")
+                        await self.adapter.send_image(group.external_id, Path(path))
+                    elif row.kind == "sticker":
+                        sticker_id = meta.get("sticker_id")
+                        db_sticker = None
+                        if sticker_id is not None:
+                            async with SessionLocal() as db:
+                                db_sticker = await db.get(Sticker, int(sticker_id))
+                        if db_sticker is None:
+                            raise RuntimeError("待重发表情已不存在")
+                        from app.services.stickers import sticker_path
+
+                        path = await sticker_path(db_sticker)
+                        await self.adapter.send_sticker(group.external_id, path)
+                    else:
+                        raise RuntimeError(f"不支持重发消息类型：{row.kind}")
+                    echo = await self._find_confirmed_echo(row)
+                    await self._mark_outbox_sent(
+                        row.id, duplicate_of=echo.id if echo is not None else None
+                    )
+                    retried += 1
+                    await asyncio.sleep(0.6)
+                except AutomationDetached as exc:
+                    await self._mark_outbox_error(row.id, str(exc))
+                    remaining += len(rows) - index
+                    break
+                except Exception as exc:
+                    await self._mark_outbox_error(row.id, str(exc))
+                    failed += 1
+            self.status_message = (
+                f"未发送消息校验完成：重发 {retried} 条，仍失败 {failed} 条"
+            )
+            self.broadcast("status", self.status_dict())
+            self.broadcast(
+                "outbox.retry",
+                {
+                    "retried": retried,
+                    "failed": failed,
+                    "duplicates": duplicates,
+                    "remaining": remaining,
+                },
+            )
+            return {
+                "ok": True,
+                "retried": retried,
+                "failed": failed,
+                "duplicates": duplicates,
+                "remaining": remaining,
+            }
+
+    def log_agent_event(self, level: str, message: str) -> None:
+        self.broadcast("adapter.log", {"level": level, "message": message})
+        if level in {"error", "warn", "warning"}:
+            logger.warning(message)
+        else:
+            logger.info(message)
 
     def broadcast(self, event_type: str, data: dict[str, Any]) -> None:
         self.bus.publish(event_type, data)

@@ -25,14 +25,33 @@ async def save_settings(
     db: AsyncSession = Depends(get_db),
     runtime: RuntimeManager = Depends(get_runtime),
 ) -> dict:
+    updates = payload.model_dump(exclude_unset=True)
     try:
-        data = await update_settings(db, payload.model_dump(exclude_unset=True))
+        data = await update_settings(db, updates)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     public = public_settings(data)
     await runtime.apply_read_filter()
-    runtime.broadcast("settings.updated", {"llm_configured": public["llm_configured"]})
-    return {"settings": public}
+    hotkey_result = runtime.apply_hotkey(str(data.get("takeover_hotkey") or ""))
+    if (
+        "takeover_hotkey" in updates
+        and not hotkey_result.get("ok")
+        and hotkey_result.get("restored")
+    ):
+        # Do not persist a hotkey that Windows refused to register (usually
+        # because another app already owns it).  Keep the previous one.
+        data = await update_settings(
+            db, {"takeover_hotkey": hotkey_result["restored"]}
+        )
+        public = public_settings(data)
+    runtime.broadcast(
+        "settings.updated",
+        {
+            "llm_configured": public["llm_configured"],
+            "takeover_hotkey": hotkey_result,
+        },
+    )
+    return {"settings": public, "hotkey": hotkey_result}
 
 
 @router.post("/settings/test-llm")

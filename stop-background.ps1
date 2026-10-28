@@ -19,6 +19,16 @@ foreach ($connection in $connections) {
     [void]$targets.Add([int]$connection.OwningProcess)
 }
 
+# The venv python.exe can be a launcher that spawns the real interpreter.
+# Kill every uvicorn process belonging to this checkout as well, otherwise a
+# launcher can survive with no listener and make the service look unstoppable.
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+    $commandLine = [string]$_.CommandLine
+    if ($commandLine -like "*uvicorn*app.main:app*" -and $commandLine -like "*$PSScriptRoot*") {
+        [void]$targets.Add([int]$_.ProcessId)
+    }
+}
+
 $stopped = $false
 foreach ($agentPid in $targets) {
     $process = Get-Process -Id $agentPid -ErrorAction SilentlyContinue

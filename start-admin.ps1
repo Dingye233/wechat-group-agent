@@ -1,4 +1,4 @@
-<#
+﻿<#
     Start 群伴 with Administrator privileges.
     The service itself must be elevated for PowerShell commands to inherit
     admin rights without a UAC prompt on every call.

@@ -733,6 +733,30 @@ code {
 }
 .msg-bubble.sticker img:hover { transform: scale(1.025); }
 .msg-bubble .placeholder-media { color: var(--muted); font-size: 12px; }
+.msg-failed-badge {
+  color: #ff9c9c;
+  font-size: 8.5px;
+  font-weight: 700;
+  border: 1px solid rgba(255, 110, 110, 0.35);
+  background: rgba(255, 90, 90, 0.1);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+.msg-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  border: 1px solid rgba(255, 110, 110, 0.4);
+  background: rgba(255, 90, 90, 0.12);
+  color: #ffb4b4;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+.msg-retry-btn:hover { background: rgba(255, 90, 90, 0.2); }
+.msg-retry-btn:disabled { opacity: 0.55; cursor: wait; }
 .msg-system { align-self: center; max-width: 80%; text-align: center; color: var(--muted-2); font-size: 10px; padding: 3px 12px; border-radius: 999px; background: rgba(255, 255, 255, 0.03); }
 .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 10px 4px 0; color: var(--muted-2); font-size: 10px; }
 .typing-dots { display: inline-flex; gap: 3px; padding: 5px 8px; background: #12251c; border: 1px solid var(--line); border-radius: 9px; }

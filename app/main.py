@@ -19,6 +19,7 @@ from app.api import (
     contacts,
     groups,
     opencode,
+    outbox,
     replica_tools,
     settings as settings_api,
     status,
@@ -125,6 +126,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(status.router, prefix="/api", tags=["system"])
 app.include_router(groups.router, prefix="/api", tags=["groups"])
+app.include_router(outbox.router, prefix="/api", tags=["outbox"])
 app.include_router(contacts.router, prefix="/api", tags=["contacts"])
 app.include_router(replica_tools.router, prefix="/api", tags=["replica"])
 app.include_router(assistant.router, prefix="/api", tags=["assistant"])

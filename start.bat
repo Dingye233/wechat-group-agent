@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title WeChat Group Agent
+title Qunban launcher
 
 set "VENV=.venv"
 if exist ".venv312\Scripts\python.exe" set "VENV=.venv312"
@@ -41,16 +41,13 @@ if not exist ".env" (
 
 echo.
 echo ================================================
-echo   Group Agent is starting with %VENV%
+echo   Group Agent is starting in the background
 echo   http://127.0.0.1:8000
-echo   Press Ctrl+C to stop.
+echo   Close the tray window to hide it; right-click
+echo   the tray icon to exit.
+echo   For foreground logs use start-console.bat.
 echo ================================================
 echo.
 
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process 'http://127.0.0.1:8000'"
-set PYTHONIOENCODING=utf-8
-"%VENV%\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-echo.
-echo Server stopped.
-pause
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0tray.ps1"
+exit /b 0

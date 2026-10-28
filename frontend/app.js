@@ -316,7 +316,7 @@ function applyDetachedState(detached, reason = '') {
   const reasonNode = $('#detached-reason');
   if (reasonNode) {
     reasonNode.textContent = next
-      ? `${state.detachReason || '检测到你在使用鼠标或键盘'}，自动操作已暂停。`
+      ? `${state.detachReason || '自动操作已暂停'}。`
       : '';
   }
   const dialog = $('#detached-dialog');
@@ -349,7 +349,11 @@ async function reattachAgent() {
     const data = await api('/control/reattach', { method: 'POST' });
     if (data?.status) applyStatus(data.status);
     else applyDetachedState(false);
-    toast('已重新接管，微信 4.x 自动操作继续');
+    toast(
+      data?.outbox_retry_scheduled
+        ? '已重新接管，正在校验并重发未发送消息'
+        : '已重新接管，微信 4.x 自动操作继续',
+    );
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -1508,6 +1512,10 @@ function buildMessageNode(message) {
   if (message.is_from_agent) meta.appendChild(el('span', 'msg-agent-badge', 'AGENT'));
   const source = messageSourceLabel(message);
   if (source) meta.appendChild(el('span', 'msg-source-badge', source));
+  const sendState = String(message.meta?._send_state || '');
+  if (sendState === 'failed') {
+    meta.appendChild(el('span', 'msg-failed-badge', '发送失败'));
+  }
   meta.appendChild(el('time', null, formatClock(message.created_at)));
   const bubble = el(
     'div',
@@ -1533,6 +1541,26 @@ function buildMessageNode(message) {
     }
   } else {
     bubble.textContent = message.content || '…';
+  }
+  if (sendState === 'failed') {
+    const retry = el('button', 'msg-retry-btn', '发送失败 · 点击重发');
+    retry.title = String(message.meta?._send_error || '');
+    retry.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      retry.disabled = true;
+      retry.textContent = '校验并重发中…';
+      try {
+        const data = await api(`/outbox/${message.id}/retry`, { method: 'POST' });
+        if (data?.retried) toast('已重新发送');
+        else if (data?.duplicates) toast('已确认这条消息之前其实发送成功');
+        else toast('仍未发送成功，请检查微信窗口状态', 'warn');
+      } catch (error) {
+        toast(error.message, 'error');
+        retry.disabled = false;
+        retry.textContent = '发送失败 · 点击重发';
+      }
+    });
+    bubble.appendChild(retry);
   }
   main.append(meta, bubble);
   row.append(avatar, main);
@@ -1613,6 +1641,16 @@ function applyMessageUpdate(message) {
   state.messages[index] = { ...state.messages[index], ...message };
   const node = document.querySelector(`[data-message-id="${message.id}"]`);
   if (node) node.replaceWith(buildMessageNode(state.messages[index]));
+}
+
+function removeMessage(message) {
+  if (!message || message.id == null) return;
+  const id = Number(message.id);
+  state.seenMessageIds.delete(id);
+  state.messages = state.messages.filter((item) => item.id !== id);
+  document.querySelector(`[data-message-id="${id}"]`)?.remove();
+  const group = state.groups.find((item) => item.id === message.group_id);
+  if (group) group.message_count = Math.max(0, (group.message_count || 1) - 1);
 }
 
 function handleDirectMessage(message) {
@@ -2297,6 +2335,9 @@ function fillSettings(settings) {
   $('#set-assistant-tokens').value = String(settings.assistant_max_tokens ?? 900);
   $('#set-aliases').value = settings.bot_aliases || '';
   $('#set-auto-login').value = settings.auto_login || '';
+  $('#set-tray-close').value = settings.tray_close_action || 'tray';
+  $('#set-takeover-hotkey').value = settings.takeover_hotkey || 'Alt+P';
+  $('#set-auto-retry-sends').checked = settings.auto_retry_failed_sends !== false;
   $('#set-replica-exe').value = settings.replica_wechat_exe || '';
   $('#set-replica-db-dir').value = settings.replica_db_dir || '';
   $('#set-wcf-exe').value = settings.wcf_wechat_exe || '';
@@ -2364,17 +2405,25 @@ async function saveSettings() {
       replica_wechat_exe: $('#set-replica-exe').value.trim(),
       replica_db_dir: $('#set-replica-db-dir').value.trim(),
       auto_login: $('#set-auto-login').value,
+      tray_close_action: $('#set-tray-close').value,
+      takeover_hotkey: $('#set-takeover-hotkey').value.trim(),
+      auto_retry_failed_sends: $('#set-auto-retry-sends').checked,
     };
     const apiKey = $('#set-api-key').value.trim();
     if (apiKey) payload.llm_api_key = apiKey;
-    await api('/settings', { method: 'PUT', body: JSON.stringify(payload) });
+    const saved = await api('/settings', { method: 'PUT', body: JSON.stringify(payload) });
     await loadSettings();
     await loadStats();
     if (result) {
       result.textContent = '已保存';
       result.classList.add('ok');
     }
-    toast('设置已保存');
+    if (saved?.hotkey && saved.hotkey.ok === false) {
+      const restored = saved.hotkey.restored ? `；已恢复 ${saved.hotkey.restored}` : '';
+      toast(`设置已保存，但暂停快捷键不可用：${saved.hotkey.error || '注册失败'}${restored}`, 'warn');
+    } else {
+      toast('设置已保存');
+    }
   } catch (error) {
     if (result) {
       result.textContent = error.message;
@@ -4836,6 +4885,9 @@ function handleWsEvent(event) {
       break;
     case 'message.updated':
       applyMessageUpdate(data);
+      break;
+    case 'message.deleted':
+      removeMessage(data);
       break;
     case 'groups.updated':
       scheduleGroupsReload();
