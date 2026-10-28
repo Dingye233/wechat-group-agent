@@ -21,6 +21,10 @@
   记忆、文件、终端工具暴露给 OpenCode。每个群伴 tool 都会注册成独立 MCP
   工具（如 `qunban_read_file`、`qunban_run_powershell`），同时保留通用入口
   `qunban_tool(name, args)`。MCP 工具最终仍走群伴的 capability 权限网关。
+- 原生工具清单：`data/opencode/tools.json` 由 `app/services/tool_registry.py`
+  管理，OpenCode 可以调用 `qunban_tool_admin` 执行
+  `list/get/upsert/remove/enable/disable/sync/reload`。新增工具时 `handler`
+  必须引用已存在的群伴原生工具；原生实现仍由群伴执行。
 - 群伴 MCP 项目 / 技能 / 接口：分别通过 `qunban_run_mcp`、
   `qunban_run_skill`、`qunban_call_interface` 调用；`qunban_capabilities`
   会返回可直接使用的工具名、示例参数和 `call_tool` / `call_args` 提示。

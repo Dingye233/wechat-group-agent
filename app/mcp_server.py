@@ -374,43 +374,126 @@ async def qunban_call_interface(
     return await _call("call_interface", {"name": name, "args": args or {}})
 
 
-def _register_catalog_tools() -> None:
-    """Expose every Qunban capability as a first-class MCP tool."""
+_MANIFEST_TOOL_NAMES: set[str] = set()
+
+
+def _make_tool(handler: str):
+    async def run(args: dict[str, Any] | None = None) -> str:
+        return await _call(handler, args or {})
+
+    run.__name__ = f"qunban_{handler}"
+    return run
+
+
+def _entry_description(entry: dict[str, Any]) -> str:
+    description = str(entry.get("description") or "群伴原生工具")
+    example = entry.get("args_example") or {}
     try:
-        from app.services.assistant_tools import tool_catalog
+        example_text = json.dumps(example, ensure_ascii=False)
     except Exception:
+        example_text = "{}"
+    return (
+        f"{description} 参数示例：{example_text}。"
+        "参数放在 args 对象里；工具清单由 OpenCode 的 tool_admin 管理。"
+    )
+
+
+def _add_manifest_tool(entry: dict[str, Any]) -> None:
+    name = str(entry.get("name") or "").strip()
+    handler = str(entry.get("handler") or name).strip()
+    if not name or not handler or name in CURATED_TOOL_NAMES:
         return
-    seen: set[str] = set()
+    try:
+        server.remove_tool(name)
+    except Exception:
+        pass
+    server.add_tool(
+        _make_tool(handler),
+        name=name,
+        description=_entry_description(entry),
+    )
+    _MANIFEST_TOOL_NAMES.add(name)
 
-    def make_tool(tool_name: str):
-        async def run(args: dict[str, Any] | None = None) -> str:
-            return await _call(tool_name, args or {})
 
-        run.__name__ = f"qunban_{tool_name}"
-        return run
+def reload_manifest() -> list[str]:
+    """Reload the OpenCode-managed native tool manifest."""
+    from app.services import tool_registry
 
-    for item in tool_catalog():
-        name = str(item.get("name") or "").strip()
-        if not name or name in seen or name in CURATED_TOOL_NAMES:
-            continue
-        seen.add(name)
-        desc = str(item.get("desc") or "群伴工具")
-        example = item.get("args") or {}
+    entries = tool_registry.list_entries()
+    wanted = {
+        str(entry.get("name") or "").strip()
+        for entry in entries
+        if entry.get("enabled", True)
+        and str(entry.get("name") or "").strip() not in CURATED_TOOL_NAMES
+    }
+    for old in list(_MANIFEST_TOOL_NAMES - wanted):
         try:
-            example_text = json.dumps(example, ensure_ascii=False)
+            server.remove_tool(old)
         except Exception:
-            example_text = "{}"
-        description = (
-            f"{desc}。参数示例：{example_text}。"
-            "参数放在 args 对象里；这是群伴自己的工具，由 OpenCode 原生调用。"
-        )
+            pass
+        _MANIFEST_TOOL_NAMES.discard(old)
+    for entry in entries:
+        if entry.get("enabled", True):
+            _add_manifest_tool(entry)
+    return sorted(wanted)
 
-        server.add_tool(
-            make_tool(name),
-            name=name,
-            description=description,
-        )
-_register_catalog_tools()
+
+def _register_manifest_tools() -> None:
+    try:
+        from app.services import tool_registry
+
+        tool_registry.load_manifest()
+    except Exception as exc:
+        print(f"qunban tool manifest unavailable: {exc}", file=sys.stderr)
+        return
+    reload_manifest()
+
+
+async def _admin_call(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{API_BASE}/api/opencode/tools/admin",
+                json=payload,
+                headers={"x-qunban-token": TOKEN},
+            )
+        if response.status_code >= 400:
+            return {"ok": False, "error": response.text[:4000]}
+        return response.json()
+    except Exception as exc:
+        return {"ok": False, "error": f"工具管理 API 不可用：{exc}"}
+
+
+@server.tool(
+    name="tool_admin",
+    description=(
+        "管理群伴原生工具清单。action 支持 list/get/upsert/remove/enable/disable/sync/reload。"
+        "upsert 时在 tool 对象里传 name、description、handler、args_example、enabled；"
+        "handler 必须是群伴已存在的原生工具。示例："
+        '{"action":"upsert","tool":{"name":"read_file_fast","handler":"read_file","description":"快速读取文件","args_example":{"path":"a.txt"}}}'
+    ),
+)
+async def qunban_tool_admin(
+    action: str,
+    name: str = "",
+    tool: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {"action": action}
+    if name:
+        payload["name"] = name
+    if tool:
+        payload["tool"] = tool
+    result = await _admin_call(payload)
+    if action.strip().lower() in {"upsert", "remove", "enable", "disable", "sync", "reload"}:
+        try:
+            names = reload_manifest()
+            result["active_manifest_tools"] = len(names)
+        except Exception as exc:
+            result["reload_error"] = str(exc)
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+_register_manifest_tools()
 
 
 def main() -> None:

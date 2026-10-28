@@ -3594,7 +3594,11 @@ async function loadOpenCode() {
         const item = el('div', 'opencode-tool-item');
         item.append(
           el('strong', null, tool.id || tool.name || 'tool'),
-          el('small', null, tool.description || 'OpenCode 工具'),
+          el(
+            'small',
+            null,
+            `${tool.description || 'OpenCode 工具'}${tool.enabled === false ? ' · 已停用' : ''}`,
+          ),
         );
         toolRoot.appendChild(item);
       }

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from app.api.deps import get_runtime
 from app.core.runtime import RuntimeManager
 from app.db import SessionLocal
+from app.services import tool_registry
 from app.services.assistant import AssistantService
 from app.services.capabilities import list_capabilities
 from app.services.opencode_agent import (
@@ -46,8 +47,6 @@ async def opencode_tools() -> dict:
     tools = await runtime.tools(settings)
     plugins = await runtime.plugins()
     mcp = await runtime.mcp_status()
-    from app.services.assistant_tools import tool_catalog
-
     capabilities = await list_capabilities()
     qunban_projects = {
         "mcps": [
@@ -83,7 +82,7 @@ async def opencode_tools() -> dict:
     }
     mcp_tools: list[dict[str, Any]] = []
     seen_mcp: set[str] = set()
-    for item in tool_catalog():
+    for item in tool_registry.list_entries():
         name = str(item.get("name") or "").strip()
         if not name or name in seen_mcp:
             continue
@@ -92,14 +91,18 @@ async def opencode_tools() -> dict:
             {
                 "id": f"qunban_{name}",
                 "name": name,
-                "description": str(item.get("desc") or "群伴工具"),
-                "args_example": item.get("args") or {},
+                "description": str(item.get("description") or "群伴工具"),
+                "args_example": item.get("args_example") or {},
+                "handler": item.get("handler") or name,
+                "enabled": bool(item.get("enabled", True)),
+                "managed_by": "opencode",
                 "source": "qunban-mcp",
             }
         )
     for name, description in (
         ("tool", "通用群伴工具网关（name + args）"),
         ("capabilities", "列出群伴可用工具和示例参数"),
+        ("tool_admin", "OpenCode 管理群伴工具：增删/停用/改描述/重载"),
         ("list_groups", "列出微信群"),
         ("read_group", "读取群消息"),
         ("send_message", "发送群聊/私聊消息"),
@@ -107,6 +110,7 @@ async def opencode_tools() -> dict:
         ("memory_save", "保存长期记忆"),
         ("memory_search", "搜索长期记忆"),
         ("run_mcp", "运行群伴 MCP 项目"),
+        ("run_skill", "运行群伴技能"),
         ("call_interface", "调用群伴已登记接口"),
     ):
         if name in seen_mcp:
@@ -117,6 +121,7 @@ async def opencode_tools() -> dict:
                 "id": f"qunban_{name}",
                 "name": name,
                 "description": description,
+                "managed_by": "opencode",
                 "source": "qunban-mcp",
             }
         )
@@ -150,6 +155,32 @@ async def opencode_reset(payload: dict = Body(default={})) -> dict:
     session_id = str(payload.get("session_id") or "main")[:100]
     await _runtime().reset_session(session_id)
     return {"ok": True, "session_id": session_id}
+
+
+@router.get("/opencode/tools/manifest")
+async def opencode_tools_manifest() -> dict:
+    return {
+        "manifest": tool_registry.load_manifest(),
+        "path": str(tool_registry.MANIFEST_PATH),
+    }
+
+
+@router.post("/opencode/tools/admin")
+async def opencode_tools_admin(
+    request: Request,
+    payload: dict = Body(...),
+) -> dict:
+    """OpenCode-managed tool definitions (called by the MCP tool_admin tool)."""
+    supplied = request.headers.get("x-qunban-token", "")
+    expected = tool_token()
+    if not expected or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="无效的 OpenCode 工具令牌")
+    action = str(payload.get("action") or "list")
+    try:
+        result = tool_registry.admin_action(action, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "action": action, **result}
 
 
 @router.post("/opencode/tool")
