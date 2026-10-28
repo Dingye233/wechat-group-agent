@@ -4327,6 +4327,10 @@ function biliRenderAutoHistory(videos) {
     );
     const summary = el('small', null, (video.summary || video.error || '').slice(0, 120));
     item.append(title, meta, summary);
+    const opinion = video.analysis?.opinion;
+    if (opinion) {
+      item.append(el('small', 'bili-agent-opinion', `Agent 看法：${String(opinion).slice(0, 140)}`));
+    }
     if (video.url) {
       item.style.cursor = 'pointer';
       item.addEventListener('click', () => window.open(video.url, '_blank', 'noreferrer'));
@@ -4376,6 +4380,7 @@ async function loadBiliAutopilot() {
     state.biliAuto = config;
     biliFillAutoTargets(config);
     $('#bili-auto-enabled').checked = Boolean(config.enabled);
+    $('#bili-auto-use-context').checked = config.use_agent_context !== false;
     $('#bili-auto-interval').value = String(config.interval_minutes ?? 60);
     $('#bili-auto-topics').value = (config.topics || []).join(', ');
     $('#bili-auto-asr').value = config.asr_model || 'small';
@@ -4395,6 +4400,7 @@ async function loadBiliAutopilot() {
 async function saveBiliAutopilot() {
   const payload = {
     enabled: Boolean($('#bili-auto-enabled')?.checked),
+    use_agent_context: Boolean($('#bili-auto-use-context')?.checked),
     interval_minutes: parseIntSafe($('#bili-auto-interval')?.value, 60),
     topics: $('#bili-auto-topics')?.value.trim() || '',
     asr_model: $('#bili-auto-asr')?.value || 'small',

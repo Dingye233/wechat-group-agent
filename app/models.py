@@ -257,6 +257,7 @@ class BiliAutopilotConfig(Base):
     favorite_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     comment_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     reply_comments_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    use_agent_context: Mapped[bool] = mapped_column(Boolean, default=True)
     forward_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     forward_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     asr_model: Mapped[str] = mapped_column(String(32), default="small")

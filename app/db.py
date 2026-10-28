@@ -124,6 +124,17 @@ def _migrate_schema(connection) -> None:  # type: ignore[no-untyped-def]
         connection.exec_driver_sql(
             "ALTER TABLE bili_accounts ADD COLUMN cookie_json TEXT DEFAULT ''"
         )
+    autopilot_columns = {
+        str(row[1])
+        for row in connection.exec_driver_sql(
+            "PRAGMA table_info(bili_autopilot_configs)"
+        ).fetchall()
+    }
+    if autopilot_columns and "use_agent_context" not in autopilot_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE bili_autopilot_configs "
+            "ADD COLUMN use_agent_context BOOLEAN DEFAULT 1"
+        )
     # Migrate the old "MVC" naming to "MCP" while preserving toggles.
     legacy_caps = connection.exec_driver_sql(
         "SELECT id, key, type FROM capabilities "

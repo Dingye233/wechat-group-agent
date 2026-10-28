@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%2307c160'/%3E%3Cstop offset='1' stop-color='%2300d4ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='%23081511'/%3E%3Cpath d='M18 22c0-4 4-7 9-7h10c5 0 9 3 9 7v8c0 4-4 7-9 7h-5l-7 6v-6c-4-1-7-4-7-7z' fill='url(%23g)'/%3E%3Ccircle cx='27' cy='26' r='2.4' fill='%23081511'/%3E%3Ccircle cx='38' cy='26' r='2.4' fill='%23081511'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/styles.css?v=20261028-35">
+  <link rel="stylesheet" href="/styles.css?v=20261028-36">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -456,9 +456,10 @@
                 <div class="assistant-section-head bili-auto-head"><strong>自动刷 B站</strong><span class="tool-meta" id="bili-auto-state">已关闭</span></div>
                 <p class="field-hint">开启后 Agent 会自行选视频、转写、理解，并按自己的判断决定是否点赞/收藏/评论/回复；不要求每个视频都互动。</p>
                 <label class="check-row"><input type="checkbox" id="bili-auto-enabled"><span>开启 Agent 自动刷 B站</span></label>
+                <label class="check-row"><input type="checkbox" id="bili-auto-use-context"><span>参考 Agent 人设、长期记忆和最近对话（允许 Agent 独立判断）</span></label>
                 <div class="field-row">
                   <label class="field"><span>间隔（分钟）</span><input type="number" id="bili-auto-interval" min="10" max="1440" step="10" value="60"></label>
-                  <label class="field"><span>兴趣关键词 <small>留空 = Agent 自选</small></span><input id="bili-auto-topics" placeholder="留空由 Agent 按自己的喜好选择"></label>
+                  <label class="field"><span>兴趣关键词 <small>留空 = Agent 自选；填写也仅作参考</small></span><input id="bili-auto-topics" placeholder="可留空；Agent 可自行调整方向"></label>
                 </div>
                 <label class="field"><span>音频转写模型</span>
                   <select id="bili-auto-asr">
@@ -858,6 +859,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-35" defer></script>
+  <script src="/app.js?v=20261028-36" defer></script>
 </body>
 </html>

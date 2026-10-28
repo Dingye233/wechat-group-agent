@@ -13,8 +13,20 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import BiliAutopilotConfig, BiliVideo, Group, Contact, utcnow
+from app.models import (
+    AssistantMessage,
+    BiliAutopilotConfig,
+    BiliVideo,
+    Contact,
+    Group,
+    utcnow,
+)
 from app.services import bilibili, bili_knowledge
+from app.services.memory import (
+    DEFAULT_MEMORY_PROMPT_TEMPLATE,
+    format_memory_line,
+    search_memories,
+)
 from app.services.settings import get_settings
 
 if TYPE_CHECKING:
@@ -35,6 +47,7 @@ def _config_payload(row: BiliAutopilotConfig | None) -> dict[str, Any]:
             "favorite_enabled": True,
             "comment_enabled": True,
             "reply_comments_enabled": False,
+            "use_agent_context": True,
             "forward_group_id": None,
             "forward_contact_id": None,
             "asr_model": "small",
@@ -48,6 +61,9 @@ def _config_payload(row: BiliAutopilotConfig | None) -> dict[str, Any]:
         "favorite_enabled": bool(row.favorite_enabled),
         "comment_enabled": bool(row.comment_enabled),
         "reply_comments_enabled": bool(row.reply_comments_enabled),
+        "use_agent_context": bool(
+            row.use_agent_context if row.use_agent_context is not None else True
+        ),
         "forward_group_id": row.forward_group_id,
         "forward_contact_id": row.forward_contact_id,
         "asr_model": row.asr_model or "small",
@@ -158,6 +174,7 @@ class BiliAutopilot:
                 "favorite_enabled",
                 "comment_enabled",
                 "reply_comments_enabled",
+                "use_agent_context",
             ):
                 if key in payload:
                     setattr(row, key, bool(payload[key]))
@@ -270,20 +287,41 @@ class BiliAutopilot:
                 row.bvid
                 for row in (await db.execute(select(BiliVideo))).scalars().all()
             }
+        agent_context = ""
+        if config.get("use_agent_context", True):
+            agent_context = await self._agent_context(settings, account_key)
+            if agent_context:
+                await self._emit(
+                    "context",
+                    "已加载 Agent 人设、长期记忆和最近对话，本轮由 Agent 自主判断",
+                )
         topics = [
             str(item).strip()
             for item in (config.get("topics") or [])
             if str(item).strip()
         ]
         topic = ""
-        if topics:
+        use_agent_choice = bool(
+            config.get("use_agent_context", True) and settings.get("llm_api_key")
+        )
+        if topics and not use_agent_choice:
             topic = random.choice(topics)
             await self._emit("topic", f"使用兴趣关键词：{topic}")
             videos = await bilibili.search_videos(topic, 12)
         else:
-            topic = await self._pick_topic(settings)
+            topic = await self._pick_topic(settings, agent_context, topics)
             if topic:
-                await self._emit("topic", f"Agent 自选主题：{topic}")
+                await self._emit(
+                    "topic",
+                    f"Agent 自选主题：{topic}"
+                    + ("（用户关键词仅作参考）" if topics else ""),
+                )
+                videos = await bilibili.search_videos(topic, 12)
+            elif topics:
+                topic = random.choice(topics)
+                await self._emit(
+                    "topic", f"Agent 自选失败，回退兴趣关键词：{topic}"
+                )
                 videos = await bilibili.search_videos(topic, 12)
             else:
                 await self._emit("topic", "Agent 直接浏览热门推荐")
@@ -308,7 +346,9 @@ class BiliAutopilot:
             await self._mark_run()
             await self._emit("idle", "没有找到未处理过的短视频")
             return
-        video, reason = await self._pick_video(candidates, topic or "Agent 自选", settings)
+        video, reason = await self._pick_video(
+            candidates, topic or "Agent 自选", settings, agent_context
+        )
         bvid = video["bvid"]
         title = video.get("title") or bvid
         await self._emit(
@@ -352,7 +392,14 @@ class BiliAutopilot:
             title=title,
         )
         await self._emit("analyzing", "正在理解视频内容", bvid=bvid, title=title)
-        analysis = await self._analyze(title, video.get("author") or "", text, settings)
+        analysis = await self._analyze(
+            title, video.get("author") or "", text, settings, agent_context
+        )
+        opinion = str(analysis.get("opinion") or "").strip()
+        if opinion:
+            await self._emit(
+                "opinion", f"Agent 看法：{opinion}", bvid=bvid, title=title
+            )
         summary = str(analysis.get("summary") or text[:300]).strip()
         topics_out = [
             str(item).strip()
@@ -495,7 +542,92 @@ class BiliAutopilot:
         await self._emit("done", f"完成：{title}", bvid=bvid, title=title, actions=actions)
         self.notify()
 
-    async def _pick_topic(self, settings: dict[str, Any]) -> str:
+    async def _agent_context(
+        self, settings: dict[str, Any], account_key: str
+    ) -> str:
+        """Build the Agent's own taste/context for autonomous B站 decisions."""
+        parts: list[str] = []
+        persona = str(settings.get("operator_persona") or "").strip()
+        extra = str(settings.get("operator_prompt_extra") or "").strip()
+        if persona:
+            parts.append(f"# Agent 人设\n{persona}")
+        if extra:
+            parts.append(f"# 用户对 Agent 的额外要求\n{extra}")
+
+        template = str(
+            settings.get("memory_prompt_template")
+            or DEFAULT_MEMORY_PROMPT_TEMPLATE
+        )
+        memory_lines: list[str] = []
+        try:
+            rows = await search_memories(
+                query="B站 视频 兴趣 偏好 审美 喜欢 讨厌 内容",
+                group_id=None,
+                account_key=account_key,
+                limit=8,
+            )
+            for item in rows:
+                line = format_memory_line(item, template)
+                if line and line not in memory_lines:
+                    memory_lines.append(line)
+        except Exception:
+            pass
+        try:
+            from app.services import mem0_memory
+
+            items = await mem0_memory.search(
+                settings,
+                account_key=account_key,
+                query="B站 视频 兴趣 偏好 审美 喜欢 讨厌",
+                limit=6,
+                timeout=3.0,
+            )
+            for item in items:
+                line = format_memory_line(item, template)
+                if line and line not in memory_lines:
+                    memory_lines.append(line)
+        except Exception:
+            pass
+        if memory_lines:
+            parts.append(
+                "# 长期记忆与偏好（来自用户对话和 Agent 自己的历史）\n"
+                + "\n".join(memory_lines[-12:])
+            )
+
+        try:
+            async with SessionLocal() as db:
+                rows = list(
+                    (
+                        await db.execute(
+                            select(AssistantMessage)
+                            .where(
+                                AssistantMessage.session_id == "main",
+                                AssistantMessage.role.in_(("user", "assistant")),
+                            )
+                            .order_by(AssistantMessage.id.desc())
+                            .limit(8)
+                        )
+                    ).scalars().all()
+                )
+            recent = [
+                f"{row.role}：{str(row.content or '').strip()[:240]}"
+                for row in reversed(rows)
+                if str(row.content or "").strip()
+            ]
+            if recent:
+                parts.append(
+                    "# 最近与用户的 Operator 对话\n" + "\n".join(recent)
+                )
+        except Exception:
+            pass
+        return "\n\n".join(parts)[:6000]
+
+    async def _pick_topic(
+        self,
+        settings: dict[str, Any],
+        agent_context: str = "",
+        candidate_topics: list[str] | None = None,
+    ) -> str:
         if not settings.get("llm_api_key"):
             return ""
         async with SessionLocal() as db:
@@ -509,19 +641,32 @@ class BiliAutopilot:
         history = "\n".join(
             f"- {row.title}｜{'、'.join(row.topics or [])}" for row in rows
         ) or "还没有历史记录"
+        context_block = f"{agent_context}\n\n" if agent_context else ""
+        candidate_text = (
+            "、".join(candidate_topics or []) or "无（用户没有限定关键词）"
+        )
         try:
             data, _result = await self.runtime.llm.complete_json(
                 base_url=str(settings.get("llm_base_url") or ""),
                 api_key=str(settings.get("llm_api_key") or ""),
                 model=str(settings.get("llm_model") or ""),
                 system_prompt=(
-                    "你是一个有自己内容品味的中文 B站用户。请根据你已有的视频知识库，"
-                    "选择一个你真正想继续了解、且最近没有重复刷过的中文搜索主题。"
-                    "可以偏科技、知识、生活、音乐、游戏、影视、搞笑等，但不要讨好式地"
-                    "永远选同一类。只输出 JSON：{\"topic\":\"一个简短搜索词\"}"
+                    f"{context_block}"
+                    "你是一个有自己内容品味和独立判断的中文 B站用户，不是用户偏好的执行器。"
+                    "上面的 Agent 人设、长期记忆和最近对话只是参考；你可以喜欢、不喜欢、"
+                    "改变兴趣，也可以主动探索一个最近没接触过的新方向。"
+                    "用户可能给出兴趣关键词，但那只是建议，不是命令；"
+                    "你可以从中选择，也可以根据自己的判断换成更适合当前心情的主题。"
+                    "请结合你已有的视频历史和自己的判断，选择一个你真正想继续了解、"
+                    "且最近没有重复刷过的中文搜索主题。不要讨好式地永远选同一类。"
+                    "只输出 JSON：{\"topic\":\"一个简短搜索词\"}"
                 ),
-                user_prompt=f"最近刷过的视频：\n{history}\n\n请给出本轮主题。",
-                temperature=0.8,
+                user_prompt=(
+                    f"用户提供的候选关键词（仅参考）：{candidate_text}\n\n"
+                    f"最近刷过的视频：\n{history}\n\n"
+                    "请以你自己的品味给出本轮主题；可以沿用候选，也可以提出新方向。"
+                ),
+                temperature=0.9,
                 max_tokens=120,
                 json_mode=True,
             )
@@ -536,6 +681,7 @@ class BiliAutopilot:
         candidates: list[dict[str, Any]],
         topic: str,
         settings: dict[str, Any],
+        agent_context: str = "",
     ) -> tuple[dict[str, Any], str]:
         if not settings.get("llm_api_key") or len(candidates) == 1:
             return candidates[0], ""
@@ -543,18 +689,24 @@ class BiliAutopilot:
             f"- {item.get('bvid')} | {item.get('title')} | {item.get('author')} | {item.get('duration')}"
             for item in candidates[:10]
         )
+        context_block = f"{agent_context}\n\n" if agent_context else ""
         try:
             data, _result = await self.runtime.llm.complete_json(
                 base_url=str(settings.get("llm_base_url") or ""),
                 api_key=str(settings.get("llm_api_key") or ""),
                 model=str(settings.get("llm_model") or ""),
                 system_prompt=(
-                    "你是 B站刷视频 Agent。请从候选视频中选择最符合兴趣、"
-                    "适合完整观看和内容理解的一条，输出 JSON："
-                    '{"bvid":"BV...","reason":"一句话理由"}'
+                    f"{context_block}"
+                    "你是 B站刷视频 Agent，有自己的审美和判断。"
+                    "请从候选视频中选择你真正想看、适合完整观看和内容理解的一条。"
+                    "用户偏好只是参考，不需要迎合；可以选一个更能激发你兴趣的视频。"
+                    "输出 JSON：{\"bvid\":\"BV...\",\"reason\":\"一句话理由\"}"
                 ),
-                user_prompt=f"兴趣：{topic}\n候选：\n{listing}\n请选择。",
-                temperature=0.4,
+                user_prompt=(
+                    f"本轮主题：{topic}\n候选：\n{listing}\n"
+                    "请按自己的判断选择，并说明理由。"
+                ),
+                temperature=0.7,
                 max_tokens=200,
                 json_mode=True,
             )
@@ -573,13 +725,16 @@ class BiliAutopilot:
         author: str,
         transcript: str,
         settings: dict[str, Any],
+        agent_context: str = "",
     ) -> dict[str, Any]:
         if not settings.get("llm_api_key"):
             return {"summary": transcript[:300], "topics": []}
-        system_prompt = """你是 B站内容理解 Agent。你有自己的内容品味，不需要每个视频都互动。
+        context_block = f"{agent_context}\n\n" if agent_context else ""
+        system_prompt = f"""{context_block}你是 B站内容理解 Agent。你有自己的内容品味和独立观点，不需要每个视频都互动，也不需要迎合用户偏好。
 请根据视频标题、作者和语音转写，输出一个 JSON：
-{"summary":"200字以内中文总结","topics":["主题1","主题2"],"sentiment":"positive|neutral|negative","actions":["like","favorite","comment","reply"],"comment_text":"只有决定评论时才写，否则空字符串","reply_text":"只有决定回复热评时才写，否则空字符串","forward_text":"转发到微信时的简短推荐语"}
+{{"summary":"200字以内中文总结","topics":["主题1","主题2"],"sentiment":"positive|neutral|negative","opinion":"你对这个视频的独立评价/态度，80字以内","actions":["like","favorite","comment","reply"],"comment_text":"只有决定评论时才写，否则空字符串","reply_text":"只有决定回复热评时才写，否则空字符串","forward_text":"转发到微信时的简短推荐语"}}
 规则：
+- 先形成你自己的 opinion，再决定 actions；用户偏好只是参考，不是命令。
 - actions 是数组，可以为空，也可以只选其中一两个；不要默认三连。
 - 大多数视频应该 actions 为空，只做观看、理解和知识库记录。
 - 只有内容确实让你喜欢才 like；只有想长期收藏才 favorite；只有你有具体、自然、不引战的想法才 comment；只有热评值得回应才 reply。
