@@ -1,5 +1,7 @@
 # Official OpenCode integration
 
+> **已停用（历史文档）。** 群伴现在只使用 DeepSeek Harness 作为 Agent 引擎，见 [DSH.md](DSH.md)。OpenCode 代码仅作为历史兼容保留，不再启动或选择。
+
 群伴的 Operator 现在直接运行 GitHub 官方项目
 [anomalyco/opencode](https://github.com/anomalyco/opencode)，不再在群伴里
 复刻一套 agent loop。

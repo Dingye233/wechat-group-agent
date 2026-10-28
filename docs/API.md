@@ -300,7 +300,11 @@ Query：
     "default_trigger_mode": "mention",
     "default_keywords": [],
     "context_messages": 18,
-    "reply_delay_seconds": 1.2,
+    "reply_delay_seconds": 0.8,
+    "reply_delay_random_seconds": 1.5,
+    "read_poll_interval_seconds": 0.5,
+    "memory_search_timeout_seconds": 1.5,
+    "fast_chat_planner": true,
     "timezone": "Asia/Shanghai",
     "bot_aliases": "",
     "wcf_wechat_exe": "",
@@ -324,7 +328,11 @@ API Key 不会明文返回，只返回是否设置与末四位提示。
   "llm_api_key": "sk-...",
   "llm_temperature": 0.8,
   "context_messages": 18,
-  "reply_delay_seconds": 1.2,
+  "reply_delay_seconds": 0.4,
+  "reply_delay_random_seconds": 0.9,
+  "read_poll_interval_seconds": 0.5,
+  "memory_search_timeout_seconds": 1.5,
+  "fast_chat_planner": true,
   "timezone": "Asia/Shanghai",
   "bot_aliases": "小助手,助手",
   "wcf_wechat_exe": "",
@@ -398,3 +406,89 @@ API Key 不会明文返回，只返回是否设置与末四位提示。
 - `json_mode=false` 时会关闭 `response_format`，仍按 JSON 解析
 
 模型失败会记录 `agent_logs` 并通过 WebSocket 推送，不会向群里发送错误提示。
+
+---
+
+## 7. LLM 用量与缓存
+
+### `GET /api/llm/usage?hours=24`
+
+按调用点聚合最近 N 小时的 token 用量与提示词缓存命中率（`hours` 1–720）。
+
+```json
+{
+  "hours": 24,
+  "calls": 120,
+  "prompt_tokens": 345000,
+  "completion_tokens": 18000,
+  "cache_hit_tokens": 250000,
+  "cache_miss_tokens": 95000,
+  "cache_hit_rate": 0.7246,
+  "sites": [
+    {
+      "call_site": "group.reply",
+      "calls": 40,
+      "prompt_tokens": 180000,
+      "completion_tokens": 9000,
+      "cache_hit_tokens": 150000,
+      "cache_miss_tokens": 30000,
+      "cache_hit_rate": 0.8333
+    }
+  ]
+}
+```
+
+- `cache_hit_rate` 是 `cache_hit_tokens / prompt_tokens`，由 provider 返回的 `prompt_cache_hit_tokens`（DeepSeek）或 `prompt_tokens_details.cached_tokens`（OpenAI 兼容网关）计算。
+- 只保存 token 数、调用点、模型名和延迟，不保存提示词或回复正文。
+- 分层规则与自测见 [PROMPT_CACHE.md](PROMPT_CACHE.md)。
+
+---
+
+## 8. DeepSeek Harness
+
+### `GET /api/dsh/status`
+
+```json
+{
+  "dsh": {
+    "installed": true,
+    "version": "0.2.1-rc.4",
+    "tag": "dsh-v0.2.1-rc.4",
+    "commit": "504a01a9578abc2c6f1fb896b1dc322c9fe24f66",
+    "channel": "stable",
+    "running": 0,
+    "installing": false,
+    "update_available": false,
+    "latest": "0.2.1-rc.4",
+    "job": null
+  },
+  "engine": "opencode",
+  "channel": "stable"
+}
+```
+
+### `POST /api/dsh/check`
+
+```json
+{"channel": "stable"}
+```
+
+返回 `{"update": {current, latest, tag, commit, update_available, checked_at}}`，版本来自 GitHub `dsh-v*` tag。
+
+### `POST /api/dsh/update`
+
+启动后台安装；立即返回 `{"started": true, "job": {...}}`，之后用 `/api/dsh/status` 轮询 `job.state` 和 `job.log`。
+
+### `POST /api/dsh/reset`
+
+```json
+{"session_id": "main"}
+```
+
+清除 qunban session 到 DSH session id 的映射，下一次任务创建新 DSH 会话。
+
+### `POST /api/dsh/stop`
+
+终止所有正在运行的 DSH headless 进程。
+
+运行方式与限制见 [DSH.md](DSH.md)。

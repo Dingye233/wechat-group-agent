@@ -404,3 +404,28 @@ class AgentLog(Base):
     event: Mapped[str] = mapped_column(String(32), default="info")
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class LLMUsage(Base):
+    """One row per LLM request, used to measure prompt-cache hit rate.
+
+    Providers report ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``
+    (OpenAI-compatible providers use ``prompt_tokens_details.cached_tokens``).
+    Keeping the numbers locally makes prompt regressions visible immediately
+    instead of waiting for the next provider invoice.
+    """
+
+    __tablename__ = "llm_usage"
+    __table_args__ = (Index("ix_llm_usage_site_id", "call_site", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    call_site: Mapped[str] = mapped_column(String(64), default="", index=True)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_hit_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_miss_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_prefix_chars: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

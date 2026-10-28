@@ -850,13 +850,15 @@ class RuntimeManager:
                         # open that chat while a different account is active.
                         pinned_id = 0
                 self.pinned_group_id = pinned_id
-            default_interval = float(
-                settings.get("read_poll_interval_seconds") or 1.0
+            default_interval = max(
+                0.5,
+                float(settings.get("read_poll_interval_seconds") or 0.5),
             )
+            poll_setter = getattr(adapter, "set_poll_interval", None)
+            if callable(poll_setter):
+                poll_setter(default_interval)
             schedule = {
-                str(external_id): max(
-                    1.0, float(interval or default_interval)
-                )
+                str(external_id): float(interval or 0)
                 for external_id, interval, name in rows
                 if external_id and not _is_temporary_room(external_id, name)
             }

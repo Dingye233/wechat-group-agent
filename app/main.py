@@ -18,7 +18,10 @@ from app.api import (
     bilibili,
     chat_tasks,
     contacts,
+    dsh,
+    dsh_plugins,
     groups,
+    llm,
     opencode,
     outbox,
     replica_tools,
@@ -72,6 +75,7 @@ async def lifespan(app: FastAPI):
         await sync_capabilities()
     except Exception:
         logger.exception("能力自动识别失败")
+    saved: dict = {}
     try:
         async with SessionLocal() as db:
             saved = await get_settings(db)
@@ -81,6 +85,14 @@ async def lifespan(app: FastAPI):
                     logger.info("已生成 %s 个内置示例表情包", created)
     except Exception:
         logger.exception("初始化表情包失败，服务继续启动")
+    try:
+        # Load FastEmbed/Chroma in the background so the first group reply does
+        # not pay the 1-3s mem0 cold-start cost.
+        from app.services import mem0_memory
+
+        mem0_memory.warmup(saved)
+    except Exception:
+        logger.debug("Mem0 预热失败", exc_info=True)
 
     runtime = RuntimeManager()
     app.state.runtime = runtime
@@ -103,6 +115,10 @@ async def lifespan(app: FastAPI):
             from app.services.opencode_agent import get_opencode_runtime
 
             await get_opencode_runtime().stop()
+        with contextlib.suppress(Exception):
+            from app.services.dsh_agent import get_dsh_agent_runtime
+
+            await get_dsh_agent_runtime().stop()
         await runtime.close()
         await dispose_db()
         logger.info("服务已停止")
@@ -126,6 +142,9 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(status.router, prefix="/api", tags=["system"])
+app.include_router(llm.router, prefix="/api", tags=["llm"])
+app.include_router(dsh.router, prefix="/api", tags=["dsh"])
+app.include_router(dsh_plugins.router, prefix="/api", tags=["dsh"])
 app.include_router(groups.router, prefix="/api", tags=["groups"])
 app.include_router(chat_tasks.router, prefix="/api", tags=["groups"])
 app.include_router(outbox.router, prefix="/api", tags=["outbox"])

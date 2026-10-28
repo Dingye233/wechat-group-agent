@@ -20,7 +20,7 @@
 
 ```text
 ┌────────────────────────────────────────────────────┐
-│ frontend/  index.html + app.js + styles.css        │
+│ frontend/  index.html + app.js + styles.css + ui.css │
 │ 无构建、同源 REST、WebSocket、所有动态内容 textContent │
 └──────────────────────────┬─────────────────────────┘
                            │ HTTP / WS
@@ -203,6 +203,7 @@ meta: dict            # 附加信息（如 msg_type/group_name）
 | `stickers` | 表情库 | `filename`, `tags` JSON, `description`, `usage_count` |
 | `settings` | 运行时设置 | `key` 主键, `value` JSON |
 | `agent_logs` | Agent 决策记录 | `group_id`, `level`, `event`, `detail` |
+| `llm_usage` | LLM 用量与缓存命中率 | `call_site`, `prompt_tokens`, `cache_hit_tokens`, `cache_miss_tokens`, `latency_ms`, `ok` |
 
 时间约定：
 
@@ -236,6 +237,7 @@ meta: dict            # 附加信息（如 msg_type/group_name）
 | 多账号 | 将单例 Runtime 改为 `dict[account_id, Runtime]`，API 增加账号维度 |
 | 向量记忆 | 在 Agent 构建上下文时检索并注入 |
 | 定时任务 | 增加独立调度器，通过 Runtime 发送消息 |
+| 新工作 Agent | `services/agent_engines.py` + 新适配器；参考 `dsh_agent.py` 的 headless 进程/会话/事件映射 |
 
 ---
 

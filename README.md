@@ -33,6 +33,8 @@
 | 演示模式 | 无需微信即可体验完整登录、群聊、Agent 回复、表情包流程 |
 | 可拓展 | 适配器接口、事件总线、服务分层；新增协议或触发规则不需要改前端 |
 
+控制台使用左侧栏 + 页面标题的布局：`Ctrl/Cmd + K` 打开命令面板，可直接跳页面、助手面板或群聊；助手右侧面板改为纵向导航，群聊右栏按「设置 / 任务 / 动态」分组，设置页有分区导航和独立保存条。结构说明见 [docs/UI.md](docs/UI.md)。
+
 ---
 
 ## 隐私与数据
@@ -46,13 +48,13 @@
 
 ## 1.1 Agent 助手 / 能力开关 / 联系人管理员
 
-「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 默认由 GitHub 官方 [OpenCode](https://github.com/anomalyco/opencode) 运行时执行，群伴不再复刻 agent loop：
+「助手」选项卡是一个可直接下命令的 Operator Agent。Operator 由 **DeepSeek Harness（DSH）** 原生执行，OpenCode 已停用：
 
-- **官方 OpenCode**：群伴启动 `opencode serve`，通过 OpenCode 会话、原生 tool calling、事件流和中断机制执行任务；设置页/OpenCode 面板可切回内置循环兜底。模型请求只使用群伴设置里每个用户自己的 Base URL / API Key / 模型，不读取 OpenCode 官方账号或内置 Key。
-- **群伴工具**：微信、B站、记忆、文件、终端等能力通过本地 MCP server 暴露给 OpenCode，并注册为独立工具（如 `qunban_read_file`、`qunban_run_powershell`）；群伴 MCP 项目、技能和接口分别通过 `qunban_run_mcp`、`qunban_run_skill`、`qunban_call_interface` 调用。工具调用仍经过群伴的 capability 权限网关。
-- **微信发送**：只走 wechatauto-replica 的 `send_group_message` / `send_contact_message`；OpenCode 默认不注册 `keyboard_*` / `mouse_*`，并拦截包含微信操作关键词的 `run_powershell`。发送前会先打开目标会话并确认输入框，确认不了就取消，避免盲打键盘或卡死微信。
-- **工具组件**：工具层拆分为 `app/tools/wechat.py`、`bili.py`、`memory.py`、`system.py`，`app/mcp_server.py` 只做组合；详见 [docs/tools.md](docs/tools.md)。群聊工具会带上真实参数示例；外部接口调用会校验 URL 占位符，参数不匹配时返回明确错误并允许模型在后续步骤重试，不会把 `{city}` 当成城市直接请求。
-- **工具/插件展示**：OpenCode 面板展示 OpenCode 内置工具、群伴 MCP 工具、MCP 连接状态和 `data/opencode/plugins/` 下的插件。群伴原生工具清单在 `data/opencode/tools.json`，OpenCode 可通过 `qunban_tool_admin` 新增别名、改描述、停用/启用、删除和同步工具；也可以把新脚本写到 `data/opencode/tools/`，用 `handler_type="script"` 注册成真正的新工具，无需改 Python 主程序。
+- **DSH 原生融合**：群伴不再把 OpenCode 当同级引擎，也不再让 DSH 通过 MCP 调群伴。`dsh/qunban-native` 是挂载进 DSH profile 的 Cordis 插件，直接注册 `wechat_*` / `qunban_*` 原生工具；工具调用仍走群伴 `/api/opencode/tool` 网关的权限、目标解析、发送校验和 outbox。
+- **wechatauto 是消息源/发送端**：群聊消息从 replica 适配器读取并入库，交给 DSH 的 `qunban-chat` profile 生成回复；回复再交给 wechatauto-replica 发送。DSH 不直接操作微信窗口、键鼠或数据库。
+- **微信发送**：唯一入口是 `wechat_send_message`（群聊 group_id / 私聊 contact_id 二选一）。发送前确认目标和接管状态，发送后轮询数据库确认落库；失败进入失败队列。原生 shell 在 profile 里被禁用，只保留服务端会拦截微信关键词的 `qunban_powershell`。
+- **Skills**：`data/agent_workspace/skills` 会自动转成 DSH 的 `SKILL.md` 格式并挂到 `customSkillDirs`；群伴技能仍通过 `qunban_run_skill` 执行。外部 MCP 项目通过 `qunban_run_mcp` 接入，不再作为 DSH 的 MCP 子进程。
+- **工具组件**：工具层拆分为 `app/tools/wechat.py`、`bili.py`、`memory.py`、`system.py`；DSH 插件只负责把原生工具名映射到网关，具体逻辑仍在群伴服务端。
 
 
 - 文件读写、PowerShell（可选 UAC 管理员）、HTTP 接口、技能、MCP、自我迭代任务。
@@ -79,13 +81,13 @@
 
 - **意图分流与群聊任务**：每条消息先经过意图/情绪分析，决定是否参与、是否需要工具；普通聊天直接回复，查资料/多步任务自动挂到「群聊任务」列表后台执行，先用「我去看看」这类自然话过渡，完成后把结果发回群里，期间仍可继续聊天。
 - **表格生成与文件发送**：群聊里可以直接让 Agent 做点检表/Excel；Agent 用 `create_excel` 生成 `.xlsx`，再通过 wechatauto 的 `SendFiles` 自动发到群里。群聊不开放屏幕、鼠标、键盘类通用技能；需要工具却没有匹配能力时会明确说明，不会假装完成。
-- **复杂任务转交 OpenCode**：写代码、跑脚本、生成复杂文档、读写工作区文件或多步工具编排时，群伴 Agent 会把任务挂到后台交给 OpenCode；OpenCode 原生编码/终端/文件工具已解锁，可以在指定 workspace 写脚本并使用现有 skills/tools，完成后由群伴 Agent 统一发送结果和文件。权限确认和选择题由群伴 Agent 自动处理。
+- **复杂任务转交 DSH**：写代码、跑脚本、生成复杂文档、读写工作区文件或多步工具编排时，群伴 Agent 会把任务挂到后台交给 DSH 的 `qunban-group` profile；DSH 使用原生文件/技能工具和群伴插件，在指定 workspace 执行，完成后由群伴统一发送结果和文件。
 - **用户情感记忆**：按群 + 用户记录情绪分布、情感倾向、性格标签和简短印象，下一轮意图识别和回复会自动参考；连续消息按同一人合并意图，不会只抓最后两个字。
 - **暂停与人工接管**：默认按 `Alt+P` 立即暂停 Agent 的微信界面操作，设置页可改快捷键。暂停后不会自动恢复，必须回网页点「重新接管」。wechatauto 自己的鼠标/键盘事件不会再被误判成人工介入；真正的人为操作仍会触发暂停。
 - **发送校验与重发**：每条发送在微信数据库确认落库后才算成功。暂停、界面异常或超时导致未送达的消息会保存为「发送失败」并进入待重发队列；重新接管时先查数据库确认是否其实已送达，再重发未送达的消息，避免重复。失败消息在聊天区显示「发送失败 · 点击重发」，也可以单独重发。
 - **任务进度**：助手执行高复杂度任务时，会通过 WebSocket 推送「第 N 步、正在调用哪个工具、成功/失败」等关键节点，显示在对话框上方；工具调用记录仍会持久化。管理员私聊会同步收到精简的微信进度。
 - **无人值守循环**：默认不限制步数，Agent 会持续「规划 → 调工具 → 看结果 → 继续」直到完成；用户可以随时点「停止」或在微信发「停止」打断，也可以在执行中继续发新要求，Agent 会合并处理。同一工具相同参数连续失败 3 次、或连续 5 次返回相同结果时，Agent 会自行停止并说明原因。
-- **官方运行时**：Operator 直接使用 [anomalyco/opencode](https://github.com/anomalyco/opencode) 的会话与工具循环；不再在群伴里模仿 OpenCode。实现说明见 [docs/opencode.md](docs/opencode.md)。DeepSeek Harness 的群聊接入评估见 [docs/dsh-group-agent.md](docs/dsh-group-agent.md)。
+- **官方运行时**：Operator 和群任务使用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 headless profile；群伴通过原生 Cordis 插件、稳定会话和 `qunban-chat` 无工具 profile 融合，不再依赖 OpenCode。实现说明见 [docs/DSH.md](docs/DSH.md)。
 - **连续消息**：群配置新增「允许连续发送多条消息」和最多条数（2–6）。模型可以输出文字 + 表情包混合的多段回复，Agent 会按顺序逐条发送。
 - **主动发起**：群配置新增「安静后主动发起话题」和间隔分钟数（10–1440）。默认关闭，开启后只在群聊安静一段时间且不在静默时段时触发。
 - **B站**：「助手 → B站」支持扫码登录、账号密码极验登录、Cookie 登录；登录后可搜索视频、打开观看、点赞、评论、刷推荐。Agent 也可通过 `bili_search` / `bili_watch` / `bili_like` / `bili_comment` / `bili_feed` 等工具自主调用。群聊默认开放只读的 `bili_knowledge_search` / `bili_last_opinion` / `bili_video_info` / `bili_comments`，让 Agent 能回答“你看了什么/学到了什么”，且没有知识库结果时禁止编造具体视频内容。
@@ -97,6 +99,27 @@
 - **按需记录**：手动查阅 B站视频时，可点视频行「记」按需转写并写入知识库；Agent 也可调用 `bili_knowledge_add` 只记录当前需要的视频，不必把每个看过的视频都入库。
 - B站实现参考 [bilibili-api-python](https://github.com/Nemo2011/bilibili-api)（GitHub 高星 B站 API 库）；ASR 参考 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 与 [FunASR/SenseVoice](https://github.com/modelscope/FunASR)（中文场景更优的备选）；知识库使用 [ChromaDB](https://github.com/chroma-core/chroma)（约 2.7 万 star）。主动对话设计参考 [Thoughtful Agents](https://github.com/xybruceliu/thoughtful-agents) 与 Proactive Conversational Agents（Inner Thoughts）的思路。
 - B站自动化可能受平台风控和社区规则限制，请只用自己的账号并控制频率；不要用于刷量、营销或骚扰。
+
+### 1.3 Agent 引擎：DeepSeek Harness（唯一）
+
+群伴现在只有一套 Agent 引擎：**DeepSeek Harness**。OpenCode 已从引擎选择、助手导航和设置中移除，相关 Python/API 代码只作为历史兼容保留，不再执行。
+
+- **原生插件**：`dsh/qunban-native` 是 Cordis 插件，注册 `wechat_*` / `qunban_*` 原生工具；不再启动 `app/mcp_server.py` 作为 DSH 的 MCP 子进程。
+- **三种 profile**：`qunban`（Operator/管理员私聊）、`qunban-group`（群任务，只读、无原生 shell）、`qunban-chat`（群聊回复，无工具）。
+- **消息源**：wechatauto-replica 读取微信数据库 → `RuntimeManager` 入库 → `AgentEngine._handle()` → DSH。回复由 `RuntimeManager.send_agent_message()` 交回 wechatauto-replica。
+- **会话**：`main` / `group-<id>` / `chat-<id>` 稳定复用，提升 DSH prompt cache 命中率。
+- **设置**：`dsh_enabled=true`、`operator_engine=dsh`、`group_chat_engine=dsh`；`opencode_enabled` 只用于读旧库。
+- 版本更新以 git 为准：读取仓库 `dsh-v*` tag，按 `stable`/`alpha` 渠道安装同版本官方 npm 包到 `data/dsh/runtimes/<version>`；失败保留旧版本。
+- 限制：当前 profile 只支持 DeepSeek Messages 端点（`api.deepseek.com`）；需要 Node.js 24.9+；每个任务一个进程，群聊回复约 3–5 秒。详见 [docs/DSH.md](docs/DSH.md)。
+
+### 1.4 DSH 插件工作室
+
+「插件」选项卡专门管理 DeepSeek Harness 插件：
+
+- **内置目录**：从 `dsh --dump-config` 读取当前 profile 的真实组合结果（当前约 98 个内置插件、86 个启用），按核心/工具/技能/服务/运行时/集成/界面分类，支持搜索和「只看启用」。
+- **导入插件**：支持 npm 包、`github:user/repo`、git URL 和本地绝对路径；本地包直接复制到 `profiles/qunban/node_modules`，npm/git 通过 `corepack pnpm add` 安装。
+- **创造模式**：填写插件名和需求，DSH Operator 会在 `data/dsh/studio/<slug>` 写一个合法 Cordis 插件，自动 `node --check`、安装到 profile、写入 patch；同名学生重新提交即更新。DSH 在用户明确要求时也可以自己写插件并调用 `qunban_plugin_install` 安装。
+- **安全**：生成/导入的插件只挂到 `qunban` Operator profile，不进群聊 profile；只有用户点击才会安装任意代码。详见 [docs/PLUGINS.md](docs/PLUGINS.md)。
 
 ---
 
@@ -160,8 +183,8 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-replica.txt
 # 推荐的高精度离线 OCR：
 python -m pip install -r requirements-ocr.txt
-# 官方 OpenCode（从 GitHub Release 下载，首次安装一次）：
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-opencode.ps1
+# DeepSeek Harness（首次安装一次，约 700 MB）：
+python .\scripts\setup_dsh.py --channel stable
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -283,7 +306,7 @@ powershell -ExecutionPolicy Bypass -File .\stop-background.ps1
 - 群聊、联系人、群成员和聊天记录来自 `xwechat_files/.../db_storage`；数据库需要解密，首次登录会自动定位目录，也可以在「设置 → 微信 4.x 数据库目录」手动指定。
 - 只读取当前登录账号的数据；切换账号后需要重新登录。
 - 名称包含 `@chatroom` 或原始 ID 的过期临时群会被过滤，不展示、不记录、不自动回复。
-- 全局默认读取间隔为 1 秒，每个群独立计时；只有开启读取的群才会入库。
+- 全局默认读取间隔为 `0.5` 秒，每个群独立计时；只有开启读取的群才会入库。监听线程发现的新消息会立刻投递，不再额外等待一个读取周期。
 - 置顶只影响读取调度，不会在微信里搜索或打开群聊。
 - 图片通过 `MediaDownloader` 解密后内联显示；表情包不下载，只显示「表情包」。
 - 发送文字/图片/文件/表情包统一走 `wechatauto-replica`；发送失败时会先核对数据库，避免重复发送。
@@ -401,11 +424,13 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
   - `所有消息`：每条文本消息都参与（配合概率/冷却使用）
 - **触发概率**：0–100%，例如 30% 表示只有部分触发消息会真正调用模型。
 - **回复节奏（随机限频）**：
-  - 基础延迟默认 `2.5s` + 随机追加 `0–4s`
-  - 连续触发先等待 `1–2.5s`，只让该群最新一条触发消息进入回复
-  - 跨群最小发送间隔默认 `8s` + 随机 `0–4s`
+  - 基础延迟默认 `0.8s` + 随机追加 `0–1.5s`；同人连续消息的合并窗口（`0.15–0.4s`）会从这段延迟里扣除，不重复叠加
+  - 50 字以内、无任务词的短闲聊会跳过意图规划模型（`fast_chat_planner`），少一次模型往返
+  - 语义记忆（mem0）未就绪或繁忙时直接用 SQLite 记忆，不阻塞回复
+  - 跨群最小发送间隔默认 `3s` + 随机 `0–1.5s`
   - 每次回复后群冷却 `cooldown_seconds` + 随机 `0–20s`
   - 接近每小时回复上限时会随机降频，不保证每条触发都回复
+  - 每轮回复的「前置 / 生成 / 发送 / 端到端」耗时写入「Agent 动态」，详见 [docs/RESPONSE_LATENCY.md](docs/RESPONSE_LATENCY.md)
 - **冷却/频率**：避免刷屏与模型费用失控。
 - **静默时段**：支持跨午夜，例如 `23:30 → 08:00`。
 - **人设**：留空使用全局默认；支持每群覆盖模型。
@@ -439,6 +464,15 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 - **高级：覆盖 Operator / 群聊系统提示词**：留空使用内置提示词；填写后作为核心提示词，系统仍会追加人设、记忆、可用工具、表情包和 JSON 协议，避免破坏 Agent 调用。
 
 群聊回复现在也会注入长期记忆（之前只有主动发起话题时带记忆）；Operator 的记忆除了按当前消息检索，还会额外合并最重要的长期记忆。
+
+#### 提示词缓存与用量统计
+
+所有模型调用按「静态规则 → 场景上下文 → 每轮动态内容」三层组装：当前时间、长期记忆、意图/情绪、群成员和本轮消息只出现在系统提示词末尾，回复规则、JSON 协议、工具目录和输出协议留在稳定前缀里，DeepSeek / OpenAI 兼容服务的前缀缓存才能真正命中。
+
+- `GET /api/llm/usage?hours=24` 按调用点返回 token 用量与缓存命中率；「设置 → 数据概览」也会显示 24 小时命中率。
+- 用量写入本地 `llm_usage` 表（保留 30 天），只记录 token 数、调用点、模型和延迟，不记录提示词正文。
+- 自测：`.\.venv312\Scripts\python.exe scripts\check_prompt_cache.py`。
+- 分层规则、各模块 `call_site` 与新增提示词检查清单见 [docs/PROMPT_CACHE.md](docs/PROMPT_CACHE.md)。
 
 #### Mem0 语义记忆与遗忘
 
@@ -480,6 +514,7 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 
 ```text
 .
+├── dsh/qunban-native/          # DSH 原生 Cordis 插件（微信/记忆/B站/技能工具）
 ├── app/
 │   ├── main.py                 # FastAPI 入口、生命周期、静态资源
 │   ├── config.py               # 进程级配置（.env）
@@ -501,17 +536,26 @@ API Key 保存在本地 SQLite 数据库（明文），请注意本机安全。
 │   │   ├── bili_autopilot.py   # 自动刷 B站循环、分析、转发
 │   │   ├── bili_knowledge.py   # ChromaDB B站视频知识库
 │   │   ├── capabilities.py     # 能力发现与双作用域开关
+│   │   ├── dsh_agent.py        # DeepSeek Harness headless 适配器
+│   │   ├── dsh_runtime.py      # DSH git tag / npm 运行时管理
+│   │   ├── dsh_skills.py       # 群伴 skills → DSH SKILL.md
+│   │   ├── dsh_plugins.py      # DSH 插件目录、导入、创造模式
+│   │   ├── agent_engines.py    # DSH（唯一）/ 内置循环（仅 DSH 禁用时）
 │   │   ├── desktop.py          # 截屏、OCR、鼠标键盘
 │   │   ├── memory.py           # 群聊长期记忆、总结、遗忘
 │   │   ├── mem0_memory.py      # Mem0 语义记忆适配器（可选）
 │   │   ├── llm.py              # OpenAI Compatible 客户端
+│   │   ├── llm_usage.py        # token / 缓存命中率统计
+│   │   ├── prompting.py        # 分层提示词（静态/上下文/动态）
 │   │   ├── stickers.py         # 表情库、示例生成、上传
 │   │   ├── settings.py         # 运行时设置
 │   │   └── serializers.py      # API 序列化
 │   └── api/                    # REST + WebSocket 路由
-├── frontend/                   # 无构建控制台
-├── docs/                       # 架构、适配器、API 文档
+├── frontend/                   # 无构建控制台（styles.css + ui.css）
+├── docs/                       # 架构、适配器、API、UI 文档
 ├── scripts/smoke_test.py       # 端到端自测
+├── scripts/check_prompt_cache.py   # 提示词分层/缓存自测
+├── scripts/check_reply_latency.py  # 读取与回复速度自测
 ├── data/                       # 运行时生成：SQLite、表情文件、日志
 ├── requirements.txt
 ├── requirements-replica.txt
@@ -588,6 +632,12 @@ GET    /api/bili/videos
 GET    /api/bili/knowledge/search?q=
 GET    /api/bili/knowledge/stats
 GET    /api/stats
+GET    /api/llm/usage?hours=24    # LLM token 用量与提示词缓存命中率
+GET    /api/dsh/status            # DeepSeek Harness 运行时/引擎状态
+POST   /api/dsh/check             # git tag 检查更新
+POST   /api/dsh/update            # 后台安装/更新
+POST   /api/dsh/reset             # 重置 DSH 会话映射
+POST   /api/dsh/stop              # 停止正在跑的 DSH 任务
 WS     /ws
 ```
 
@@ -660,6 +710,15 @@ class MyAdapter(BaseAdapter):
 ```text
 ALL SMOKE TESTS PASSED
 ```
+
+离线自测（不需要启动服务）：
+
+```powershell
+.\.venv312\Scripts\python.exe scripts\check_prompt_cache.py
+.\.venv312\Scripts\python.exe scripts\check_reply_latency.py
+```
+
+读取/回复链路的耗时拆分与可调参数见 [docs/RESPONSE_LATENCY.md](docs/RESPONSE_LATENCY.md)。
 
 ---
 

@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from app.db import SessionLocal
+from app.services.llm_usage import record_usage
 from app.services.settings import get_settings
 
 logger = logging.getLogger("opencode")
@@ -520,6 +521,7 @@ class OpenCodeRuntime:
         question_handler: (
             Callable[[dict[str, Any]], Awaitable[list[list[str]]]] | None
         ) = None,
+        call_site: str = "opencode.operator",
     ) -> dict[str, Any]:
         if settings is None:
             async with SessionLocal() as db:
@@ -735,6 +737,16 @@ class OpenCodeRuntime:
         reply, usage, final_trace = await self._read_final(sid, started_ms, texts)
         if final_trace:
             trace = final_trace
+        if usage:
+            record_usage(
+                call_site=call_site,
+                model=model,
+                prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                completion_tokens=int(usage.get("completion_tokens") or 0),
+                cache_hit_tokens=int(usage.get("cache_hit_tokens") or 0),
+                cache_miss_tokens=int(usage.get("cache_miss_tokens") or 0),
+                ok=True,
+            )
         if not reply and error:
             raise OpenCodeError(error)
         if not reply:
@@ -965,7 +977,11 @@ class OpenCodeRuntime:
         started_ms: int,
         fallback_texts: dict[str, str],
     ) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
-        usage: dict[str, Any] = {}
+        usage: dict[str, Any] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_hit_tokens": 0,
+        }
         trace: list[dict[str, Any]] = []
         parts_text: list[str] = []
         try:
@@ -999,12 +1015,32 @@ class OpenCodeRuntime:
                         )
                 tokens = info.get("tokens") or {}
                 if tokens:
-                    usage = {
-                        "prompt_tokens": int(tokens.get("input") or 0),
-                        "completion_tokens": int(tokens.get("output") or 0),
-                    }
+                    prompt_tokens = int(tokens.get("input") or 0)
+                    cache = tokens.get("cache")
+                    cache = cache if isinstance(cache, dict) else {}
+                    hit = int(
+                        cache.get("read") or tokens.get("cache_read") or 0
+                    )
+                    if hit > prompt_tokens:
+                        # Some providers report cached tokens separately from
+                        # ``input``; add them back so the ratio is meaningful.
+                        prompt_tokens += hit
+                    usage["prompt_tokens"] += prompt_tokens
+                    usage["completion_tokens"] += int(tokens.get("output") or 0)
+                    usage["cache_hit_tokens"] += (
+                        min(hit, prompt_tokens) if prompt_tokens else hit
+                    )
         except Exception as exc:
             logger.debug("读取 OpenCode 最终消息失败：%s", exc)
+        prompt_total = int(usage.get("prompt_tokens") or 0)
+        hit_total = int(usage.get("cache_hit_tokens") or 0)
+        if prompt_total or int(usage.get("completion_tokens") or 0):
+            usage["cache_miss_tokens"] = max(prompt_total - hit_total, 0)
+            usage["cache_hit_rate"] = (
+                round(hit_total / prompt_total, 4) if prompt_total else 0.0
+            )
+        else:
+            usage = {}
         if parts_text:
             reply = parts_text[-1] if len(parts_text) > 1 else parts_text[0]
             if len(parts_text) > 1 and len(parts_text[-1]) < 20:

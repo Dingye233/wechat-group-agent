@@ -671,7 +671,7 @@ class ReplicaAdapter(BaseAdapter):
         self._readable_rooms: set[str] = set()
         self._read_schedule: dict[str, float] = {}
         self._next_check: dict[str, float] = {}
-        self._poll_interval = 1.0
+        self._poll_interval = 0.5
         self._pinned_room = ""
         self._history_done: set[str] = set()
         self._pending: dict[str, list[dict[str, Any]]] = {}
@@ -901,7 +901,7 @@ class ReplicaAdapter(BaseAdapter):
             watermark = str(Path("data") / f"replica_watermark_{self._safe_name()}.json")
             listener = FastListener(
                 db,
-                interval=1.0,
+                interval=0.5,
                 watermark_file=watermark,
             )
             original_poll = listener._poll_once
@@ -1438,11 +1438,16 @@ class ReplicaAdapter(BaseAdapter):
                 self._listener_dm_users.discard(raw)
 
     def set_read_schedule(self, schedule: dict[str, float]) -> None:
-        self._read_schedule = {
-            str(room_id): max(1.0, float(interval or self._poll_interval))
-            for room_id, interval in (schedule or {}).items()
-            if room_id
-        }
+        self._read_schedule = {}
+        for room_id, interval in (schedule or {}).items():
+            if not room_id:
+                continue
+            value = float(interval or 0)
+            # 0 means "use the global poll interval"; positive values keep the
+            # per-group throttle requested by the user.
+            self._read_schedule[str(room_id)] = (
+                max(0.5, value) if value > 0 else 0.0
+            )
         removed = set(self._readable_rooms) - set(self._read_schedule)
         self._readable_rooms = set(self._read_schedule)
         for room_id in removed:
@@ -1471,11 +1476,11 @@ class ReplicaAdapter(BaseAdapter):
 
     def _schedule_interval(self, room_id: str) -> float:
         if room_id == self._pinned_room:
-            return 0.5
-        return max(
-            1.0,
-            float(self._read_schedule.get(room_id) or self._poll_interval),
-        )
+            return 0.25
+        configured = float(self._read_schedule.get(room_id) or 0)
+        if configured > 0:
+            return configured
+        return max(0.5, float(self._poll_interval))
 
     def _sync_history(self, room_id: str) -> None:
         if self._db is None:
@@ -1510,7 +1515,12 @@ class ReplicaAdapter(BaseAdapter):
                     if not items:
                         self._pending.pop(room_id, None)
                         continue
-                    if now < self._next_check.get(room_id, 0):
+                    # Deliver immediately for the default schedule.  Only a
+                    # group that explicitly configured a larger read interval
+                    # keeps its throttle; the old unconditional 1s gate added
+                    # up to one extra second to every reply.
+                    explicit = float(self._read_schedule.get(room_id) or 0)
+                    if explicit > 0.5 and now < self._next_check.get(room_id, 0):
                         continue
                     due.append((room_id, items))
                     self._pending[room_id] = []
@@ -1523,7 +1533,13 @@ class ReplicaAdapter(BaseAdapter):
             self._stop_scheduler.wait(0.1)
 
     def set_poll_interval(self, seconds: float) -> None:
-        self._poll_interval = max(1.0, float(seconds or 1.0))
+        self._poll_interval = max(0.5, float(seconds or 1.0))
+        listener = self._listener
+        if listener is not None:
+            try:
+                listener.interval = self._poll_interval
+            except Exception:
+                pass
 
     def set_media_download_enabled(self, enabled: bool) -> None:
         self._media_download_enabled = bool(enabled)
@@ -1770,12 +1786,16 @@ class ReplicaAdapter(BaseAdapter):
         if self._db is None:
             return False
         deadline = time.time() + max(0.5, timeout)
+        poll_started = time.time()
         while time.time() < deadline:
             if self._scan_own_message(
                 raw, baseline, content=content, media=media
             ):
                 return True
-            time.sleep(0.4)
+            # WeChat usually writes the row within a few hundred ms; poll fast
+            # at first instead of sleeping a fixed 400 ms.
+            elapsed = time.time() - poll_started
+            time.sleep(0.2 if elapsed < 0.8 else 0.4)
         # The listener may be looking at a snapshot taken just before a
         # WeChat checkpoint.  Rebuild once and check again before reporting a
         # failure; a false failure here causes duplicate resends.
@@ -1789,7 +1809,7 @@ class ReplicaAdapter(BaseAdapter):
                 raw, baseline, content=content, media=media
             ):
                 return True
-            time.sleep(0.5)
+            time.sleep(0.4)
         return False
 
     def verify_text_sent(self, room_id: str, text: str) -> bool:
@@ -1851,7 +1871,7 @@ class ReplicaAdapter(BaseAdapter):
                 self._check_response(response, action)
                 if content and not media:
                     if not self._confirm_own_message(
-                        raw, baseline, content=content, timeout=6.0
+                        raw, baseline, content=content, timeout=3.0
                     ):
                         raise RuntimeError(
                             "发送后未在微信数据库确认到消息，已加入待重发队列"

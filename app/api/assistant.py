@@ -247,6 +247,12 @@ async def assistant_clear(
         await get_opencode_runtime().reset_session(session_id)
     except Exception:
         pass
+    try:
+        from app.services.dsh_agent import get_dsh_agent_runtime
+
+        await get_dsh_agent_runtime().reset_session(session_id)
+    except Exception:
+        pass
     return {"deleted": deleted}
 
 

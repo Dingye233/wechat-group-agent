@@ -23,9 +23,19 @@ _IMPORT_CHECKED = False
 _IMPORT_ERROR = ""
 _CACHE: dict[str, Any] = {}
 _CACHE_LOCK = asyncio.Lock()
-_RUN_LOCK = asyncio.Lock()
+# Searches and fact extraction are separated: a long mem0.add() call must not
+# make every group reply wait for the extraction LLM.  A search that cannot
+# start immediately simply falls back to SQLite memories.
+_SEARCH_LOCK = asyncio.Lock()
+_WRITE_LOCK = asyncio.Lock()
 _LAST_FORGET = 0.0
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+# Mem0 initialisation (FastEmbed + Chroma) takes seconds.  Warm it up in the
+# background and answer from SQLite memories until it is ready instead of
+# blocking the first group reply on it.
+_READY = False
+_INIT_TASK: asyncio.Task | None = None
+_LAST_INIT_FAIL = 0.0
 
 MEM0_DIR = Path("data") / "memory" / "mem0"
 DEFAULT_EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
@@ -61,6 +71,7 @@ def status(settings: dict[str, Any]) -> dict[str, Any]:
     return {
         "available": available(),
         "enabled": enabled(settings),
+        "ready": _READY,
         "engine": engine,
         "collection": str(settings.get("mem0_collection") or DEFAULT_COLLECTION),
         "embedder": DEFAULT_EMBED_MODEL,
@@ -121,7 +132,10 @@ async def _call(method: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 async def _get_memory(settings: dict[str, Any]) -> Any:
-    if not enabled(settings):
+    global _READY, _LAST_INIT_FAIL
+    # ``enabled`` may import mem0/chromadb/fastembed on the first call; keep
+    # that off the event loop.
+    if not await asyncio.to_thread(enabled, settings):
         return None
     config = _config(settings)
     if config is None:
@@ -132,16 +146,19 @@ async def _get_memory(settings: dict[str, Any]) -> Any:
     async with _CACHE_LOCK:
         cached = _CACHE.get(key)
         if cached is not None:
+            _READY = True
             return cached
         try:
             instance = await asyncio.to_thread(
                 _MEMORY_CLASS.from_config, config
             )
         except Exception as exc:
+            _LAST_INIT_FAIL = time.time()
             logger.warning("Mem0 初始化失败，回退 SQLite 记忆：%s", exc)
             return None
         _CACHE.clear()
         _CACHE[key] = instance
+        _READY = True
         return instance
 
 
@@ -200,6 +217,11 @@ async def search(
     timeout: float = 8.0,
 ) -> list[dict[str, Any]]:
     """Semantic search over Mem0 memories, filtered by group/contact metadata."""
+    if not _READY:
+        # Never block a chat reply on FastEmbed/Chroma startup or on the first
+        # heavy mem0 import; SQLite memories are used until warmup finishes.
+        warmup(settings)
+        return []
     memory = await _get_memory(settings)
     if memory is None:
         return []
@@ -211,29 +233,35 @@ async def search(
     if contact_id not in (None, ""):
         filters["contact_id"] = str(contact_id)
     try:
-        async with _RUN_LOCK:
-            if query:
-                raw = await asyncio.wait_for(
-                    _call(
-                        memory.search,
-                        query,
-                        top_k=max(1, min(100, int(limit) * 4)),
-                        filters=filters,
-                    ),
-                    timeout=max(1.0, float(timeout)),
-                )
-            else:
-                raw = await asyncio.wait_for(
-                    _call(
-                        memory.get_all,
-                        filters=filters,
-                        top_k=1000,
-                    ),
-                    timeout=max(1.0, float(timeout)),
-                )
+        await asyncio.wait_for(_SEARCH_LOCK.acquire(), timeout=0.25)
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.debug("Mem0 检索通道繁忙，本轮使用 SQLite 记忆")
+        return []
+    try:
+        if query:
+            raw = await asyncio.wait_for(
+                _call(
+                    memory.search,
+                    query,
+                    top_k=max(1, min(100, int(limit) * 4)),
+                    filters=filters,
+                ),
+                timeout=max(0.2, float(timeout)),
+            )
+        else:
+            raw = await asyncio.wait_for(
+                _call(
+                    memory.get_all,
+                    filters=filters,
+                    top_k=1000,
+                ),
+                timeout=max(0.2, float(timeout)),
+            )
     except Exception as exc:
         logger.warning("Mem0 检索失败，回退 SQLite 记忆：%s", exc)
         return []
+    finally:
+        _SEARCH_LOCK.release()
     items = []
     for item in _as_items(raw):
         memory_item = _as_memory(item)
@@ -274,7 +302,7 @@ async def add_turn(
         if value is not None and str(value) != ""
     }
     try:
-        async with _RUN_LOCK:
+        async with _WRITE_LOCK:
             await asyncio.wait_for(
                 _call(
                     memory.add,
@@ -298,7 +326,9 @@ def schedule_add_turn(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Fire-and-forget ingestion so a memory extraction call never delays chat."""
-    if not enabled(settings):
+    if str(settings.get("memory_engine") or "auto").lower() == "sqlite":
+        return
+    if not settings.get("llm_api_key"):
         return
     if not any(str(item.get("content") or "").strip() for item in messages):
         return
@@ -348,7 +378,7 @@ async def forget_old(
     )
     cutoff = time.time() - keep_days * 86400
     try:
-        async with _RUN_LOCK:
+        async with _WRITE_LOCK:
             raw = await asyncio.wait_for(
                 _call(
                     memory.get_all,
@@ -376,7 +406,7 @@ async def forget_old(
             if not memory_id:
                 continue
             try:
-                async with _RUN_LOCK:
+                async with _WRITE_LOCK:
                     await _call(memory.delete, memory_id)
                 deleted += 1
             except Exception as exc:
@@ -395,7 +425,10 @@ async def maybe_forget(
     settings: dict[str, Any], *, account_key: str
 ) -> dict[str, Any]:
     global _LAST_FORGET
-    if not enabled(settings) or not settings.get("memory_forgetting_enabled", True):
+    if not _READY:
+        warmup(settings)
+        return {"deleted": 0, "skipped": "warming"}
+    if not settings.get("memory_forgetting_enabled", True):
         return {"deleted": 0, "skipped": "disabled"}
     now = time.time()
     if now - _LAST_FORGET < 86400:
@@ -404,12 +437,44 @@ async def maybe_forget(
     return await forget_old(settings, account_key=account_key)
 
 
+async def _warmup_task(settings: dict[str, Any]) -> None:
+    global _INIT_TASK, _LAST_INIT_FAIL
+    try:
+        # Importing mem0/chromadb/fastembed takes ~1s; do it off the loop.
+        if not await asyncio.to_thread(available):
+            _LAST_INIT_FAIL = time.time()
+            return
+        memory = await _get_memory(settings)
+        if memory is None:
+            return
+        try:
+            await asyncio.wait_for(
+                _call(
+                    memory.search,
+                    "预热",
+                    top_k=1,
+                    filters={"user_id": _user_id("")},
+                ),
+                timeout=30.0,
+            )
+        except Exception as exc:
+            logger.debug("Mem0 预热检索跳过：%s", exc)
+    finally:
+        _INIT_TASK = None
+
+
 def warmup(settings: dict[str, Any]) -> None:
     """Best-effort background initialization for the first memory search."""
-    if not enabled(settings):
+    global _INIT_TASK
+    if _READY or _INIT_TASK is not None:
+        return
+    if str(settings.get("memory_engine") or "auto").lower() == "sqlite":
         return
     if not settings.get("llm_api_key"):
         return
-    task = asyncio.create_task(_get_memory(settings), name="mem0-warmup")
+    if time.time() - _LAST_INIT_FAIL < 60.0:
+        return
+    task = asyncio.create_task(_warmup_task(settings), name="mem0-warmup")
+    _INIT_TASK = task
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)

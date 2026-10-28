@@ -7,6 +7,7 @@
 
 const ICONS = {
   logo: `<path d="M5 7a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v5a4 4 0 0 1-4 4h-3.6L7 19.7V16a4 4 0 0 1-2-3.5Z" fill="currentColor" stroke="none"/><circle cx="9.4" cy="9.6" r="1.1" fill="#07130e"/><circle cx="14.6" cy="9.6" r="1.1" fill="#07130e"/><path d="M9.3 12.8c.7.65 1.65.98 2.7.98s2-.33 2.7-.98" fill="none" stroke="#07130e" stroke-width="1.4" stroke-linecap="round"/>`,
+  plug: `<path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0V8Z"/><path d="M12 17v5"/>`,
   chat: `<path d="M21 11.5a8.4 8.4 0 0 1-12.3 7.4L4 20l1.2-4A8.4 8.4 0 1 1 21 11.5Z"/><path d="M8 10h8M8 13.5h5"/>`,
   smile: `<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.35 2.1 2 3.5 2s2.6-.65 3.5-2"/><path d="M9 9.5h.01M15 9.5h.01"/>`,
   settings: `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.9 4.6 1.7 1.7 0 0 0 9.93 3.04V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 8.9c.15.64.7 1.1 1.56 1.1H21a2 2 0 1 1 0 4h-.09c-.8 0-1.36.4-1.51 1Z"/>`,
@@ -60,6 +61,12 @@ const state = {
   stickerFilter: 'all',
   groupQuery: '',
   stickerQuery: '',
+  plugins: null,
+  pluginQuery: '',
+  pluginCategory: '全部',
+  pluginActiveOnly: false,
+  pluginJobId: '',
+  pluginJobTimer: null,
   toolMoments: [],
   toolLabels: [],
   toolContacts: [],
@@ -281,6 +288,7 @@ function setIcon(selector, name, size = 18) {
 document.addEventListener('DOMContentLoaded', async () => {
   initIcons();
   bindEvents();
+  bindPluginEvents();
   buildImageViewer();
   const savedAdapter = localStorage.getItem('wechat-agent-adapter');
   if (['mock', 'replica', 'uia', 'wcf'].includes(savedAdapter)) state.selectedAdapter = savedAdapter;
@@ -433,10 +441,14 @@ async function enterApp() {
       Boolean(state.status?.detached),
       state.status?.detach_reason || '',
     );
-    showTab('chats');
+    const route = routeFromHash();
     if (!state.selectedGroupId && state.groups.length) {
       await selectGroup(state.groups[0].id);
     }
+    if (route.tab === 'assistant' && route.panel) {
+      switchAssistantPanel(route.panel, { syncHash: false });
+    }
+    showTab(route.tab, { syncHash: false });
     renderAccount();
     renderTopbarStatus();
     renderSidebarStatus();
@@ -764,6 +776,7 @@ function resetForAccountSwitch() {
   $('#detached-dialog')?.close();
   renderGroupList();
   renderChatHeader();
+  syncWorkspaceLayout(Boolean(state.selectedGroupId));
   if (state.appReady) loadGroups().catch(() => {});
 }
 
@@ -1184,9 +1197,24 @@ function renderGroupList() {
   const groups = state.groups.filter((group) => !query || String(group.name || '').toLowerCase().includes(query));
   container.replaceChildren();
   if (!groups.length) {
-    container.appendChild(
-      el('div', 'group-list-empty', state.groups.length ? '没有匹配的群聊' : '暂无群聊\n登录后会自动同步群列表'),
+    const empty = el('div', 'group-list-empty');
+    empty.append(
+      el('strong', null, state.groups.length ? '没有匹配的群聊' : '正在同步群聊'),
+      el(
+        'p',
+        null,
+        state.groups.length
+          ? '换个关键词试试。'
+          : '群列表会在登录后自动出现；也可以手动刷新。',
+      ),
     );
+    if (!state.groups.length) {
+      const retry = el('button', 'btn btn-ghost btn-sm', '刷新群列表');
+      retry.type = 'button';
+      retry.addEventListener('click', () => loadGroups());
+      empty.append(retry);
+    }
+    container.append(empty);
     return;
   }
   for (const group of groups) {
@@ -1238,6 +1266,7 @@ async function selectGroup(groupId) {
   const group = currentGroup();
   renderChatHeader();
   renderInspector(group);
+  switchInspectorTab('config');
   $('#chat-empty').hidden = true;
   $('#chat-active').hidden = false;
   const list = $('#message-list');
@@ -1787,7 +1816,23 @@ async function sendStickerNow(stickerId) {
 }
 
 /* ------------------------------------------------------------ inspector */
+function syncWorkspaceLayout(hasChat) {
+  document.body.classList.toggle('no-chat', !hasChat);
+  const toggle = $('#inspector-toggle');
+  if (toggle) toggle.disabled = !hasChat;
+}
+
+function switchInspectorTab(name = 'config') {
+  $$('.inspector-tabs button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.inspectorTab === name);
+  });
+  $$('[data-inspector-pane]').forEach((pane) => {
+    pane.hidden = pane.dataset.inspectorPane !== name;
+  });
+}
+
 function renderInspector(group) {
+  syncWorkspaceLayout(Boolean(group));
   const disabled = !group;
   const fields = ['#cfg-read', '#cfg-read-interval', '#cfg-enabled', '#cfg-trigger', '#cfg-keywords', '#cfg-probability', '#cfg-cooldown', '#cfg-max', '#cfg-quiet-start', '#cfg-quiet-end', '#cfg-stickers', '#cfg-multi-message', '#cfg-max-messages', '#cfg-proactive', '#cfg-proactive-interval', '#cfg-mention', '#cfg-persona', '#cfg-model', '#save-config-btn'];
   for (const selector of fields) {
@@ -2011,16 +2056,16 @@ function renderChatTasks() {
     const head = el('div', 'chat-task-head');
     head.appendChild(el('strong', null, `#${task.id} ${task.user_name || '群友'}`));
     const badges = el('div', 'chat-task-badges');
-    if (task.engine === 'opencode') {
-      const openCodeBadge = el('button', 'chat-task-engine', 'OpenCode');
-      openCodeBadge.type = 'button';
-      openCodeBadge.title = '查看 OpenCode 任务';
-      openCodeBadge.addEventListener('click', () => {
+    if (task.engine === 'dsh') {
+      const dshBadge = el('button', 'chat-task-engine', 'DeepSeek Harness');
+      dshBadge.type = 'button';
+      dshBadge.title = '查看 DSH 任务';
+      dshBadge.addEventListener('click', () => {
         document.querySelector('button[data-tab="assistant"]')?.click();
-        switchAssistantPanel('opencode');
-        loadOpenCode();
+        switchAssistantPanel('dsh');
+        loadDSH();
       });
-      badges.appendChild(openCodeBadge);
+      badges.appendChild(dshBadge);
     }
     badges.appendChild(
       el(
@@ -2364,7 +2409,7 @@ function fillSettings(settings) {
     ? `已保存 ${settings.llm_api_key_hint}，留空不修改`
     : 'sk-...';
   $('#set-key-hint').textContent = settings.llm_api_key_set
-    ? `已保存 ${settings.llm_api_key_hint}`
+    ? '填写新 Key 会覆盖已保存的 Key；留空保持不变。'
     : '尚未配置 API Key';
   const clearKeyButton = $('#clear-key-btn');
   if (clearKeyButton) clearKeyButton.disabled = !settings.llm_api_key_set;
@@ -2453,11 +2498,11 @@ async function saveSettings() {
       group_system_prompt: $('#set-group-system').value,
       default_trigger_mode: $('#set-default-trigger').value,
       context_messages: parseIntSafe($('#set-context').value, 18),
-      reply_delay_seconds: parseFloatSafe($('#set-delay').value, 2.5),
-      reply_delay_random_seconds: parseFloatSafe($('#set-delay-random').value, 4),
-      reply_global_interval_seconds: parseFloatSafe($('#set-global-interval').value, 8),
+      reply_delay_seconds: parseFloatSafe($('#set-delay').value, 0.4),
+      reply_delay_random_seconds: parseFloatSafe($('#set-delay-random').value, 0.9),
+      reply_global_interval_seconds: parseFloatSafe($('#set-global-interval').value, 3),
       reply_cooldown_jitter_seconds: parseFloatSafe($('#set-cooldown-jitter').value, 20),
-      read_poll_interval_seconds: parseFloatSafe($('#set-poll-interval').value, 5),
+      read_poll_interval_seconds: parseFloatSafe($('#set-poll-interval').value, 0.5),
       read_media_download_enabled: $('#set-media-download').checked,
       memory_enabled: $('#set-memory-enabled').checked,
       memory_engine: $('#set-memory-engine').value,
@@ -2588,6 +2633,17 @@ async function loadStats() {
     $('#stat-db').textContent = formatBytes(data.db_size_bytes);
   } catch (error) {
     console.warn('stats', error);
+  }
+  try {
+    const cache = await api('/llm/usage?hours=24');
+    const prompt = Number(cache.prompt_tokens || 0);
+    const hit = Number(cache.cache_hit_tokens || 0);
+    const rate = Math.round((cache.cache_hit_rate || 0) * 100);
+    $('#stat-llm-cache').textContent = prompt
+      ? `${rate}%（${hit.toLocaleString('zh-CN')}/${prompt.toLocaleString('zh-CN')}）`
+      : '暂无调用';
+  } catch (error) {
+    console.warn('llm usage', error);
   }
 }
 
@@ -3662,7 +3718,10 @@ async function stopAssistant() {
   }
 }
 
-function switchAssistantPanel(name) {
+function switchAssistantPanel(name, options = {}) {
+  if (!document.querySelector(`[data-assistant-panel-body="${name}"]`)) {
+    name = 'workspace';
+  }
   state.assistantPanel = name;
   $$('.assistant-side-tabs button').forEach((button) => {
     button.classList.toggle('active', button.dataset.assistantPanel === name);
@@ -3670,6 +3729,14 @@ function switchAssistantPanel(name) {
   $$('[data-assistant-panel-body]').forEach((panel) => {
     panel.hidden = panel.dataset.assistantPanelBody !== name;
   });
+  if (
+    options.syncHash !== false &&
+    state.appReady &&
+    state.currentTab === 'assistant'
+  ) {
+    const next = routeFor('assistant');
+    if (location.hash !== next) history.replaceState(null, '', next);
+  }
   if (state.opencodeTaskTimer) {
     clearInterval(state.opencodeTaskTimer);
     state.opencodeTaskTimer = null;
@@ -3681,6 +3748,371 @@ function switchAssistantPanel(name) {
       }
     }, 4000);
   }
+}
+
+let dshPollTimer = null;
+
+async function loadDSH() {
+  const statusLine = $('#dsh-status-line');
+  const jobLine = $('#dsh-job-line');
+  const logRoot = $('#dsh-log');
+  try {
+    const data = await api('/dsh/status');
+    const st = data.dsh || {};
+    const runtime = st.runtime || {};
+    if (!state.settings) {
+      try {
+        const settingsData = await api('/settings');
+        state.settings = settingsData.settings || {};
+      } catch {
+        /* ignore */
+      }
+    }
+    const enabled = $('#dsh-enabled');
+    if (enabled) enabled.checked = state.settings?.dsh_enabled === true;
+    const channel = $('#dsh-channel');
+    if (channel) channel.value = state.settings?.dsh_channel || data.channel || 'stable';
+    const groupChat = $('#dsh-group-chat-engine');
+    if (groupChat) groupChat.value = state.settings?.group_chat_engine || 'dsh';
+    if (statusLine) {
+      const version = st.version || runtime.version || '';
+      const parts = [];
+      if (st.installed) parts.push(`已安装 v${version}`);
+      else parts.push('未安装');
+      parts.push(`当前引擎：${data.engine || '—'}`);
+      if (st.running) parts.push(`运行中 ${st.running}`);
+      if (st.update_available) parts.push(`可更新到 ${st.latest}`);
+      statusLine.textContent = parts.join(' · ');
+    }
+    const job = st.job || runtime.job;
+    if (jobLine) {
+      if (job) {
+        jobLine.textContent = `安装任务：${job.state || ''}${job.version ? ` · ${job.version}` : ''}${job.error ? ` · ${job.error}` : ''}`;
+      } else if (st.last_error) {
+        jobLine.textContent = `最近错误：${st.last_error}`;
+      } else {
+        jobLine.textContent = '';
+      }
+    }
+    if (logRoot) {
+      logRoot.replaceChildren();
+      const lines = (job && job.log) || [];
+      if (!lines.length) {
+        logRoot.appendChild(el('p', 'muted', '暂无安装日志。'));
+      } else {
+        for (const line of lines.slice(-40)) {
+          logRoot.appendChild(el('p', 'muted', String(line)));
+        }
+      }
+    }
+    if (dshPollTimer) {
+      clearTimeout(dshPollTimer);
+      dshPollTimer = null;
+    }
+    if (st.installing) {
+      dshPollTimer = setTimeout(loadDSH, 3000);
+    }
+  } catch (error) {
+    if (statusLine) statusLine.textContent = `读取失败：${error.message}`;
+  }
+}
+
+async function loadPlugins() {
+  if (!$('#plugin-catalog')) return;
+  const catalog = await api('/dsh/plugins');
+  state.plugins = catalog;
+  renderPluginStats();
+  renderPluginCategories();
+  renderPluginCatalog();
+  renderInstalledPlugins();
+}
+
+function renderPluginStats() {
+  const data = state.plugins || {};
+  const counts = data.counts || {};
+  const runtime = data.runtime || {};
+  const set = (id, value) => {
+    const node = $(id);
+    if (node) node.textContent = value;
+  };
+  set('#plugin-stat-version', runtime.version ? `v${runtime.version}` : '—');
+  set('#plugin-stat-builtin', String(counts.builtin ?? '—'));
+  set('#plugin-stat-active', String(counts.active ?? '—'));
+  set(
+    '#plugin-stat-custom',
+    `${counts.imported ?? 0} / ${counts.generated ?? 0}`,
+  );
+}
+
+function renderPluginCategories() {
+  const root = $('#plugin-categories');
+  if (!root) return;
+  const rows = (state.plugins?.builtin || []).map((row) => row.category || '其他');
+  const categories = ['全部', ...Array.from(new Set(rows))];
+  root.replaceChildren();
+  for (const category of categories) {
+    const button = el(
+      'button',
+      `tag-chip${state.pluginCategory === category ? ' active' : ''}`,
+      category === '全部' ? '全部' : category,
+    );
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      state.pluginCategory = category;
+      renderPluginCategories();
+      renderPluginCatalog();
+    });
+    root.appendChild(button);
+  }
+}
+
+function pluginMatches(row) {
+  if (state.pluginActiveOnly && !row.active) return false;
+  if (state.pluginCategory !== '全部' && (row.category || '其他') !== state.pluginCategory) {
+    return false;
+  }
+  const query = state.pluginQuery.trim().toLowerCase();
+  if (!query) return true;
+  return `${row.id || ''} ${row.name || ''} ${row.description || ''}`
+    .toLowerCase()
+    .includes(query);
+}
+
+function pluginCard(row, options = {}) {
+  const card = el('article', `plugin-row${row.disabled ? ' is-disabled' : ''}`);
+  const iconWrap = el('div', 'plugin-row-icon');
+  iconWrap.innerHTML = icon('plug', 18);
+  card.appendChild(iconWrap);
+  const body = el('div', 'plugin-row-body');
+  const title = el('div', 'plugin-row-title');
+  title.appendChild(el('strong', null, row.id || 'plugin'));
+  title.appendChild(
+    el(
+      'span',
+      `plugin-badge${row.active ? ' accent' : row.disabled ? ' muted' : ''}`,
+      row.active ? '启用中' : row.disabled ? '已停用' : '可选',
+    ),
+  );
+  body.appendChild(title);
+  body.appendChild(el('code', 'plugin-package', row.name || ''));
+  if (row.description) body.appendChild(el('p', 'plugin-desc', row.description));
+  card.appendChild(body);
+  const meta = el('div', 'plugin-meta');
+  meta.appendChild(el('span', 'plugin-cat', row.category || '其他'));
+  if (row.version) meta.appendChild(el('span', 'plugin-version', `v${row.version}`));
+  if (options.toggle) {
+    const button = el(
+      'button',
+      'text-btn plugin-toggle',
+      row.disabled ? '启用' : '停用',
+    );
+    button.type = 'button';
+    button.addEventListener('click', () => togglePlugin(row.id, Boolean(row.disabled)));
+    meta.appendChild(button);
+  } else {
+    meta.appendChild(el('span', 'plugin-readonly', '内置只读'));
+  }
+  card.appendChild(meta);
+  return card;
+}
+
+function renderPluginCatalog() {
+  const root = $('#plugin-catalog');
+  if (!root) return;
+  const rows = (state.plugins?.builtin || []).filter(pluginMatches);
+  root.replaceChildren();
+  if (!rows.length) {
+    const empty = $('#plugin-empty');
+    if (empty) empty.hidden = false;
+    return;
+  }
+  const empty = $('#plugin-empty');
+  if (empty) empty.hidden = true;
+  for (const row of rows) root.appendChild(pluginCard(row));
+}
+
+function renderInstalledPlugins() {
+  const root = $('#plugin-installed');
+  if (!root) return;
+  const installed = state.plugins?.installed || [];
+  const generated = state.plugins?.generated || [];
+  const generatedNames = new Set(generated.map((item) => item.name));
+  const customInstalled = installed.filter((row) => !generatedNames.has(row.name));
+  const count = $('#plugin-installed-count');
+  if (count) count.textContent = String(generated.length + customInstalled.length);
+  root.replaceChildren();
+  if (!installed.length && !generated.length) {
+    root.appendChild(el('p', 'muted', '还没有导入或生成的插件。'));
+    return;
+  }
+  const rows = [
+    ...generated.map((row) => ({ ...row, source: 'studio' })),
+    ...customInstalled,
+  ];
+  for (const row of rows) {
+    const item = el('div', 'plugin-mini');
+    const info = el('div', 'plugin-mini-info');
+    info.appendChild(el('strong', null, row.name || row.slug || 'plugin'));
+    info.appendChild(
+      el(
+        'span',
+        'plugin-mini-desc',
+        `${row.source === 'studio' ? 'DSH 生成' : row.source === 'native' ? '群伴原生' : '导入'}${row.version ? ` · v${row.version}` : ''}`,
+      ),
+    );
+    item.appendChild(info);
+    if (row.source !== 'native') {
+      const button = el(
+        'button',
+        'text-btn',
+        row.disabled ? '启用' : '停用',
+      );
+      button.type = 'button';
+      button.disabled = !row.installed;
+      button.addEventListener('click', () => togglePlugin(row.id, Boolean(row.disabled)));
+      item.appendChild(button);
+    }
+    root.appendChild(item);
+  }
+}
+
+async function togglePlugin(id, enabled) {
+  try {
+    await api('/dsh/plugins/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ id, enabled }),
+    });
+    toast(enabled ? '插件已启用，下次 DSH 任务生效' : '插件已停用');
+    await loadPlugins();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function setPluginJob(job) {
+  state.pluginJobId = job?.id || '';
+  const card = $('#plugin-job-card');
+  if (!card) return;
+  if (!job) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const title = $('#plugin-job-title');
+  const status = $('#plugin-job-status');
+  const log = $('#plugin-job-log');
+  if (title) title.textContent = job.title || '插件任务';
+  if (status) {
+    status.textContent =
+      job.status === 'done' ? '完成' : job.status === 'error' ? '失败' : '运行中';
+    status.className = `plugin-badge${job.status === 'error' ? ' danger' : job.status === 'done' ? ' accent' : ''}`;
+  }
+  if (log) {
+    log.replaceChildren();
+    for (const line of job.log || []) {
+      log.appendChild(el('p', 'plugin-log-line', line));
+    }
+    if (job.error) log.appendChild(el('p', 'plugin-log-line danger', job.error));
+  }
+}
+
+async function pollPluginJob(jobId) {
+  if (state.pluginJobTimer) {
+    clearTimeout(state.pluginJobTimer);
+    state.pluginJobTimer = null;
+  }
+  try {
+    const data = await api(`/dsh/plugins/jobs/${encodeURIComponent(jobId)}`);
+    const job = data.job || {};
+    setPluginJob(job);
+    if (job.status === 'running') {
+      state.pluginJobTimer = setTimeout(() => pollPluginJob(jobId), 1500);
+      return;
+    }
+    if (job.status === 'done') {
+      toast('插件任务完成');
+      await loadPlugins();
+    } else {
+      toast(job.error || '插件任务失败', 'error');
+    }
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function startPluginImport() {
+  const spec = $('#plugin-import-spec')?.value.trim() || '';
+  if (!spec) {
+    toast('请填写包名或本地路径', 'error');
+    return;
+  }
+  const button = $('#plugin-import-btn');
+  if (button) button.disabled = true;
+  try {
+    const data = await api('/dsh/plugins/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        spec,
+        enabled: $('#plugin-import-enabled')?.checked !== false,
+      }),
+    });
+    setPluginJob(data.job);
+    pollPluginJob(data.job.id);
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function startPluginCreate() {
+  const name = $('#plugin-create-name')?.value.trim() || '';
+  const description = $('#plugin-create-desc')?.value.trim() || '';
+  const requirements = $('#plugin-create-requirements')?.value.trim() || '';
+  if (!name) {
+    toast('请填写插件名', 'error');
+    return;
+  }
+  if (!requirements) {
+    toast('请描述插件需求', 'error');
+    return;
+  }
+  const button = $('#plugin-create-btn');
+  if (button) button.disabled = true;
+  try {
+    const data = await api('/dsh/plugins/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        description,
+        requirements,
+        use_agent: $('#plugin-create-agent')?.checked !== false,
+        enabled: $('#plugin-create-enabled')?.checked !== false,
+      }),
+    });
+    setPluginJob(data.job);
+    pollPluginJob(data.job.id);
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function bindPluginEvents() {
+  $('#plugins-refresh')?.addEventListener('click', () => {
+    loadPlugins().catch((error) => toast(error.message, 'error'));
+  });
+  $('#plugin-search')?.addEventListener('input', (event) => {
+    state.pluginQuery = event.target.value;
+    renderPluginCatalog();
+  });
+  $('#plugin-active-only')?.addEventListener('change', (event) => {
+    state.pluginActiveOnly = Boolean(event.target.checked);
+    renderPluginCatalog();
+  });
+  $('#plugin-import-btn')?.addEventListener('click', startPluginImport);
+  $('#plugin-create-btn')?.addEventListener('click', startPluginCreate);
 }
 
 async function loadOpenCode() {
@@ -4825,6 +5257,7 @@ function bindAssistantActions() {
       }
       if (name === 'capabilities') loadAssistantCapabilities();
       if (name === 'opencode') loadOpenCode();
+      if (name === 'dsh') loadDSH();
     });
   });
   $('#opencode-refresh')?.addEventListener('click', loadOpenCode);
@@ -4862,8 +5295,109 @@ function bindAssistantActions() {
       event.target.checked = !event.target.checked;
     }
   });
-  $('#assistant-contacts-refresh')?.addEventListener('click', () => loadAssistantContacts());
-  $('#bili-refresh')?.addEventListener('click', () => loadBiliStatus());
+  $('#dsh-refresh')?.addEventListener('click', loadDSH);
+  $('#dsh-enabled')?.addEventListener('change', async (event) => {
+    try {
+      const enabled = Boolean(event.target.checked);
+      const data = await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          dsh_enabled: enabled,
+          operator_engine: 'dsh',
+        }),
+      });
+      state.settings = data.settings || state.settings;
+      toast(enabled ? '已启用 DeepSeek Harness Agent' : '已暂停 DSH（内置兜底）');
+      loadDSH();
+    } catch (error) {
+      toast(error.message, 'error');
+      event.target.checked = !event.target.checked;
+    }
+  });
+  $('#dsh-channel')?.addEventListener('change', async (event) => {
+    try {
+      const data = await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ dsh_channel: event.target.value }),
+      });
+      state.settings = data.settings || state.settings;
+      toast(`更新渠道：${event.target.value === 'alpha' ? 'Alpha' : '稳定版'}`);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-group-chat-engine')?.addEventListener('change', async (event) => {
+    try {
+      const data = await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ group_chat_engine: event.target.value }),
+      });
+      state.settings = data.settings || state.settings;
+      toast(
+        event.target.value === 'dsh'
+          ? '群聊回复已交给 DSH'
+          : '群聊回复已切到内置生成（应急）',
+      );
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-check')?.addEventListener('click', async () => {
+    try {
+      const channel = $('#dsh-channel')?.value || 'stable';
+      const data = await api('/dsh/check', {
+        method: 'POST',
+        body: JSON.stringify({ channel }),
+      });
+      const info = data.update || {};
+      toast(
+        info.update_available
+          ? `发现新版本 ${info.latest}（当前 ${info.current || '未安装'}）`
+          : `已是最新：${info.current || info.latest}`,
+      );
+      loadDSH();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-install')?.addEventListener('click', async () => {
+    try {
+      const channel = $('#dsh-channel')?.value || 'stable';
+      await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ dsh_channel: channel }),
+      });
+      const data = await api('/dsh/update', {
+        method: 'POST',
+        body: JSON.stringify({ channel }),
+      });
+      toast(data.started ? '已开始安装/更新 DeepSeek Harness' : '已有安装任务在运行');
+      loadDSH();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-stop')?.addEventListener('click', async () => {
+    try {
+      await api('/dsh/stop', { method: 'POST' });
+      toast('已停止 DeepSeek Harness 任务');
+      loadDSH();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#dsh-reset')?.addEventListener('click', async () => {
+    try {
+      await api('/dsh/reset', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: 'main' }),
+      });
+      toast('DeepSeek Harness 会话已重置');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  $('#assistant-contacts-refresh')?.addEventListener('click', () => loadAssistantContacts());  $('#bili-refresh')?.addEventListener('click', () => loadBiliStatus());
   $('#bili-qr-start')?.addEventListener('click', biliStartQr);
   $('#bili-logout')?.addEventListener('click', biliLogout);
   $('#bili-cookie-save')?.addEventListener('click', biliSaveCookie);
@@ -4928,15 +5462,56 @@ function bindAssistantActions() {
 }
 
 /* ------------------------------------------------------------ tabs */
-function showTab(tab) {
+const PAGE_META = {
+  chats: { title: '会话', eyebrow: 'WORKSPACE' },
+  assistant: { title: '助手', eyebrow: 'OPERATOR' },
+  plugins: { title: '插件', eyebrow: 'PLUGIN STUDIO' },
+  stickers: { title: '表情包', eyebrow: 'STICKER LIBRARY' },
+  settings: { title: '设置', eyebrow: 'SETTINGS' },
+};
+
+function routeFromHash() {
+  const raw = String(location.hash || '').replace(/^#\/?/, '');
+  const [tab, panel] = raw.split('/');
+  return { tab: PAGE_META[tab] ? tab : 'chats', panel: panel || '' };
+}
+
+function routeFor(tab) {
+  const panel =
+    tab === 'assistant' && state.assistantPanel
+      ? `/${state.assistantPanel}`
+      : '';
+  return `#/${tab}${panel}`;
+}
+
+function updatePageHeading(tab) {
+  const meta = PAGE_META[tab] || PAGE_META.chats;
+  const title = $('#page-title');
+  const eyebrow = $('#page-eyebrow');
+  if (title) title.textContent = meta.title;
+  if (eyebrow) eyebrow.textContent = meta.eyebrow;
+}
+
+function showTab(tab, options = {}) {
+  if (!PAGE_META[tab]) tab = 'chats';
   state.currentTab = tab;
   $$('.nav-tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
   $$('.tab-panel').forEach((panel) => {
     panel.hidden = panel.id !== `tab-${tab}`;
   });
+  updatePageHeading(tab);
+  if (options.syncHash !== false) {
+    const next = routeFor(tab);
+    if (location.hash !== next) {
+      history.pushState({ tab }, '', next);
+    }
+  }
   $('#inspector')?.classList.remove('open');
   if (tab === 'stickers') {
     loadStickers().catch((error) => toast(error.message, 'error'));
+  }
+  if (tab === 'plugins') {
+    loadPlugins().catch((error) => toast(error.message, 'error'));
   }
   if (tab === 'settings') {
     loadSettings().catch((error) => toast(error.message, 'error'));
@@ -4956,9 +5531,207 @@ function showTab(tab) {
     loadAssistantFiles().catch(() => {});
   }
   if (tab === 'chats') {
+    syncWorkspaceLayout(Boolean(state.selectedGroupId));
     renderGroupList();
     renderChatHeader();
   }
+}
+
+function applyRoute() {
+  const { tab, panel } = routeFromHash();
+  if (panel && tab === 'assistant') {
+    switchAssistantPanel(panel, { syncHash: false });
+  }
+  showTab(tab, { syncHash: false });
+}
+
+window.addEventListener('popstate', () => {
+  if (state.appReady) applyRoute();
+});
+
+/* ------------------------------------------------------------ chrome helpers */
+function setSettingsNavActive(targetId) {
+  $$('#settings-nav button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.settingsTarget === targetId);
+  });
+}
+
+function bindSettingsNavigation() {
+  const nav = $('#settings-nav');
+  if (!nav) return;
+  nav.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-settings-target]');
+    if (!button) return;
+    const target = document.getElementById(button.dataset.settingsTarget);
+    if (!target) return;
+    setSettingsNavActive(button.dataset.settingsTarget);
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  const panel = $('#tab-settings');
+  if (!panel) return;
+  panel.addEventListener(
+    'scroll',
+    () => {
+      const ids = $$('#settings-nav [data-settings-target]').map(
+        (button) => button.dataset.settingsTarget,
+      );
+      let active = ids[0];
+      for (const id of ids) {
+        const node = document.getElementById(id);
+        if (node && node.getBoundingClientRect().top <= 170) active = id;
+      }
+      if (active) setSettingsNavActive(active);
+    },
+    { passive: true },
+  );
+}
+
+const ASSISTANT_PANEL_LABELS = {
+  workspace: '工作区',
+  terminal: '终端',
+  skills: '技能',
+  memory: '记忆',
+  tasks: '任务',
+  contacts: '联系人',
+  bili: 'B站',
+  capabilities: '能力',
+  dsh: 'DeepSeek Harness',
+};
+
+function commandPaletteItems() {
+  const items = [
+    { label: '打开会话', hint: '页面', run: () => showTab('chats') },
+    { label: '打开助手', hint: '页面', run: () => showTab('assistant') },
+    { label: '打开插件', hint: '页面', run: () => showTab('plugins') },
+    { label: '打开表情包', hint: '页面', run: () => showTab('stickers') },
+    { label: '打开设置', hint: '页面', run: () => showTab('settings') },
+    { label: '刷新群列表', hint: '操作', run: () => loadGroups() },
+    { label: '上传表情包', hint: '操作', run: () => openUploadDialog() },
+  ];
+  for (const [panel, label] of Object.entries(ASSISTANT_PANEL_LABELS)) {
+    items.push({
+      label: `助手 · ${label}`,
+      hint: '面板',
+      run: () => {
+        showTab('assistant');
+        switchAssistantPanel(panel);
+      },
+    });
+  }
+  for (const group of state.groups) {
+    items.push({
+      label: group.name || '未命名群聊',
+      hint: '群聊',
+      run: async () => {
+        showTab('chats');
+        await selectGroup(group.id);
+      },
+    });
+  }
+  return items;
+}
+
+function renderCommandPalette(query = '') {
+  const list = $('#command-list');
+  if (!list) return;
+  const needle = String(query || '').trim().toLowerCase();
+  const matched = commandPaletteItems()
+    .filter((item) =>
+      !needle
+        ? true
+        : `${item.label} ${item.hint || ''}`.toLowerCase().includes(needle),
+    )
+    .slice(0, 24);
+  state.commandItems = matched;
+  state.commandIndex = 0;
+  list.replaceChildren();
+  if (!matched.length) {
+    list.append(el('div', 'command-empty', '没有匹配的页面、群聊或操作'));
+    return;
+  }
+  matched.forEach((item, index) => {
+    const button = el('button', `command-item${index === 0 ? ' active' : ''}`);
+    button.type = 'button';
+    button.append(
+      el('span', 'command-item-label', item.label),
+      el('span', 'command-item-hint', item.hint || ''),
+    );
+    button.addEventListener('click', () => runCommandItem(item));
+    button.addEventListener('mouseenter', () => {
+      state.commandIndex = index;
+      updateCommandActive();
+    });
+    list.append(button);
+  });
+}
+
+function updateCommandActive() {
+  $$('#command-list .command-item').forEach((node, index) => {
+    node.classList.toggle('active', index === state.commandIndex);
+  });
+}
+
+function runCommandItem(item) {
+  const dialog = $('#command-dialog');
+  if (dialog?.open) dialog.close();
+  if (!item) return;
+  Promise.resolve()
+    .then(() => item.run())
+    .catch((error) => toast(error.message || '操作失败', 'error'));
+}
+
+function openCommandPalette() {
+  const dialog = $('#command-dialog');
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+  const input = $('#command-input');
+  if (input) input.value = '';
+  renderCommandPalette('');
+  window.setTimeout(() => input?.focus(), 10);
+}
+
+function bindCommandPalette() {
+  const dialog = $('#command-dialog');
+  if (!dialog) return;
+  const input = $('#command-input');
+  $('#command-trigger')?.addEventListener('click', openCommandPalette);
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
+    if (!dialog.open) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      state.commandIndex = Math.min(
+        state.commandItems.length - 1,
+        state.commandIndex + 1,
+      );
+      updateCommandActive();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      state.commandIndex = Math.max(0, state.commandIndex - 1);
+      updateCommandActive();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      runCommandItem(state.commandItems[state.commandIndex]);
+    }
+  });
+  input?.addEventListener('input', (event) =>
+    renderCommandPalette(event.target.value),
+  );
+  dialog.addEventListener('close', () => {
+    if (input) input.value = '';
+  });
+}
+
+function bindDialogBackdrops() {
+  $$('dialog.modal').forEach((dialog) => {
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+  });
 }
 
 /* ------------------------------------------------------------ websocket */
@@ -5305,6 +6078,16 @@ function bindEvents() {
   $$('.nav-tab').forEach((button) => {
     button.addEventListener('click', () => showTab(button.dataset.tab));
   });
+
+  $$('.inspector-tabs button').forEach((button) => {
+    button.addEventListener('click', () =>
+      switchInspectorTab(button.dataset.inspectorTab),
+    );
+  });
+
+  bindSettingsNavigation();
+  bindCommandPalette();
+  bindDialogBackdrops();
 
   $('#upload-sticker-btn')?.addEventListener('click', openUploadDialog);
   $('#sticker-empty-upload')?.addEventListener('click', openUploadDialog);

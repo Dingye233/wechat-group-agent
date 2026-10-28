@@ -65,6 +65,22 @@ if (Test-Path $opencodePidFile) {
     Remove-Item $opencodePidFile -Force -ErrorAction SilentlyContinue
 }
 
+# DeepSeek Harness runs one node process per task; those are children of the
+# agent and survive a plain taskkill on the service. Stop only our runtime and
+# our MCP server processes so other terminal/DSH sessions are unaffected.
+$dshMarker = Join-Path $PSScriptRoot "data\dsh\runtimes"
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+    if ([string]$_.CommandLine -like "*$dshMarker*") {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+    $cmd = [string]$_.CommandLine
+    if ($cmd -like "*app\mcp_server.py*" -and $cmd -like "*$PSScriptRoot*") {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Give Windows a moment to release the port.
 for ($i = 0; $i -lt 10; $i++) {
     $stillListening = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue

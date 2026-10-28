@@ -26,7 +26,14 @@ from app.services.capabilities import (
     check_tool_allowed,
     execute_capability,
 )
+from app.services.agent_engines import resolve_agent_engine
 from app.services.llm import LLMError, LLMService, parse_json_object
+from app.services.prompting import (
+    Prompt,
+    build_opencode_operator_prompt,
+    build_operator_prompt,
+    build_side_chat_prompt,
+)
 from app.services.memory import (
     DEFAULT_MEMORY_PROMPT_TEMPLATE,
     format_memory_line,
@@ -42,9 +49,16 @@ MAX_HISTORY_CHARS = 9000
 MAX_OBSERVATION_CHARS = 7000
 MAX_TASK_SECONDS = 1800
 MAX_SAFETY_STEPS = 500
+# OpenCode keeps the session transcript on its side.  A system prompt that
+# changes every turn would invalidate that whole prefix in the provider cache,
+# so the memory snapshot is frozen per session and refreshed on this interval.
+OPENCODE_PROMPT_TTL = 900.0
 
 _ACTIVE_SESSIONS: set[str] = set()
 _CANCEL_EVENTS: dict[str, asyncio.Event] = {}
+# AssistantService is created per HTTP request, so the OpenCode prompt cache
+# must live at module level to survive across turns.
+_OPENCODE_PROMPT_CACHE: dict[str, tuple[float, str, str]] = {}
 _INBOX: dict[str, list[str]] = {}
 
 
@@ -553,6 +567,7 @@ class AssistantService:
                 break
             memory_lines.append(line)
             used += len(line) + 1
+
         persona_parts = []
         global_persona = str(settings.get("operator_persona") or "").strip()
         if global_persona:
@@ -562,17 +577,8 @@ class AssistantService:
                 "当前联系人专属人设（叠加在全局人设之上）：\n"
                 + str(contact_persona).strip()
             )
-        persona_block = "\n\n".join(persona_parts) or "无"
-        core = str(settings.get("operator_system_prompt") or "").strip()
-        if not core:
-            core = (
-                "你是「群伴 Operator」，一个能直接操作本机、微信和 B站的执行型 Agent。"
-                "先理解目标，再动手；能自己判断的默认值直接选，不要反复追问。"
-            )
-        extra = str(settings.get("operator_prompt_extra") or "").strip()
-        extra_block = (
-            f"\n# 用户额外要求（高优先级）\n{extra}" if extra else ""
-        )
+        persona_block = "\n\n".join(persona_parts)
+
         tools = capability_payload.get("tools") or []
         tool_names = "、".join(str(item.get("name")) for item in tools[:80]) or "无"
         resources: list[str] = []
@@ -590,6 +596,7 @@ class AssistantService:
                 f"- api:{item.get('name')} — {item.get('description', '')}"
             )
         resource_block = "\n".join(resources) or "无"
+
         channel_text = (
             "你正在微信私聊里回复管理员。最终答复要像真人发微信：自然中文短段落，"
             "不要 Markdown 表格或代码块。工具调用进度由系统自动同步；"
@@ -604,64 +611,235 @@ class AssistantService:
                 "qunban_send_message(contact_id=..., text=...)，"
                 "最终答复仍由系统通过 wechatauto-replica 自动发送。"
             )
-        return f"""{core}
 
-# 运行方式（官方 OpenCode）
-你现在由官方 OpenCode Agent 运行时执行，使用原生工具调用，不再输出 JSON 动作协议。
-- 群伴自己的工具已经作为 MCP 工具注册到 OpenCode，名字形如 `qunban_list_groups`、`qunban_read_file`、`qunban_run_powershell`，可以直接调用。
-- 专用工具使用命名参数，例如 `qunban_read_group(group_id=211, limit=30)`。
-- 自动注册的通用工具使用 `args` 对象，例如 `qunban_read_file(args={{"path": "a.txt"}})`、`qunban_run_powershell(args={{"command": "Get-Date"}})`。
-- 不确定工具名或参数时先调用 `qunban_capabilities`，它会返回可直接使用的 `call_tool`、`call_args`、说明和示例参数；也可以用通用入口 `qunban_tool(name="工具名", args={{...}})`。
-- 群伴原生工具的清单由你管理：需要新增别名、改描述、停用/启用、删除或同步工具时，调用 `qunban_tool_admin`。`handler` 只能引用群伴已有的原生工具；要造真正的新功能，写 `handler_type="script"` 的脚本工具。
-- 新建工具后，当前轮立刻用 `qunban_tool(name="新工具", args={...})` 调用；直接入口 `qunban_<新工具>` 会在本轮空闲后自动刷新，下一轮才可用。
-- OpenCode 原生 `bash` / `read` / `write` / `edit` / `patch` / `task` 已全部启用；可以在工作区写脚本、运行命令、拆分子任务。
-- 工作区：`data/opencode/workspace`；群伴工作区：`data/agent_workspace`（现有 skills/projects/scripts 都在这里）。
-- 每次只做能验证的一步；工具失败先读错误再换方案，不要原样重试。
-- 最终答复必须基于真实工具结果；没有执行过的事情不要假装完成。
-- 有副作用的操作先判断目标和影响；能自己判断的直接执行，群伴 Agent 会处理确认和指挥。
-- 微信消息发送只能走群伴的 wechatauto-replica：群里用 `qunban_send_message(group_id=..., text=...)`，私聊用 `qunban_send_message(contact_id=..., text=...)`。最终答复由系统自动发送，不需要再调用发送工具。
-- 严禁使用 `qunban_keyboard_*`、`qunban_mouse_*` 或 `qunban_run_powershell` 去操作微信窗口/输入框；这些不是消息发送通道，会导致微信卡死。
-- 进度会自动显示给管理员；不要输出长篇思维过程或敏感信息。
+        prompt = build_opencode_operator_prompt(
+            core=str(settings.get("operator_system_prompt") or "").strip(),
+            channel_text=channel_text,
+            workspace=str(assistant_tools.workspace_root()),
+            admin_text="是" if assistant_tools.is_admin() else "否",
+            tool_names=tool_names,
+            resource_block=resource_block,
+            persona_block=persona_block,
+            extra_prompt=str(settings.get("operator_prompt_extra") or "").strip(),
+            memory_lines="\n".join(memory_lines),
+        )
+        return prompt.system
 
-# 当前通道
+    def _cached_opencode_system_prompt(
+        self,
+        *,
+        session_id: str,
+        settings: dict[str, Any],
+        remembers: list[dict[str, Any]],
+        capability_payload: dict[str, Any],
+        contact_persona: str,
+        channel: str,
+    ) -> str:
+        """Freeze the memory snapshot per session so the prefix stays cached.
+
+        OpenCode keeps the transcript on its side, so the system prompt leads
+        every model request.  Rebuilding it with fresh memory each turn would
+        invalidate the whole transcript after it; refresh the snapshot only
+        every ``OPENCODE_PROMPT_TTL`` seconds instead.
+        """
+        signature = json.dumps(
+            {
+                "contact_persona": contact_persona,
+                "channel": channel,
+                "operator_persona": settings.get("operator_persona"),
+                "core": settings.get("operator_system_prompt"),
+                "extra": settings.get("operator_prompt_extra"),
+                "memory_template": settings.get("memory_prompt_template"),
+                "memory_max_chars": settings.get("memory_context_max_chars"),
+                "tools": [
+                    item.get("name")
+                    for item in capability_payload.get("tools") or []
+                ],
+                "skills": [
+                    item.get("name")
+                    for item in capability_payload.get("skills") or []
+                ],
+                "mcps": [
+                    item.get("key")
+                    for item in capability_payload.get("mcps") or []
+                ],
+                "apis": [
+                    item.get("name")
+                    for item in capability_payload.get("apis") or []
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        now = time.monotonic()
+        cached = _OPENCODE_PROMPT_CACHE.get(session_id)
+        if cached and cached[0] > now and cached[1] == signature:
+            return cached[2]
+        prompt = self._opencode_system_prompt(
+            settings=settings,
+            remembers=remembers,
+            capability_payload=capability_payload,
+            contact_persona=contact_persona,
+            channel=channel,
+        )
+        _OPENCODE_PROMPT_CACHE[session_id] = (
+            now + OPENCODE_PROMPT_TTL,
+            signature,
+            prompt,
+        )
+        if len(_OPENCODE_PROMPT_CACHE) > 64:
+            oldest = min(
+                _OPENCODE_PROMPT_CACHE,
+                key=lambda key: _OPENCODE_PROMPT_CACHE[key][0],
+            )
+            _OPENCODE_PROMPT_CACHE.pop(oldest, None)
+        return prompt
+
+
+    def _dsh_system_prompt(
+        self,
+        *,
+        session_id: str,
+        settings: dict[str, Any],
+        remembers: list[dict[str, Any]],
+        capability_payload: dict[str, Any],
+        contact_persona: str,
+        channel: str,
+    ) -> str:
+        """Qunban-specific context for the native DSH Operator.
+
+        DSH already contributes its own base prompt and native tool schemas, so
+        this text only carries what DSH cannot know: WeChat safety rules, the
+        Qunban tool names, channel rules, persona and frozen memory.  Keeping it
+        short is deliberate: the first turn pays for it, later turns hit the
+        prompt cache once the DSH session prefix is warm.
+        """
+        signature = json.dumps(
+            {
+                "persona": contact_persona,
+                "channel": channel,
+                "operator_persona": settings.get("operator_persona"),
+                "core": settings.get("operator_system_prompt"),
+                "extra": settings.get("operator_prompt_extra"),
+                "tools": [
+                    item.get("name")
+                    for item in capability_payload.get("tools") or []
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        cache_key = f"dsh:{session_id}"
+        now = time.monotonic()
+        cached = _OPENCODE_PROMPT_CACHE.get(cache_key)
+        if cached and cached[0] > now and cached[1] == signature:
+            return cached[2]
+
+        memory_template = str(
+            settings.get("memory_prompt_template") or DEFAULT_MEMORY_PROMPT_TEMPLATE
+        )
+        memory_limit = max(200, int(settings.get("memory_context_max_chars") or 1800))
+        memory_lines: list[str] = []
+        used = 0
+        for item in remembers:
+            line = format_memory_line(item, memory_template)
+            if not line or used + len(line) > memory_limit:
+                break
+            memory_lines.append(line)
+            used += len(line) + 1
+        memory_text = "\n".join(memory_lines) or "无"
+
+        persona_parts = []
+        global_persona = str(settings.get("operator_persona") or "").strip()
+        if global_persona:
+            persona_parts.append(global_persona)
+        if str(contact_persona or "").strip():
+            persona_parts.append(
+                "当前联系人专属人设（叠加在全局人设之上）：\n"
+                + str(contact_persona).strip()
+            )
+        persona_text = "\n\n".join(persona_parts) or "无"
+
+        if channel == "wechat":
+            channel_text = (
+                "你正在微信私聊里回复管理员。最终答复要像真人发微信：自然中文短段落，"
+                "不要 Markdown 表格、代码块或超长清单。工具调用进度由系统自动同步；"
+                "不需要再用 wechat_send_message 把最终答复重复发一遍，系统会自动发送。"
+            )
+        else:
+            channel_text = (
+                "你在群伴后台的 Agent 对话中。可以使用 Markdown，但保持简洁、可执行。"
+            )
+
+        studio_root = (
+            Path(__file__).resolve().parents[2] / "data" / "dsh" / "studio"
+        )
+
+        prompt = f"""你是「群伴 Operator」，由 DeepSeek Harness 原生 tool calling 执行。
+你的职责是完成管理员交办的任务，并把真实结果说清楚；不要输出 JSON 动作协议，直接调用工具。
+
+# 微信规则（最高优先级）
+- 发送微信消息的唯一入口是 `wechat_send_message`。群聊传 group_id，私聊传 contact_id，二者只能选一个。
+- 发送前先用 `wechat_list_groups` / `wechat_list_contacts` 确认目标 ID；不要凭群名猜 ID。
+- 严禁用 shell、PowerShell、键盘、鼠标、UIA 或任何脚本直接操作微信窗口或模拟发送。
+- 文本由 wechatauto-replica 发送并校验数据库落库；工具返回失败时如实报告，不要假装成功，也不要重复盲发。
+- 消息应简洁自然；群聊里不要贴绝对路径、内部目录、代码块或工具名。
+
+# 群伴工具
+- 微信：`wechat_status`、`wechat_list_groups`、`wechat_read_group`、`wechat_send_message`、`wechat_list_contacts`
+- 记忆：`qunban_memory_search`、`qunban_memory_save`
+- B站：`qunban_bili_search`、`qunban_bili_knowledge`
+- 接口：`qunban_call_interface`
+- 技能/MCP：`qunban_run_skill`、`qunban_run_mcp`
+- 命令：`qunban_powershell`（已经过微信关键词拦截）
+- 文件/搜索/网页：使用 DSH 原生 `read`、`write`、`edit`、`glob`、`grep`、`webfetch`
+
+# 工作方式
+1. 先判断目标与约束，信息不足时先读文件或查群/联系人，不要猜。
+2. 每一步只做一个可验证的动作；工具失败先读错误再换方案。
+3. 只有拿到真实工具结果才说完成；未完成的部分明确说明。
+4. 有副作用的操作先确认目标；能自己判断的默认值直接选，不要反复追问。
+5. 完成后用简短中文汇报：做了什么、结果、文件/链接、未完成项。
+6. 只有用户明确要求新增/修改 DSH 插件时，才做插件自扩展：
+   - 在 `{studio_root}/<slug>` 写 `package.json`（name=`@qunban/<slug>`，type=module）
+     和 `lib/index.js`（导出 name、inject=['tools']、apply；用 QUNBAN_DSH_RUNTIME_ROOT
+     动态 import defineTool；schema 显式 additionalProperties；output 提供 render）。
+   - 用 `qunban_powershell` 跑 `node --check lib/index.js`。
+   - 通过 `qunban_plugin_install(path=..., enabled=true)` 安装/更新，再告诉用户插件名和启用状态。
+   - 不要安装未校验的第三方代码，不要修改 `@qunban/dsh-native` 本身。
+
+# 通道
 {channel_text}
 
 # 工作区
 {assistant_tools.workspace_root()}
-当前进程管理员权限：{"是" if assistant_tools.is_admin() else "否"}
 
-# 人设（每次对话自动注入）
-{persona_block}
+# 人设
+{persona_text}
 
 # 长期记忆（参考，不要机械复述）
-{chr(10).join(memory_lines) or "无"}
-
-# 已启用的群伴工具名
-{tool_names}
-
-# 已启用的技能 / MCP / 接口
-{resource_block}
-{extra_block}
-
-# 常用工具示例
-- 列群：qunban_list_groups()
-- 读群：qunban_read_group(group_id=211, limit=30)
-- 发群：qunban_send_message(group_id=211, text="...")
-- 读文件：qunban_read_file(args={{"path": "data/agent_workspace/README.md"}})
-- 执行命令：qunban_run_powershell(args={{"command": "Get-Date"}})
-- B站搜索：qunban_bili_search(keyword="...", limit=10)
-- 保存记忆：qunban_memory_save(content="...", title="...")
-- 运行群伴 MCP：qunban_run_mcp(args={{"name": "screen_control_mcp", "command": "..."}})
-- 运行技能：qunban_run_skill(args={{"name": "skill-name", "args": ""}})
-- 调用已登记接口：qunban_call_interface(args={{"name": "api-name", "args": {{}}}})
-- 管理原生工具：qunban_tool_admin(action="list")
-- 新增工具别名：qunban_tool_admin(action="upsert", tool={{"name": "read_fast", "handler": "read_file", "description": "快速读取文件", "args_example": {{"path": "a.txt"}}}})
-- 通用入口：qunban_tool(name="工具名", args={{...}})
+{memory_text}
 """
+
+        _OPENCODE_PROMPT_CACHE[cache_key] = (
+            now + OPENCODE_PROMPT_TTL,
+            signature,
+            prompt,
+        )
+        if len(_OPENCODE_PROMPT_CACHE) > 96:
+            oldest = min(
+                _OPENCODE_PROMPT_CACHE,
+                key=lambda key: _OPENCODE_PROMPT_CACHE[key][0],
+            )
+            _OPENCODE_PROMPT_CACHE.pop(oldest, None)
+        return prompt
 
     async def _run_opencode(
         self,
         *,
+        engine: str = "opencode",
         message: str,
         session_id: str,
         scope: str,
@@ -680,32 +858,47 @@ class AssistantService:
         memory_metadata: dict[str, Any] | None,
         account_key: str,
     ) -> dict[str, Any]:
+        from app.services.dsh_agent import DSHError, get_dsh_agent_runtime
         from app.services.opencode_agent import (
             OpenCodeError,
             get_opencode_runtime,
         )
 
-        system_prompt = self._opencode_system_prompt(
-            settings=settings,
-            remembers=remembers,
-            capability_payload=capability_payload,
-            contact_persona=persona,
-            channel=channel,
-        )
-        opencode = get_opencode_runtime()
+        if engine == "dsh":
+            system_prompt = self._dsh_system_prompt(
+                session_id=session_id,
+                settings=settings,
+                remembers=remembers,
+                capability_payload=capability_payload,
+                contact_persona=persona,
+                channel=channel,
+            )
+            runtime = get_dsh_agent_runtime()
+            start_message = "DeepSeek Harness 已接管，开始执行"
+        else:
+            system_prompt = self._cached_opencode_system_prompt(
+                session_id=session_id,
+                settings=settings,
+                remembers=remembers,
+                capability_payload=capability_payload,
+                contact_persona=persona,
+                channel=channel,
+            )
+            runtime = get_opencode_runtime()
+            start_message = "官方 OpenCode 已接管，开始执行"
         result: dict[str, Any] = {}
         final = ""
         pending_followup: list[str] = []
         await emit(
             {
                 "phase": "start",
-                "engine": "opencode",
+                "engine": engine,
                 "unlimited": True,
-                "message": "官方 OpenCode 已接管，开始执行",
+                "message": start_message,
             }
         )
         try:
-            result = await opencode.chat(
+            result = await runtime.chat(
                 message,
                 session_id=session_id,
                 system_prompt=system_prompt,
@@ -713,10 +906,13 @@ class AssistantService:
                 temperature=temperature,
                 progress=emit,
                 cancel_event=cancel_event,
+                call_site="dsh.assistant" if engine == "dsh" else "opencode.assistant",
             )
             final = str(result.get("reply") or "").strip()
             trace = list(result.get("trace") or [])
-        except OpenCodeError as exc:
+        except (OpenCodeError, DSHError) as exc:
+            if engine == "dsh":
+                raise
             logger.warning("OpenCode 执行失败：%s", exc)
             final = f"OpenCode 执行失败：{exc}"
             trace = []
@@ -814,7 +1010,7 @@ class AssistantService:
             "prompt_tokens": int(result.get("prompt_tokens") or 0),
             "completion_tokens": int(result.get("completion_tokens") or 0),
             "admin": assistant_tools.is_admin(),
-            "engine": "opencode",
+            "engine": engine,
         }
 
     async def quick_chat(
@@ -855,22 +1051,12 @@ class AssistantService:
             persona or settings.get("operator_persona") or ""
         ).strip()
         status_text = str(task_status or "后台任务仍在执行").strip()
-        if busy:
-            context_text = (
-                "现在后台有一个任务正在执行，用户发来的是闲聊、吐槽或状态询问，"
-                "不是新的任务指令。"
-            )
-        else:
-            context_text = "现在没有后台任务，你正在和用户闲聊。"
-        system_prompt = (
-            f"你是「群伴」的聊天人格。{context_text}"
-            "请直接、自然地回答，像微信聊天一样用简短中文段落；"
-            "不要调用工具，不要输出 Markdown，不要假装后台任务已经完成，"
-            "也不要编造进度。如果用户问进度，就结合给出的后台状态回答；"
-            "如果用户只是闲聊，就正常陪聊。"
-            f"\n当前后台状态：{status_text}"
-            + (f"\n人设：{persona_text}" if persona_text else "")
+        prompt = build_side_chat_prompt(
+            persona_text=persona_text,
+            busy=busy,
+            status_text=status_text,
         )
+        system_prompt = prompt.system
         user_prompt = (
             f"最近对话：\n{recent}\n\n"
             f"用户刚刚说：{message}\n\n"
@@ -885,6 +1071,8 @@ class AssistantService:
             temperature=0.8 if temperature is None else float(temperature),
             max_tokens=600,
             json_mode=False,
+            call_site="assistant.quick_chat",
+            cache_prefix_chars=prompt.cache_prefix_chars,
         )
         reply = str(result.get("content") or "").strip()
         if not reply:
@@ -904,7 +1092,7 @@ class AssistantService:
         max_steps: int = 0,
         unlimited: bool = True,
         channel: str = "dashboard",
-    ) -> str:
+    ) -> Prompt:
         workspace = str(assistant_tools.workspace_root())
         catalog = json.dumps(capability_payload.get("tools") or [], ensure_ascii=False)
         memory_template = str(
@@ -935,7 +1123,11 @@ class AssistantService:
             resources.append(f"- api:{item['name']} — {item.get('description', '')}")
         resource_lines = "\n".join(resources) or "无（用户尚未在能力列表启用）"
 
-        admin_text = "是" if is_admin else "否（需要管理员权限时会触发 UAC；正式使用建议用 start-admin.ps1 启动服务）"
+        admin_text = (
+            "是"
+            if is_admin
+            else "否（需要管理员权限时会触发 UAC；正式使用建议用 start-admin.ps1 启动服务）"
+        )
 
         persona_parts: list[str] = []
         global_persona = str(settings.get("operator_persona") or "").strip()
@@ -946,14 +1138,12 @@ class AssistantService:
             persona_parts.append(
                 "当前联系人专属人设（叠加在全局人设之上）：\n" + contact_persona
             )
-        persona_block = ""
-        if persona_parts:
-            persona_block = (
-                "\n# 人设（每次对话自动注入）\n"
-                + "\n\n".join(persona_parts)
-                + "\n（人设只影响语气和称呼；当它与 Operator 的任务执行、"
+        persona_block = "\n\n".join(persona_parts)
+        if persona_block:
+            persona_block += (
+                "\n（人设只影响语气和称呼；当它与 Operator 的任务执行、"
                 "工具调用、结果汇报冲突时，以 Operator 职责为准。"
-                "执行任务时可以多说几句，把工具和结果讲清楚。）\n"
+                "执行任务时可以多说几句，把工具和结果讲清楚。）"
             )
 
         if unlimited:
@@ -963,6 +1153,7 @@ class AssistantService:
             )
         else:
             limit_text = f"最多 {max_steps} 步"
+
         if channel == "wechat":
             channel_text = (
                 "你正在微信私聊里回复管理员。最终答复要像真人发微信："
@@ -977,74 +1168,18 @@ class AssistantService:
                 "但保持简洁、可执行，优先说结果和下一步。"
             )
 
-        default_core = f"""你是「群伴 Operator」，一个能直接操作本机、持续自我迭代的中文 Agent。
-你不是只会聊天的客服：你可以读写文件、执行 PowerShell、调用外部 HTTP、创建技能、创建任务，并在真实系统里完成多步任务。
-
-# 工作方式（参考 opencode / Codex 的 agent loop）
-1. 先理解目标、约束和成功标准；信息不够时先做最小必要探查，不要凭空猜测。
-2. 简单任务直接执行；复杂任务在 thought 里维护一个很短的 1/2/3 计划，并在关键节点更新。
-3. 每一步只做一个动作：先想清楚要验证什么，再调用工具；拿到 OBSERVATION 后判断是否真的推进了任务。
-4. 不要因为一个工具成功就急着收尾。只有目标已经达成、或遇到无法自行解决的阻塞时才输出 final。
-5. 工具失败后先阅读错误、换参数或换方案；不要原样重试。相同工具 + 相同参数连续失败 3 次，或连续 5 次返回相同结果，系统会自动打断。
-6. 用户中途插入新要求时，把它合并进当前任务继续做；除非新要求明确要求推翻原任务，否则不要从头再来。
-7. 只有确实需要用户做决定时才提问；能自己判断的默认值就直接选，并在 final 里说明。
-8. 删除、覆盖、停服务、发消息、发布内容等有副作用的操作，先确认目标和影响；不要执行与任务无关的破坏性操作。
-9. 最终答复必须基于真实 OBSERVATION：说明做了什么、结果是什么、哪些没成功、下一步建议。不要假装执行过工具。
-
-# 进度可见性
-- 你每次调用工具前的 thought 会作为进度同步给管理员，所以 thought 要写成一句简短、具体的中文，例如「先读取配置文件确认端口」。
-- 如果任务较长，保持 thought 里的计划可读；不要在 thought 里写长篇推理或敏感信息。
-- 管理员可以在任务执行中继续发消息；系统会把新消息作为「中途插入的新要求」交给你。
-
-# 能力边界
-- 文件读写和 PowerShell 会影响真实系统。执行删除、覆盖、服务/进程操作前，先在 thought 里确认目标路径和影响。
-- 需要管理员权限的命令，把 admin=true 传给 run_powershell；会弹 UAC。
-- 自我迭代不是改主程序源码：优先在 skills/、projects/、scripts/ 下创建可复用能力；需要长期任务时用 create_task 记录。
-- 外部接口用 web_request，只允许 http/https。
-- 不要把密钥、密码、Token 写入普通文件或记忆；只记录“配置在哪里”。"""
-
-        custom_core = str(settings.get("operator_system_prompt") or "").strip()
-        core_text = custom_core or default_core
-        extra_prompt = str(settings.get("operator_prompt_extra") or "").strip()
-        extra_block = (
-            f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
-            if extra_prompt
-            else ""
+        return build_operator_prompt(
+            core=str(settings.get("operator_system_prompt") or "").strip(),
+            channel_text=channel_text,
+            workspace=workspace,
+            admin_text=admin_text,
+            persona_block=persona_block,
+            extra_prompt=str(settings.get("operator_prompt_extra") or "").strip(),
+            tool_catalog=catalog,
+            resource_lines=resource_lines,
+            limit_text=limit_text,
+            memory_lines=memory_lines,
         )
-
-        return f"""{core_text}
-
-# 当前通道
-{channel_text}
-
-# 工作区
-{workspace}
-技能目录：{workspace}\\skills
-项目目录：{workspace}\\projects
-脚本目录：{workspace}\\scripts
-当前进程管理员权限：{admin_text}
-{persona_block}
-# 长期记忆（每次对话自动注入，供参考）
-以下是从过去对话总结的记忆。把它们当作背景，不要机械复述，也不要编造记忆里没有的内容：
-{memory_lines}
-
-# 已启用的技能 / MCP / 接口
-{resource_lines}
-{extra_block}
-# 可用工具（JSON，只有这里列出的才能调用）
-{catalog}
-
-# 输出协议
-每次只输出一个 JSON 对象，不要 Markdown：
-{{"thought":"一句中文进度/判断","action":"工具名","args":{{...}}}}
-或
-{{"thought":"一句中文总结","final":"给用户的最终答复"}}
-- thought 必填，且要能让管理员看懂你正在做什么。
-- 只输出一个完整的 JSON 对象，结尾不要多写右花括号，也不要在 JSON 前后加解释。
-- 步数限制：{limit_text}。
-- 工具结果会以 OBSERVATION 形式返回；只有拿到 OBSERVATION 才能说完成。
-- 文件路径可以是绝对路径，也可以是相对工作区的路径。
-- 如果用户只是聊天或问题已经回答完，直接 final。"""
 
     async def _repair_json_output(
         self,
@@ -1054,6 +1189,7 @@ class AssistantService:
         system_prompt: str,
         temperature: float | None,
         max_tokens: int,
+        cache_prefix_chars: int = 0,
     ) -> dict[str, Any] | None:
         """Ask the model once to turn a malformed reply into valid JSON."""
         repair_prompt = f"""你上一条回复不是合法 JSON。原始内容如下：
@@ -1074,6 +1210,8 @@ class AssistantService:
                 temperature=0.0,
                 max_tokens=max_tokens,
                 json_mode=True,
+                call_site="assistant.repair",
+                cache_prefix_chars=cache_prefix_chars,
             )
             return parse_json_object(result.get("content") or "")
         except Exception:
@@ -1156,7 +1294,9 @@ class AssistantService:
                 account_key=account_key,
                 query=message,
                 limit=memory_limit,
-                timeout=4.0,
+                timeout=float(
+                    settings.get("memory_search_timeout_seconds") or 1.5
+                ),
             )
             if mem0_items:
                 remembers = _merge_memories(
@@ -1208,7 +1348,7 @@ class AssistantService:
                 }
             )
         capability_payload = await catalog_for_scope(scope)
-        system_prompt = self._system_prompt(
+        prompt = self._system_prompt(
             settings=settings,
             remembers=remembers,
             is_admin=assistant_tools.is_admin(),
@@ -1218,6 +1358,7 @@ class AssistantService:
             unlimited=unlimited,
             channel=channel,
         )
+        system_prompt = prompt.system
         observations: list[str] = []
         trace: list[dict[str, Any]] = []
         insertions: list[str] = _drain_inbox(session_id)
@@ -1240,26 +1381,59 @@ class AssistantService:
         _ACTIVE_SESSIONS.add(session_id)
         cancel_event = asyncio.Event()
         _CANCEL_EVENTS[session_id] = cancel_event
-        if settings.get("opencode_enabled", True):
-            return await self._run_opencode(
-                message=message,
-                session_id=session_id,
-                scope=scope,
-                settings=settings,
-                remembers=remembers,
-                capability_payload=capability_payload,
-                persona=persona,
-                channel=channel,
-                temperature=temperature,
-                cancel_event=cancel_event,
-                emit=emit,
-                store_assistant=store_assistant,
-                emit_final=emit_final,
-                followup_depth=followup_depth,
-                memory_scope=memory_scope,
-                memory_metadata=memory_metadata,
-                account_key=account_key,
-            )
+        engine = resolve_agent_engine(settings)
+        if engine in {"opencode", "dsh"}:
+            try:
+                return await self._run_opencode(
+                    engine=engine,
+                    message=message,
+                    session_id=session_id,
+                    scope=scope,
+                    settings=settings,
+                    remembers=remembers,
+                    capability_payload=capability_payload,
+                    persona=persona,
+                    channel=channel,
+                    temperature=temperature,
+                    cancel_event=cancel_event,
+                    emit=emit,
+                    store_assistant=store_assistant,
+                    emit_final=emit_final,
+                    followup_depth=followup_depth,
+                    memory_scope=memory_scope,
+                    memory_metadata=memory_metadata,
+                    account_key=account_key,
+                )
+            except Exception as exc:
+                if engine != "dsh" or not settings.get("opencode_enabled", True):
+                    raise
+                logger.warning("DeepSeek Harness 执行失败，回退 OpenCode：%s", exc)
+                await emit(
+                    {
+                        "phase": "engine",
+                        "message": "DeepSeek Harness 不可用，已回退 OpenCode",
+                    }
+                )
+                return await self._run_opencode(
+                    engine="opencode",
+                    message=message,
+                    session_id=session_id,
+                    scope=scope,
+                    settings=settings,
+                    remembers=remembers,
+                    capability_payload=capability_payload,
+                    persona=persona,
+                    channel=channel,
+                    temperature=temperature,
+                    cancel_event=cancel_event,
+                    emit=emit,
+                    store_assistant=store_assistant,
+                    emit_final=emit_final,
+                    followup_depth=followup_depth,
+                    memory_scope=memory_scope,
+                    memory_metadata=memory_metadata,
+                    account_key=account_key,
+                )
         started_at = time.monotonic()
         final = ""
         cancelled = False
@@ -1352,6 +1526,8 @@ class AssistantService:
                         else 0.25,
                         max_tokens=max_tokens,
                         json_mode=True,
+                        call_site="assistant.operator",
+                        cache_prefix_chars=prompt.cache_prefix_chars,
                     )
                 except LLMError as exc:
                     raise RuntimeError(str(exc)) from exc
@@ -1381,6 +1557,7 @@ class AssistantService:
                         system_prompt=system_prompt,
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        cache_prefix_chars=prompt.cache_prefix_chars,
                     )
                     if not isinstance(repaired, dict):
                         # Interception removed: after one repair attempt, keep

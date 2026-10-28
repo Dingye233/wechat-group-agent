@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -7,7 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261028-54">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui7">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui7">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -84,18 +85,20 @@
 
   <!-- ============================== APP ============================== -->
   <div id="main-view" class="main-view" hidden>
-    <header class="topbar">
-      <div class="brand">
+    <aside class="app-sidebar" aria-label="侧边栏">
+      <div class="brand sidebar-brand">
         <span class="brand-mark" data-icon="logo"></span>
         <div><strong>群伴</strong><span>Group Agent</span></div>
       </div>
       <nav class="main-nav" aria-label="主导航">
-        <button class="nav-tab active" data-tab="chats"><span data-icon="chat"></span>会话</button>
-        <button class="nav-tab" data-tab="assistant"><span data-icon="sparkles"></span>助手</button>
-        <button class="nav-tab" data-tab="stickers"><span data-icon="smile"></span>表情包</button>
-        <button class="nav-tab" data-tab="settings"><span data-icon="settings"></span>设置</button>
+        <button class="nav-tab active" data-tab="chats"><span data-icon="chat"></span><span>会话</span></button>
+        <button class="nav-tab" data-tab="assistant"><span data-icon="sparkles"></span><span>助手</span></button>
+        <button class="nav-tab" data-tab="plugins"><span data-icon="plug"></span><span>插件</span></button>
+        <button class="nav-tab" data-tab="stickers"><span data-icon="smile"></span><span>表情包</span></button>
+        <button class="nav-tab" data-tab="settings"><span data-icon="settings"></span><span>设置</span></button>
       </nav>
-      <div class="topbar-right">
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-footer">
         <span class="ws-pill" id="ws-pill"><i></i><span id="ws-text">实时连接中</span></span>
         <div class="account-chip" id="account-chip">
           <span class="avatar avatar-sm" id="account-avatar">A</span>
@@ -103,9 +106,22 @@
         </div>
         <button id="logout-btn" class="icon-btn" title="退出登录"><span data-icon="logout"></span></button>
       </div>
-    </header>
+    </aside>
 
-    <main class="main-body">
+    <div class="app-main">
+      <header class="topbar">
+        <div class="topbar-heading">
+          <span class="eyebrow" id="page-eyebrow">WORKSPACE</span>
+          <h1 id="page-title">会话</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="cmd-trigger" id="command-trigger" type="button" title="搜索或跳转（Ctrl+K）">
+            <span data-icon="search"></span><span>搜索或跳转</span><kbd>Ctrl K</kbd>
+          </button>
+        </div>
+      </header>
+
+      <main class="main-body">
       <!-- CHATS -->
       <section class="tab-panel" id="tab-chats">
         <div class="workspace">
@@ -197,13 +213,18 @@
               <div><span class="eyebrow">AGENT</span><h2>群聊控制台</h2></div>
               <button class="icon-btn inspector-close" id="inspector-close" title="关闭"><span data-icon="close"></span></button>
             </div>
+            <div class="inspector-tabs" role="tablist">
+              <button type="button" class="active" data-inspector-tab="config">设置</button>
+              <button type="button" data-inspector-tab="tasks">任务</button>
+              <button type="button" data-inspector-tab="logs">动态</button>
+            </div>
             <div class="inspector-scroll">
               <div class="agent-summary" id="agent-summary">
                 <div class="agent-orb"><span data-icon="sparkles"></span></div>
                 <div><strong id="config-group-name">未选择群聊</strong><p id="config-mode-hint">选择群聊后可配置</p></div>
               </div>
 
-              <div class="config-section">
+              <div class="config-section" data-inspector-pane="config">
                 <div class="switch-row">
                   <div><strong>读取群消息</strong><small>关闭后不读取该群新消息，也不会自动回复</small></div>
                   <label class="switch"><input type="checkbox" id="cfg-read"><span></span></label>
@@ -257,12 +278,12 @@
                 <button class="btn btn-primary btn-wide" id="save-config-btn">保存本群配置</button>
               </div>
 
-              <div class="config-section logs-section">
+              <div class="config-section logs-section" data-inspector-pane="tasks" hidden>
                 <div class="section-title"><span>群聊任务</span><button class="text-btn" id="refresh-chat-tasks">刷新</button></div>
                 <div class="chat-task-list" id="chat-task-list"><p class="muted">暂无任务</p></div>
               </div>
 
-              <div class="config-section logs-section">
+              <div class="config-section logs-section" data-inspector-pane="logs" hidden>
                 <div class="section-title"><span>Agent 动态</span><button class="text-btn" id="refresh-logs">刷新</button></div>
                 <div class="config-logs" id="config-logs"><p class="muted">暂无运行记录</p></div>
               </div>
@@ -336,9 +357,10 @@
                 <button data-assistant-panel="contacts">联系人</button>
                 <button data-assistant-panel="bili">B站</button>
                 <button data-assistant-panel="capabilities">能力</button>
-                <button data-assistant-panel="opencode">OpenCode</button>
+                <button data-assistant-panel="dsh">DeepSeek Harness</button>
               </div>
 
+              <div class="assistant-side-body">
               <div class="assistant-panel" data-assistant-panel-body="workspace">
                 <div class="assistant-section-head"><strong>工作区</strong><button class="text-btn" id="assistant-refresh-files">刷新</button></div>
                 <p class="field-hint" id="assistant-workspace-path">读取中…</p>
@@ -500,28 +522,33 @@
                 <div class="capability-list" id="assistant-capability-list"></div>
               </div>
 
-              <div class="assistant-panel" data-assistant-panel-body="opencode" hidden>
-                <div class="assistant-section-head"><strong>官方 OpenCode</strong><button class="text-btn" id="opencode-refresh">刷新</button></div>
-                <p class="field-hint">Agent 决策由 GitHub 官方 OpenCode 运行时执行；下面的工具、插件和 MCP 都来自 OpenCode 本身。</p>
-                <p class="field-hint">模型 API 使用群伴「设置」里的 Base URL、API Key 和模型名。每个群伴用户配置自己的服务端 API，不使用 OpenCode 官方账号或内置 Key。</p>
-                <p class="field-hint" id="opencode-status-line">读取中…</p>
-                <label class="check-row"><input type="checkbox" id="opencode-enabled"><span>使用官方 OpenCode 作为 Operator 引擎</span></label>
+              <div class="assistant-panel" data-assistant-panel-body="dsh" hidden>
+                <div class="assistant-section-head"><strong>DeepSeek Harness</strong><button class="text-btn" id="dsh-refresh">刷新</button></div>
+                <p class="field-hint">群伴现在只有一套 Agent 运行时：DeepSeek Harness。wechatauto 负责读取微信消息和发送回复，DSH 原生插件提供微信/记忆/B站/技能工具。</p>
+                <p class="field-hint" id="dsh-status-line">读取中…</p>
+                <label class="check-row"><input type="checkbox" id="dsh-enabled"><span>启用 DeepSeek Harness 作为唯一 Agent 运行时</span></label>
                 <div class="assistant-inline">
-                  <button class="btn btn-ghost" id="opencode-restart">重启 OpenCode</button>
-                  <button class="btn btn-ghost" id="opencode-reset">重置当前会话</button>
+                  <label class="field-label" style="min-width:140px">更新渠道
+                    <select id="dsh-channel">
+                      <option value="stable">稳定版（rc）</option>
+                      <option value="alpha">Alpha（最新 tag）</option>
+                    </select>
+                  </label>
+                  <label class="field-label" style="min-width:160px">群聊回复
+                    <select id="dsh-group-chat-engine">
+                      <option value="dsh">DSH 原生回复（推荐）</option>
+                      <option value="legacy">内置生成（应急）</option>
+                    </select>
+                  </label>
+                  <button class="btn btn-ghost" id="dsh-check">检查更新</button>
+                  <button class="btn btn-primary" id="dsh-install">安装 / 更新</button>
+                  <button class="btn btn-ghost" id="dsh-stop">停止运行</button>
+                  <button class="btn btn-ghost" id="dsh-reset">重置当前会话</button>
                 </div>
-                <div class="assistant-section-head"><strong>OpenCode 任务</strong><span class="tool-meta" id="opencode-task-count">0</span><button class="text-btn" id="opencode-tasks-refresh">刷新</button></div>
-                <div class="opencode-task-list" id="opencode-task-list"><p class="muted">暂无 OpenCode 任务</p></div>
-                <div class="assistant-section-head"><strong>工具</strong><span class="tool-meta" id="opencode-tool-count">0</span></div>
-                <p class="field-hint">群伴原生工具清单由 OpenCode 管理；可以对话让 Agent 调用 <code>qunban_tool_admin</code> 新增别名、改描述、停用、删除或同步工具。要让 Agent 造真正的新功能，可在 <code>data/opencode/tools/</code> 写脚本，再用 <code>handler_type="script"</code> 注册。</p>
-                <div class="assistant-file-list" id="opencode-tool-list"></div>
-                <div class="assistant-section-head"><strong>插件</strong><span class="tool-meta" id="opencode-plugin-count">0</span></div>
-                <div class="assistant-file-list" id="opencode-plugin-list"></div>
-                <div class="assistant-section-head"><strong>OpenCode MCP 连接</strong></div>
-                <div class="assistant-file-list" id="opencode-mcp-list"></div>
-                <div class="assistant-section-head"><strong>群伴 MCP / 技能 / 接口</strong><span class="tool-meta" id="opencode-project-count">0</span></div>
-                <div class="assistant-file-list" id="opencode-qunban-projects"></div>
-                <p class="field-hint">插件目录：<code>data/opencode/plugins</code>；官方项目：<a href="https://github.com/anomalyco/opencode" target="_blank" rel="noreferrer">anomalyco/opencode</a></p>
+                <p class="field-hint" id="dsh-job-line"></p>
+                <div class="assistant-file-list" id="dsh-log"></div>
+                <p class="field-hint">运行时：<code>data/dsh/runtimes</code>；Harness home：<code>data/dsh/home</code>；源码/版本来源：<a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noreferrer">deepseek-ai/deepseek-harness</a></p>
+              </div>
               </div>
             </aside>
           </div>
@@ -529,6 +556,86 @@
       </section>
 
       <!-- STICKERS -->
+      <section class="tab-panel" id="tab-plugins" hidden>
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">PLUGIN STUDIO</span>
+              <h1>DSH 插件</h1>
+              <p>罗列 DeepSeek Harness 的内置插件、群伴原生插件和用户导入的插件。也可以让 DSH 按需求现场写一个新插件。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost" id="plugins-refresh"><span data-icon="refresh"></span>刷新目录</button>
+            </div>
+          </div>
+
+          <div class="plugin-stats" id="plugin-stats">
+            <div class="plugin-stat"><span>DSH 版本</span><strong id="plugin-stat-version">—</strong></div>
+            <div class="plugin-stat"><span>内置插件</span><strong id="plugin-stat-builtin">—</strong></div>
+            <div class="plugin-stat"><span>当前启用</span><strong id="plugin-stat-active">—</strong></div>
+            <div class="plugin-stat"><span>已安装 / 生成</span><strong id="plugin-stat-custom">—</strong></div>
+          </div>
+
+          <div class="plugin-layout">
+            <div class="plugin-main">
+              <div class="plugin-toolbar">
+                <label class="search-box search-box-wide"><span data-icon="search"></span><input id="plugin-search" placeholder="搜索插件名、ID 或说明"></label>
+                <div class="tag-row" id="plugin-categories"></div>
+                <label class="check-row plugin-active-only"><input type="checkbox" id="plugin-active-only"><span>只看启用</span></label>
+              </div>
+              <div class="plugin-catalog" id="plugin-catalog"></div>
+              <div class="empty-state" id="plugin-empty" hidden>
+                <span data-icon="plug"></span>
+                <h3>没有匹配的插件</h3>
+                <p>换个关键词，或者取消「只看启用」。</p>
+              </div>
+            </div>
+
+            <aside class="plugin-side">
+              <section class="plugin-card">
+                <div class="plugin-card-head"><strong>已安装</strong><span class="plugin-count" id="plugin-installed-count">0</span></div>
+                <div class="plugin-mini-list" id="plugin-installed"></div>
+                <p class="field-hint">群伴原生插件、导入包和生成插件都在这里。内置 DSH 插件是只读的。</p>
+              </section>
+
+              <section class="plugin-card">
+                <div class="plugin-card-head"><strong>导入插件</strong><span class="plugin-badge">npm / git / 本地</span></div>
+                <label class="field-label">包名或路径
+                  <input id="plugin-import-spec" placeholder="@scope/pkg、github:user/repo 或 C:\path\plugin">
+                </label>
+                <label class="check-row"><input type="checkbox" id="plugin-import-enabled" checked><span>导入后立即启用</span></label>
+                <button class="btn btn-primary plugin-wide" id="plugin-import-btn"><span data-icon="upload"></span>导入到 qunban profile</button>
+                <p class="field-hint">导入的插件会执行任意 JavaScript，只安装你信任的包。安装后下一次 DSH 任务生效。</p>
+              </section>
+
+              <section class="plugin-card plugin-create-card">
+                <div class="plugin-card-head"><strong>创造模式</strong><span class="plugin-badge accent">DSH 自扩展</span></div>
+                <div class="plugin-form-grid">
+                  <label class="field-label">插件名
+                    <input id="plugin-create-name" placeholder="例如 ticket-helper">
+                  </label>
+                  <label class="field-label">一句话说明
+                    <input id="plugin-create-desc" placeholder="这个插件帮群伴做什么">
+                  </label>
+                  <label class="field-label plugin-span-2">需求
+                    <textarea id="plugin-create-requirements" rows="3" placeholder="描述输入、输出、调用条件。DSH 会据此写 lib/index.js，并自检。"></textarea>
+                  </label>
+                </div>
+                <label class="check-row"><input type="checkbox" id="plugin-create-agent" checked><span>让 DSH 编写实现（较慢，但会按需求生成）</span></label>
+                <label class="check-row"><input type="checkbox" id="plugin-create-enabled" checked><span>生成后立即启用</span></label>
+                <button class="btn btn-primary plugin-wide" id="plugin-create-btn"><span data-icon="sparkles"></span>生成并安装</button>
+                <p class="field-hint">关闭「让 DSH 编写」会先生成一个可运行的示例插件，方便之后继续改。</p>
+              </section>
+
+              <section class="plugin-card plugin-job-card" id="plugin-job-card" hidden>
+                <div class="plugin-card-head"><strong id="plugin-job-title">任务</strong><span class="plugin-badge" id="plugin-job-status">running</span></div>
+                <div class="plugin-job-log" id="plugin-job-log"></div>
+              </section>
+            </aside>
+          </div>
+        </div>
+      </section>
+
       <section class="tab-panel" id="tab-stickers" hidden>
         <div class="page">
           <div class="page-head">
@@ -679,8 +786,27 @@
             <div><strong>当前是演示回复模式</strong><p>填写 API Key 并保存后，Agent 会调用真实大模型。现在也能体验完整的触发、消息与表情包流程。</p></div>
           </div>
 
+          <nav class="settings-nav" id="settings-nav" aria-label="设置分区">
+            <button type="button" class="active" data-settings-target="settings-model">模型接入</button>
+            <button type="button" data-settings-target="settings-behavior">运行行为</button>
+            <button type="button" data-settings-target="settings-memory">记忆</button>
+            <button type="button" data-settings-target="settings-prompts">提示词</button>
+            <button type="button" data-settings-target="settings-overview">数据与边界</button>
+          </nav>
+
+          <div class="settings-savebar">
+            <div class="settings-savebar-copy">
+              <strong>修改后需要保存</strong>
+              <span>模型、行为、记忆和提示词会一次性写入本机数据库。</span>
+            </div>
+            <div class="settings-savebar-actions">
+              <span class="inline-result" id="settings-save-result"></span>
+              <button class="btn btn-primary" id="save-settings-btn">保存全部设置</button>
+            </div>
+          </div>
+
           <div class="settings-grid">
-            <section class="surface form-card">
+            <section class="surface form-card" id="settings-model">
               <div class="card-head"><div><span class="eyebrow">MODEL</span><h2>模型接入</h2></div><span class="pill-soft">OpenAI Compatible</span></div>
               <div class="form-grid">
                 <label class="field field-span"><span>API Base URL</span><input id="set-base-url" placeholder="https://api.deepseek.com/v1" autocomplete="off"></label>
@@ -698,18 +824,18 @@
               </div>
             </section>
 
-            <section class="surface form-card">
+            <section class="surface form-card" id="settings-behavior">
               <div class="card-head"><div><span class="eyebrow">BEHAVIOR</span><h2>运行行为</h2></div></div>
               <div class="form-grid">
                 <label class="field"><span>默认触发方式</span><select id="set-default-trigger">
                   <option value="mention">@ 提及</option><option value="keyword">关键词</option><option value="all">所有消息</option>
                 </select></label>
                 <label class="field"><span>上下文消息条数</span><input type="number" id="set-context" min="4" max="50" value="18"></label>
-                <label class="field"><span>回复前基础延迟（秒）</span><input type="number" id="set-delay" min="0" max="10" step="0.1" value="2.5"></label>
-                <label class="field"><span>随机追加延迟（0–N 秒）</span><input type="number" id="set-delay-random" min="0" max="30" step="0.1" value="4"></label>
-                <label class="field"><span>跨群最小回复间隔（秒）</span><input type="number" id="set-global-interval" min="0" max="300" step="1" value="8"></label>
+                <label class="field"><span>回复前基础延迟（秒）</span><input type="number" id="set-delay" min="0" max="10" step="0.1" value="0.4"></label>
+                <label class="field"><span>随机追加延迟（0–N 秒）</span><input type="number" id="set-delay-random" min="0" max="30" step="0.1" value="0.9"></label>
+                <label class="field"><span>跨群最小回复间隔（秒）</span><input type="number" id="set-global-interval" min="0" max="300" step="1" value="3"></label>
                 <label class="field"><span>额外随机冷却（秒）</span><input type="number" id="set-cooldown-jitter" min="0" max="300" step="1" value="20"></label>
-                <label class="field"><span>默认读取间隔（秒）</span><input type="number" id="set-poll-interval" min="1" max="300" step="1" value="5"></label>
+                <label class="field"><span>默认读取间隔（秒）</span><input type="number" id="set-poll-interval" min="0.5" max="300" step="0.5" value="0.5"></label>
                 <label class="field field-span" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="set-media-download"><span>尝试下载图片/表情包（会短暂打开微信图片预览）</span></label>
                 <label class="field"><span>时区</span><select id="set-timezone"></select></label>
                 <label class="field field-span"><span>Bot 别名 <small>用于识别 @ 提及，逗号分隔</small></span><input id="set-aliases" placeholder="小助手, 助手, 群管家"></label>
@@ -727,11 +853,10 @@
                 <label class="field field-span"><span>微信 3.9 WeChat.exe 路径 <small>旧版界面自动化 / WeChatFerry 使用</small></span><input id="set-wcf-exe" placeholder="C:\Program Files\Tencent\WeChat\WeChat.exe"></label>
                 <div class="hint-box field-span"><span data-icon="info"></span><p>推荐使用「微信 PC 4.x（wechatauto-replica）」+ 微信 4.1.12 以上（本机已验证 4.1.15.13）。消息从本地数据库读取，微信在后台或最小化也能实时收消息；发送时短暂唤起微信。按 Alt+P（可改）立即暂停自动操作；暂停后必须回网页点击「重新接管」才会继续，并会校验、重发未成功送达的消息。旧版界面自动化需要微信 3.9.x，WeChatFerry 仅匹配 3.9.12.51。</p></div>
                 <div class="hint-box field-span"><span data-icon="info"></span><p>回复节奏：基础延迟 + 随机追加延迟；连续触发会合并为最新一条；跨群发送有最小间隔；每次回复后额外随机冷却；接近每小时上限时会随机降频。</p></div>
-                <div class="inline-actions field-span"><button class="btn btn-primary" id="save-settings-btn">保存全部设置</button><span class="inline-result" id="settings-save-result"></span></div>
               </div>
             </section>
 
-            <section class="surface form-card">
+            <section class="surface form-card" id="settings-memory">
               <div class="card-head"><div><span class="eyebrow">OPERATOR MEMORY</span><h2>Agent 记忆</h2></div></div>
               <div class="form-grid">
                 <label class="check-row field-span"><input type="checkbox" id="set-memory-enabled"><span>开启自动记忆（LLM 总结）</span></label>
@@ -759,7 +884,7 @@
               </div>
             </section>
 
-            <section class="surface form-card">
+            <section class="surface form-card" id="settings-prompts">
               <div class="card-head"><div><span class="eyebrow">PROMPTS</span><h2>提示词与人设</h2></div><span class="pill-soft">每轮注入</span></div>
               <div class="form-grid">
                 <label class="field field-span"><span>Operator 全局人设 <small>后台 Agent 和管理员私聊每次都会注入</small></span><textarea id="set-operator-persona" rows="4"></textarea></label>
@@ -773,7 +898,7 @@
               </div>
             </section>
 
-            <section class="surface form-card stats-card">
+            <section class="surface form-card stats-card" id="settings-overview">
               <div class="card-head"><div><span class="eyebrow">OVERVIEW</span><h2>数据概览</h2></div><button class="icon-btn" id="refresh-stats" title="刷新"><span data-icon="refresh"></span></button></div>
               <div class="stat-grid">
                 <div class="stat"><span id="stat-groups">0</span><small>群聊</small></div>
@@ -782,11 +907,12 @@
                 <div class="stat"><span id="stat-replies">0</span><small>Agent 回复</small></div>
               </div>
               <div class="stat-row"><span>本地数据库</span><b id="stat-db">—</b></div>
+              <div class="stat-row"><span>LLM 缓存命中（24h）</span><b id="stat-llm-cache">—</b></div>
               <div class="stat-row"><span>当前适配器</span><b id="settings-state">—</b></div>
               <div class="stat-row"><span>账号</span><b id="settings-account">—</b></div>
             </section>
 
-            <section class="surface notice-card">
+            <section class="surface notice-card" id="settings-notice">
               <div class="notice-icon"><span data-icon="shield"></span></div>
               <div>
                 <h2>使用边界</h2>
@@ -797,7 +923,8 @@
           </div>
         </div>
       </section>
-    </main>
+      </main>
+    </div>
   </div>
 
   <!-- ============================== DIALOGS ============================== -->
@@ -896,6 +1023,21 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261028-54" defer></script>
+  <dialog class="modal command-modal" id="command-dialog">
+    <div class="command-card">
+      <div class="command-search">
+        <span data-icon="search"></span>
+        <input id="command-input" placeholder="搜索页面、群聊或操作…" autocomplete="off">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="command-list" id="command-list"></div>
+      <div class="command-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 执行</span>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/app.js?v=20261029-ui7" defer></script>
 </body>
 </html>

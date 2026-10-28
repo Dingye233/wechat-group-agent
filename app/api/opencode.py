@@ -7,6 +7,8 @@ import logging
 import re
 import subprocess
 import sys
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,34 @@ from app.services.settings import get_settings
 
 logger = logging.getLogger("opencode.api")
 router = APIRouter(tags=["opencode"])
+
+# A DSH tool call can be retried after a timeout even though the first send
+# already reached wechatauto.  Remember successful sends per idempotency key so
+# a retry returns the original result instead of posting twice.
+_SEND_CACHE: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_SEND_CACHE_TTL = 600.0
+_SEND_TOOLS = {"send_message", "send_group_message", "send_contact_message"}
+
+
+def _cached_send(key: str) -> dict | None:
+    if not key:
+        return None
+    row = _SEND_CACHE.get(key)
+    if row is None:
+        return None
+    stamp, result = row
+    if time.time() - stamp > _SEND_CACHE_TTL:
+        _SEND_CACHE.pop(key, None)
+        return None
+    return {**result, "deduplicated": True}
+
+
+def _remember_send(key: str, result: dict) -> None:
+    if not key:
+        return
+    _SEND_CACHE[key] = (time.time(), dict(result))
+    while len(_SEND_CACHE) > 256:
+        _SEND_CACHE.popitem(last=False)
 
 
 def _runtime():
@@ -425,6 +455,15 @@ async def opencode_tool(
             }
         # Native alias: route to the underlying Qunban capability.
         name = str(entry.get("handler") or name)
+    client_msg_id = str((args or {}).get("client_msg_id") or "").strip()
+    cache_key = (
+        f"{scope}:{name}:{client_msg_id}"
+        if client_msg_id and name in _SEND_TOOLS
+        else ""
+    )
+    cached = _cached_send(cache_key)
+    if cached is not None:
+        return cached
     try:
         result = await service._tool_result(
             name,
@@ -437,4 +476,7 @@ async def opencode_tool(
     except Exception as exc:
         logger.warning("OpenCode 工具 %s 失败：%s", original_name, exc)
         return {"ok": False, "tool": original_name, "error": str(exc)}
-    return {"ok": True, "tool": original_name, "result": result}
+    payload_result = {"ok": True, "tool": original_name, "result": result}
+    if cache_key and not (isinstance(result, dict) and result.get("ok") is False):
+        _remember_send(cache_key, payload_result)
+    return payload_result

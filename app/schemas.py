@@ -113,11 +113,13 @@ class SettingsUpdate(BaseModel):
     reply_delay_random_seconds: float | None = Field(default=None, ge=0, le=30)
     reply_cooldown_jitter_seconds: float | None = Field(default=None, ge=0, le=300)
     reply_global_interval_seconds: float | None = Field(default=None, ge=0, le=300)
-    read_poll_interval_seconds: float | None = Field(default=None, ge=1, le=300)
+    read_poll_interval_seconds: float | None = Field(default=None, ge=0.5, le=300)
     read_media_download_enabled: bool | None = None
     memory_enabled: bool | None = None
     memory_engine: Literal["auto", "mem0", "sqlite"] | None = None
     mem0_collection: str | None = Field(default=None, max_length=120)
+    memory_search_timeout_seconds: float | None = Field(default=None, ge=0.3, le=8)
+    fast_chat_planner: bool | None = None
     memory_forgetting_enabled: bool | None = None
     memory_forgetting_days: int | None = Field(default=None, ge=7, le=3650)
     memory_summary_max_input_chars: int | None = Field(default=None, ge=1000, le=30000)
@@ -130,6 +132,10 @@ class SettingsUpdate(BaseModel):
     assistant_max_tokens: int | None = Field(default=None, ge=128, le=3000)
     assistant_shell_timeout: int | None = Field(default=None, ge=5, le=600)
     opencode_enabled: bool | None = None
+    group_chat_engine: Literal["dsh", "legacy"] | None = None
+    operator_engine: Literal["opencode", "dsh"] | None = None
+    dsh_enabled: bool | None = None
+    dsh_channel: Literal["stable", "alpha"] | None = None
     tray_close_action: Literal["tray", "exit"] | None = None
     takeover_hotkey: str | None = Field(default=None, max_length=40)
     auto_retry_failed_sends: bool | None = None

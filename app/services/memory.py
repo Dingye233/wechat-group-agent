@@ -338,6 +338,8 @@ async def summarize_group_memories(
             temperature=0.2,
             max_tokens=max_tokens,
             json_mode=True,
+            call_site="memory.summary",
+            cache_prefix_chars=len(MEMORY_SYSTEM),
         )
     except LLMError as exc:
         return {"error": str(exc)}

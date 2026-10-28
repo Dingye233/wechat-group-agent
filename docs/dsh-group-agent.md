@@ -1,5 +1,7 @@
 # DeepSeek Harness 用于群聊 Agent 的评估
 
+> **历史文档，已被 [DSH.md](DSH.md) 替代。** 当前实现已经用 `qunban-chat` 无工具 profile 接入群聊回复，wechatauto 作为消息源/发送端；不再采用本文建议的双通道。
+
 结论：**技术上可以接入，但不建议把每条群聊短回复都替换成 DSH。**
 更合适的是“双通道”：普通群聊继续走当前轻量 AgentEngine，复杂工具任务/Operator 走官方 DeepSeek Harness。
 

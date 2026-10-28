@@ -1,14 +1,61 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
 import httpx
 
+from app.services.llm_usage import record_usage
+
+logger = logging.getLogger(__name__)
+
 
 class LLMError(RuntimeError):
     pass
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def cache_hit_tokens(usage: dict[str, Any], prompt_tokens: int) -> int:
+    """Read the provider's prompt-cache hit count.
+
+    DeepSeek exposes ``prompt_cache_hit_tokens``; OpenAI-compatible gateways
+    usually expose ``prompt_tokens_details.cached_tokens``. Both are supported
+    so the dashboard keeps working if the provider changes.
+    """
+    details = usage.get("prompt_tokens_details")
+    input_details = usage.get("input_tokens_details")
+    candidates = [
+        usage.get("prompt_cache_hit_tokens"),
+        usage.get("cache_hit_tokens"),
+        details.get("cached_tokens") if isinstance(details, dict) else None,
+        (
+            input_details.get("cached_tokens")
+            if isinstance(input_details, dict)
+            else None
+        ),
+    ]
+    for value in candidates:
+        hit = _as_int(value)
+        if hit > 0:
+            return min(hit, prompt_tokens) if prompt_tokens else hit
+    return 0
+
+
+def cache_miss_tokens(
+    usage: dict[str, Any], prompt_tokens: int, hit_tokens: int
+) -> int:
+    miss = _as_int(usage.get("prompt_cache_miss_tokens"))
+    if miss > 0:
+        return miss
+    return max(prompt_tokens - hit_tokens, 0)
 
 
 class LLMService:
@@ -38,6 +85,9 @@ class LLMService:
         temperature: float = 0.8,
         max_tokens: int = 300,
         json_mode: bool = True,
+        call_site: str = "generic",
+        cache_prefix_chars: int = 0,
+        messages: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not api_key:
             raise LLMError("未配置 API Key")
@@ -49,7 +99,8 @@ class LLMService:
             url += "/chat/completions"
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [
+            "messages": messages
+            or [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
@@ -65,29 +116,79 @@ class LLMService:
         }
 
         started = time.perf_counter()
+
+        def report_usage(
+            *,
+            prompt_tokens: int = 0,
+            completion_tokens: int = 0,
+            usage: dict[str, Any] | None = None,
+            ok: bool,
+        ) -> dict[str, int]:
+            usage = usage or {}
+            prompt = prompt_tokens or _as_int(usage.get("prompt_tokens"))
+            hit = cache_hit_tokens(usage, prompt) if usage else 0
+            miss = cache_miss_tokens(usage, prompt, hit) if usage else 0
+            latency = int((time.perf_counter() - started) * 1000)
+            record_usage(
+                call_site=call_site,
+                model=model,
+                prompt_tokens=prompt,
+                completion_tokens=completion_tokens
+                or _as_int(usage.get("completion_tokens")),
+                cache_hit_tokens=hit,
+                cache_miss_tokens=miss,
+                latency_ms=latency,
+                cache_prefix_chars=cache_prefix_chars,
+                ok=ok,
+            )
+            if prompt:
+                logger.debug(
+                    "LLM %s model=%s prompt=%d cache_hit=%d (%.0f%%) latency=%dms",
+                    call_site,
+                    model,
+                    prompt,
+                    hit,
+                    (hit / prompt) * 100,
+                    latency,
+                )
+            return {
+                "prompt_tokens": prompt,
+                "completion_tokens": completion_tokens,
+                "cache_hit_tokens": hit,
+                "cache_miss_tokens": miss,
+                "cache_hit_rate": round(hit / prompt, 4) if prompt else 0.0,
+            }
+
         try:
             response = await self._client.post(url, json=payload, headers=headers)
             if response.status_code in (400, 422) and json_mode:
                 # Some compatible providers do not support response_format.
                 payload.pop("response_format", None)
-                response = await self._client.post(url, json=payload, headers=headers)
+                response = await self._client.post(
+                    url, json=payload, headers=headers
+                )
         except httpx.TimeoutException as exc:
+            report_usage(ok=False)
             raise LLMError("模型响应超时，请稍后重试") from exc
         except httpx.HTTPError as exc:
+            report_usage(ok=False)
             raise LLMError(f"无法连接模型服务：{exc}") from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         if response.status_code >= 400:
+            report_usage(ok=False)
             detail = self._short_error(response)
             raise LLMError(self._friendly_error(response.status_code, detail))
 
         try:
             data = response.json()
         except ValueError as exc:
+            report_usage(ok=False)
             raise LLMError("模型服务返回了非 JSON 响应") from exc
 
         choices = data.get("choices") or []
         if not choices:
+            report_usage(ok=False)
             raise LLMError("模型没有返回候选结果")
         message = choices[0].get("message") or {}
         content = message.get("content", "")
@@ -97,16 +198,21 @@ class LLMService:
                 for part in content
             )
         content = str(content or "").strip()
+        usage = data.get("usage") or {}
+        stats = report_usage(usage=usage, ok=bool(content))
         if not content:
             raise LLMError("模型返回了空内容")
 
-        usage = data.get("usage") or {}
         return {
             "content": content,
             "model": data.get("model") or model,
             "latency_ms": latency_ms,
-            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "prompt_tokens": stats["prompt_tokens"],
+            "completion_tokens": stats["completion_tokens"],
+            "total_tokens": stats["prompt_tokens"] + stats["completion_tokens"],
+            "cache_hit_tokens": stats["cache_hit_tokens"],
+            "cache_miss_tokens": stats["cache_miss_tokens"],
+            "cache_hit_rate": stats["cache_hit_rate"],
         }
 
     async def complete_json(self, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -132,6 +238,7 @@ class LLMService:
             temperature=0.1,
             max_tokens=32,
             json_mode=False,
+            call_site="settings.test",
         )
         return {
             "ok": True,

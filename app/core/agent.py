@@ -23,7 +23,11 @@ from app.services.impressions import (
     impression_prompt,
     update_impression,
 )
-from app.services.llm import LLMError, LLMService
+from app.services.llm import LLMError, LLMService, parse_json_object
+from app.services.prompting import (
+    build_group_proactive_prompt,
+    build_group_reply_prompt,
+)
 from app.services.serializers import agent_log_dict
 from app.services.settings import get_settings
 from app.services.stickers import resolve_sticker, sticker_prompt_catalog
@@ -37,6 +41,64 @@ TRIGGER_LABELS = {
     "all": "所有消息",
 }
 MAX_REPLY_CHARS = 600
+# Short casual messages do not need the intent-planner LLM call.  Keeping this
+# heuristic conservative avoids mis-routing tasks that need tools.
+FAST_CHAT_MAX_CHARS = 50
+FAST_CHAT_EXCLUDE = (
+    "?",
+    "？",
+    "查",
+    "搜",
+    "找",
+    "帮我",
+    "帮忙",
+    "看一",
+    "看下",
+    "看看",
+    "发",
+    "做",
+    "写",
+    "生成",
+    "下载",
+    "运行",
+    "打开",
+    "登录",
+    "安装",
+    "部署",
+    "修复",
+    "改",
+    "整理",
+    "分析",
+    "计算",
+    "统计",
+    "总结",
+    "翻译",
+    "表格",
+    "excel",
+    "ppt",
+    "文档",
+    "天气",
+    "新闻",
+    "视频",
+    "推荐",
+    "知识库",
+    "提醒",
+    "定时",
+    "继续",
+    "接着",
+    "停止",
+    "取消",
+    "opencode",
+    "后台",
+    "点检",
+    "住址",
+    "身份证",
+    "手机号",
+    "个人信息",
+    "查人",
+    "转账",
+    "借钱",
+)
 
 
 class AgentEngine:
@@ -213,6 +275,8 @@ class AgentEngine:
                 temperature=0.1,
                 max_tokens=420,
                 json_mode=True,
+                call_site="group.intent",
+                cache_prefix_chars=len(system_prompt),
             )
         except LLMError:
             return self._fallback_plan(message, config, tools)
@@ -348,6 +412,30 @@ class AgentEngine:
             "opencode_brief": brief,
             "source": "planner",
         }
+
+    def _is_fast_chat(self, message: Message) -> bool:
+        """True when a short message is safe to answer without the planner."""
+        text = str(message.content or "").strip()
+        if not text or len(text) > FAST_CHAT_MAX_CHARS:
+            return False
+        lower = text.lower()
+        if any(hint in lower for hint in FAST_CHAT_EXCLUDE):
+            return False
+        if self._wants_opencode(text) or self._wants_file_research(text):
+            return False
+        return True
+
+    @staticmethod
+    def _reply_delay(settings: dict[str, Any], coalesce_wait: float) -> float:
+        """Human-like pause, minus the burst window that already elapsed."""
+        base = float(settings.get("reply_delay_seconds") or 0)
+        extra = float(settings.get("reply_delay_random_seconds") or 0)
+        return max(
+            0.0,
+            base
+            + random.uniform(0.0, max(extra, 0.0))
+            - max(0.0, float(coalesce_wait or 0)),
+        )
 
     @staticmethod
     def _wants_file_research(text: str) -> bool:
@@ -916,16 +1004,16 @@ class AgentEngine:
         from app.services.assistant_tools import workspace_root
         from app.services.opencode_agent import WORKSPACE
 
-        return f"""你是群伴的「后台执行器」，由 OpenCode 运行。群伴 Agent 已经把复杂任务转交给你。
+        return f"""你是群伴的「后台执行器」，由 DeepSeek Harness 原生 tool calling 运行。群伴 Agent 已经把复杂任务转交给你。
 - 你的工作区：{WORKSPACE}
 - 群伴工作区：{workspace_root()}
-- 你可以写脚本、运行命令、读写文件、使用 OpenCode 原生工具和 qunban_* MCP 工具，也可以使用现有 skills/projects。
+- 文件操作用 DSH 原生 read/write/edit/glob/grep；命令用 qunban_powershell；技能用 qunban_run_skill；MCP 项目用 qunban_run_mcp。
+- 不要用 shell、键盘、鼠标、UIA 或任何脚本操作微信窗口或发送微信消息；最终统一由群伴 Agent 通过 wechatauto-replica 发送。
 - 运行 Python 项目脚本时优先用：{sys.executable}（已安装项目依赖，包括 openpyxl）。
 - 如果任务是优化已有 Excel，先在 `data/agent_workspace/exports/` 找最新的相关文件，改好后写到：{output_dir}
 - 需要生成新文件时写到：{output_dir}
 - 如果用户要求“放到桌面/保存到桌面”，最终文件要同时复制到桌面和输出目录；群伴只会自动发送输出目录里的文件。
-- 不要直接给群友发消息，不要操作微信窗口；群伴 Agent 会统一发送结果。
-- 遇到权限确认或选择题，群伴 Agent 会自动确认；你按最合理的方案继续，不要停下来反复追问。
+- 遇到权限确认或选择题直接按最合理方案继续，不要反复追问。
 - 最终说明实际做了什么、结果、文件路径、未完成项；不要声称未执行的事情。
 - 给群友的最终答复要短、自然，不要贴绝对路径或内部目录，文件会自动附带。
 """
@@ -944,7 +1032,12 @@ class AgentEngine:
         impression: dict[str, Any],
         reason: str = "",
     ) -> None:
+        from app.services.agent_engines import engine_label, resolve_agent_engine
+        from app.services.dsh_agent import DSHError, get_dsh_agent_runtime
         from app.services.opencode_agent import OpenCodeError, get_opencode_runtime
+
+        engine = resolve_agent_engine(settings)
+        label = engine_label(engine)
 
         output_dir = (
             Path(__file__).resolve().parents[2]
@@ -965,14 +1058,22 @@ class AgentEngine:
             reason=reason,
         )
         system_prompt = self._opencode_task_system_prompt(output_dir)
-        session_id = f"group-task-{task_id}-{getattr(message, 'id', 0) or 0}"
+        if engine == "dsh":
+            system_prompt += (
+                "\n\n# 群伴工具名\n"
+                "微信读取、记忆、B站、接口和技能都通过群伴原生工具调用："
+                "`wechat_read_group`、`qunban_memory_search`、`qunban_bili_search`、"
+                "`qunban_call_interface`、`qunban_run_skill`。"
+                "不要输出 JSON 动作协议，也不要尝试直接操作微信窗口。"
+            )
+        session_id = f"group-{group.id}"
 
         async with SessionLocal() as db:
             row = await db.get(ChatTask, task_id)
             if row is not None:
                 row.plan = {
                     **(row.plan or {}),
-                    "engine": "opencode",
+                    "engine": engine,
                     "output_dir": str(output_dir),
                     "opencode_reason": reason,
                 }
@@ -1019,12 +1120,17 @@ class AgentEngine:
 
         await self._log(
             group.id,
-            "opencode",
-            f"任务 #{task_id} 转交 OpenCode：{reason or '复杂任务'}",
+            engine,
+            f"任务 #{task_id} 转交 {label}：{reason or '复杂任务'}",
             level="info",
         )
 
-        runtime = get_opencode_runtime()
+        runtime = (
+            get_dsh_agent_runtime() if engine == "dsh" else get_opencode_runtime()
+        )
+        extra: dict[str, Any] = (
+            {"scope": "group", "group_id": group.id} if engine == "dsh" else {}
+        )
         result: dict[str, Any] = {}
         try:
             result = await runtime.chat(
@@ -1034,10 +1140,12 @@ class AgentEngine:
                 settings=settings,
                 progress=on_progress,
                 timeout=1800.0,
+                call_site=f"{engine}.group_task",
+                **extra,
             )
-        except OpenCodeError as exc:
+        except (OpenCodeError, DSHError) as exc:
             await self._update_chat_task(
-                task_id, "error", error=f"OpenCode 执行失败：{exc}"
+                task_id, "error", error=f"{label} 执行失败：{exc}"
             )
             await self._send_task_notice(
                 group.id,
@@ -1046,7 +1154,7 @@ class AgentEngine:
             return
         except Exception as exc:
             await self._update_chat_task(
-                task_id, "error", error=f"OpenCode 执行异常：{exc}"
+                task_id, "error", error=f"{label} 执行异常：{exc}"
             )
             await self._send_task_notice(
                 group.id,
@@ -1069,8 +1177,8 @@ class AgentEngine:
         if result.get("timed_out") or (result.get("error") and not reply):
             await self._log(
                 group.id,
-                "opencode",
-                "OpenCode 超时或中断，继续一次",
+                engine,
+                f"{label} 超时或中断，继续一次",
                 level="warn",
             )
             try:
@@ -1082,11 +1190,13 @@ class AgentEngine:
                     settings=settings,
                     progress=on_progress,
                     timeout=1800.0,
+                    call_site=f"{engine}.group_task",
+                    **extra,
                 )
                 reply = str(result.get("reply") or "").strip()
             except Exception as exc:
                 await self._update_chat_task(
-                    task_id, "error", error=f"OpenCode 继续执行失败：{exc}"
+                    task_id, "error", error=f"{label} 继续执行失败：{exc}"
                 )
                 await self._send_task_notice(
                     group.id,
@@ -1096,7 +1206,7 @@ class AgentEngine:
 
         if not reply:
             await self._update_chat_task(
-                task_id, "error", error="OpenCode 没有返回结果"
+                task_id, "error", error=f"{label} 没有返回结果"
             )
             await self._send_task_notice(
                 group.id,
@@ -1165,6 +1275,7 @@ class AgentEngine:
     async def _handle(self, group_id: int, message_id: int) -> None:
         if self.runtime.detached:
             return
+        handle_started = time.perf_counter()
         async with SessionLocal() as db:
             message = await db.get(Message, message_id)
             group = await db.get(Group, group_id)
@@ -1197,9 +1308,10 @@ class AgentEngine:
             str(message.sender_wxid or message.sender_name or message.id),
         )
         self._latest_trigger[trigger_key] = message_id
-        # Short burst-coalescing window. The previous 1.0-2.5s window made a
-        # normal group reply feel noticeably delayed.
-        await asyncio.sleep(random.uniform(0.3, 0.9))
+        # Short burst-coalescing window. The old 0.3-0.9s window was added on
+        # top of the reply delay, so a normal group reply waited twice.
+        coalesce_wait = random.uniform(0.15, 0.4)
+        await asyncio.sleep(coalesce_wait)
         if self._latest_trigger.get(trigger_key) != message_id:
             return
 
@@ -1226,16 +1338,25 @@ class AgentEngine:
                         str(message.sender_wxid or ""),
                         self.runtime.account_key or "",
                     )
-                    plan = await self._plan_intent(
-                        message,
-                        group,
-                        config,
-                        settings,
-                        context,
-                        memory_text,
-                        impression,
-                        tool_payload,
-                        bili_context,
+                    plan = (
+                        self._fallback_plan(
+                            message,
+                            config,
+                            tool_payload.get("tools") or [],
+                        )
+                        if settings.get("fast_chat_planner", True)
+                        and self._is_fast_chat(message)
+                        else await self._plan_intent(
+                            message,
+                            group,
+                            config,
+                            settings,
+                            context,
+                            memory_text,
+                            impression,
+                            tool_payload,
+                            bili_context,
+                        )
                     )
                     if not settings.get("llm_api_key"):
                         plan["need_tools"] = False
@@ -1276,6 +1397,7 @@ class AgentEngine:
                 else:
                     plan = {}
 
+            plan_finished = time.perf_counter()
             if message is None or self.runtime.detached:
                 return
             if not plan.get("should_reply", True):
@@ -1304,9 +1426,7 @@ class AgentEngine:
                 self._start_chat_task(int(task["id"]))
                 return
             self.runtime.emit_typing(group_id)
-            base_delay = float(settings.get("reply_delay_seconds") or 0)
-            random_delay = float(settings.get("reply_delay_random_seconds") or 0)
-            delay = max(0.0, base_delay + random.uniform(0.0, random_delay))
+            delay = self._reply_delay(settings, coalesce_wait)
             if delay > 0:
                 await asyncio.sleep(delay)
 
@@ -1327,22 +1447,55 @@ class AgentEngine:
                     return
 
                 if settings.get("llm_api_key"):
-                    reply_data, meta = await self._generate_llm(
-                        message,
-                        group,
-                        config,
-                        settings,
-                        context,
-                        members,
-                        stickers,
-                        memory_text,
-                        plan=plan,
-                        impression=impression,
-                    )
+                    if str(settings.get("group_chat_engine") or "dsh") == "dsh":
+                        try:
+                            reply_data, meta = await self._generate_dsh_chat(
+                                message,
+                                group,
+                                config,
+                                settings,
+                                context,
+                                memory_text,
+                                plan=plan,
+                                impression=impression,
+                            )
+                        except Exception as exc:
+                            await self._log(
+                                group_id,
+                                "warn",
+                                f"DSH 群聊回复失败，回退内置链路：{exc}",
+                                level="warn",
+                            )
+                            reply_data, meta = await self._generate_llm(
+                                message,
+                                group,
+                                config,
+                                settings,
+                                context,
+                                members,
+                                stickers,
+                                memory_text,
+                                plan=plan,
+                                impression=impression,
+                            )
+                    else:
+                        reply_data, meta = await self._generate_llm(
+                            message,
+                            group,
+                            config,
+                            settings,
+                            context,
+                            members,
+                            stickers,
+                            memory_text,
+                            plan=plan,
+                            impression=impression,
+                        )
                 else:
                     reply_data, meta = self._generate_demo(
                         message, config, stickers
                     )
+                llm_finished = time.perf_counter()
                 if reply_data is None:
                     return
 
@@ -1389,6 +1542,7 @@ class AgentEngine:
                         return
                     sent_any = False
                     sticker_count = 0
+                    send_started = time.perf_counter()
                     for index, segment in enumerate(segments):
                         if index:
                             await asyncio.sleep(random.uniform(0.7, 1.5))
@@ -1429,12 +1583,28 @@ class AgentEngine:
                         + random.uniform(0.0, max(cooldown_jitter, 0.0))
                     )
                 sticker_part = f"｜表情：{sticker_count} 个" if sticker_count else ""
+                end_to_end_ms = 0
+                if message.created_at is not None:
+                    end_to_end_ms = int(
+                        (
+                            datetime.now(timezone.utc).replace(tzinfo=None)
+                            - message.created_at
+                        ).total_seconds()
+                        * 1000
+                    )
+                timing = (
+                    f"｜阶段：前置 {int((plan_finished - handle_started) * 1000)}ms"
+                    f" / 生成 {int((llm_finished - plan_finished) * 1000)}ms"
+                    f" / 发送 {int((time.perf_counter() - send_started) * 1000)}ms"
+                    f" / 端到端 {max(end_to_end_ms, 0)}ms"
+                )
                 await self._log(
                     group_id,
                     "reply",
                     f"回复：{(reply_text or '仅表情')[:80]}{sticker_part}｜"
                     f"消息：{len(segments)} 条｜模型：{meta.get('model', '—')}"
-                    f"｜耗时：{meta.get('latency_ms', 0)}ms",
+                    f"｜模型耗时：{meta.get('latency_ms', 0)}ms"
+                    f"{timing}",
                 )
 
     # ------------------------------------------------------------------ trigger
@@ -1658,7 +1828,9 @@ class AgentEngine:
                 query=query,
                 limit=max(1, int(settings.get("memory_context_items") or 8)),
                 group_id=group_id,
-                timeout=4.0,
+                timeout=float(
+                    settings.get("memory_search_timeout_seconds") or 1.5
+                ),
             )
             template = str(
                 settings.get("memory_prompt_template")
@@ -1784,41 +1956,25 @@ class AgentEngine:
                 if config.sticker_enabled
                 else "（本群已关闭表情包发送）"
             )
-            message_limit = max(2, min(6, int(config.max_messages or 3)))
-            format_line = (
-                '{"action":"reply","messages":[{"text":"..."},{"sticker":3}]}'
-                if config.multi_message_enabled
-                else '{"action":"reply","reply":"...","sticker":3}'
+            timezone_name = str(settings.get("timezone") or "Asia/Shanghai")
+            now_local = datetime.now(ZoneInfo(timezone_name)).strftime(
+                "%Y-%m-%d %H:%M"
             )
-            multi_line = (
-                f"可以拆成 1–{message_limit} 条短消息，表情包穿插在文字之间。"
-                if config.multi_message_enabled
-                else "通常 1 条，最多 1 个表情包。"
+            prompt = build_group_proactive_prompt(
+                persona=persona,
+                group_name=group.name or "",
+                bot_name=self.runtime.bot_name or "",
+                now_local=now_local,
+                timezone=timezone_name,
+                members=members,
+                sticker_catalog=sticker_catalog,
+                sticker_enabled=bool(config.sticker_enabled),
+                extra_prompt=str(settings.get("group_prompt_extra") or "").strip(),
+                multi_message_enabled=bool(config.multi_message_enabled),
+                max_messages=int(config.max_messages or 3),
+                memory_text=memory_text,
             )
-            proactive_extra = (
-                str(settings.get("group_prompt_extra") or "").strip() or "无"
-            )
-            system_prompt = f"""{persona}
-
-# 群聊信息
-- 群名：{group.name or '未知群聊'}
-- 你的名字：{self.runtime.bot_name or '小助手'}
-- 群成员昵称参考：{'、'.join(members[:30]) or '暂未同步'}
-- 长期记忆：
-{memory_text or '无'}
-
-# 任务
-群聊已经安静了一段时间。请你主动发起一个自然、轻松、和最近话题相关的新话题，像群友一样接话，不要像客服问候，也不要总结聊天记录。
-{multi_line}
-不要编造事实；只输出一个 JSON：
-{format_line}
-{{"action":"none"}}
-
-# 用户自定义提示词（高优先级，必须遵守）
-{proactive_extra}
-
-# 可用表情包
-{sticker_catalog}"""
+            system_prompt = prompt.system
             user_prompt = f"""最近群聊记录（从早到晚）：
 {chr(10).join(context)}
 
@@ -1833,6 +1989,8 @@ class AgentEngine:
                     temperature=float(settings.get("llm_temperature") or 0.8),
                     max_tokens=int(settings.get("llm_max_tokens") or 300),
                     json_mode=bool(settings.get("llm_json_mode", True)),
+                    call_site="group.proactive",
+                    cache_prefix_chars=prompt.cache_prefix_chars,
                 )
             except LLMError as exc:
                 await self._log(
@@ -1883,6 +2041,94 @@ class AgentEngine:
                 )
                 await self._log(group_id, "proactive", "Agent 主动发起了一条消息")
 
+    async def _generate_dsh_chat(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str = "",
+        *,
+        plan: dict[str, Any] | None = None,
+        impression: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Generate a group reply with the DSH chat profile.
+
+        wechatauto is the message source/sink; this method only turns the
+        already-read message into a reply.  The DSH profile has no tools, so the
+        model cannot accidentally operate WeChat or wander into shell commands.
+        """
+        from app.services.dsh_agent import get_dsh_agent_runtime
+
+        persona = (config.persona or settings.get("default_persona") or "").strip()
+        sticker_catalog = (
+            sticker_prompt_catalog(stickers)
+            if (stickers := await self._load_sticker_catalog_current(config))
+            else "（本群已关闭表情包发送）"
+        )
+        format_line = (
+            '{"action":"reply","messages":[{"text":"..."},{"sticker":3}]}'
+            if config.multi_message_enabled
+            else '{"action":"reply","reply":"...","sticker":3}'
+        )
+        system_prompt = f"""你是微信群「{group.name or '群聊'}」里的「{self.runtime.bot_name or '小助手'}」。
+# 人设
+{persona or '自然、简短、有温度，像群友一样接话。'}
+# 规则
+- 只回复最后一条消息，像真人聊天；通常 1-2 句，最多 80 个汉字。
+- 不要复述或总结整段聊天；不要输出 Markdown、工具名、分析过程或 JSON 字段名。
+- 不确定的事实不要编造；涉及隐私、金钱、承诺时谨慎。
+- 不要答应替人跑腿、催办、操作账号、发消息或做任何需要工具/线下行动的事；这类请求只做礼貌回应，明确说需要本人处理。
+- 需要工具或复杂任务时，先用一句自然话承接，后台会处理结果。
+- 表情包只在确实贴合语境时使用；不要每条都发。
+# 输出协议
+只输出一个 JSON 对象，不要输出 Markdown：
+{format_line}
+{{"action":"none"}}
+sticker 填表情包 id、名称或标签，也可为 null。
+# 可用表情包
+{sticker_catalog}"""
+        plan = plan or {}
+        user_prompt = f"""最近群聊（从早到晚）：
+{chr(10).join(context[-10:])}
+
+长期记忆（参考，不要机械复述）：
+{memory_text or '无'}
+
+意图参考：{plan.get('intent', 'chat')}；用户情绪：{plan.get('user_emotion', 'neutral')}。
+请回复最后一条消息，输出 JSON。"""
+        runtime = get_dsh_agent_runtime()
+        result = await runtime.chat(
+            user_prompt,
+            session_id=f"chat-{group.id}",
+            system_prompt=system_prompt,
+            settings=settings,
+            timeout=45.0,
+            scope="chat",
+            call_site="dsh.group_chat",
+        )
+        content = str(result.get("reply") or "").strip()
+        data = parse_json_object(content)
+        if not isinstance(data, dict):
+            data = {"action": "reply", "reply": content}
+        action = str(data.get("action") or "reply").lower()
+        if action == "none":
+            data = {"action": "none"}
+        meta = {
+            "model": result.get("model") or "dsh",
+            "latency_ms": result.get("latency_ms") or 0,
+            "source": "dsh",
+            "prompt_tokens": result.get("prompt_tokens") or 0,
+            "completion_tokens": result.get("completion_tokens") or 0,
+            "cache_hit_tokens": result.get("cache_hit_tokens") or 0,
+        }
+        return data, meta
+
+    async def _load_sticker_catalog_current(self, config: GroupConfig) -> list[Sticker]:
+        async with SessionLocal() as db:
+            return await self._load_sticker_catalog(db, config)
+
     async def _generate_llm(
         self,
         message: Message,
@@ -1905,9 +2151,8 @@ class AgentEngine:
             if config.sticker_enabled
             else "（本群已关闭表情包发送）"
         )
-        now_local = datetime.now(
-            ZoneInfo(str(settings.get("timezone") or "Asia/Shanghai"))
-        ).strftime("%Y-%m-%d %H:%M")
+        timezone_name = str(settings.get("timezone") or "Asia/Shanghai")
+        now_local = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
         plan = plan or {
             "should_reply": True,
             "intent": "chat",
@@ -1957,8 +2202,9 @@ class AgentEngine:
                     ensure_ascii=False,
                 )
             )
-        tool_section = ""
-        if use_tools:
+        tool_example = ""
+        bili_hint = ""
+        if group_tools:
             tool_names = {str(item.get("name") or "") for item in group_tools}
             tool_example = json.dumps(
                 {
@@ -1969,130 +2215,45 @@ class AgentEngine:
                 },
                 ensure_ascii=False,
             )
-            bili_hint = ""
             if tool_names & {"bili_knowledge_search", "bili_last_opinion"}:
                 bili_hint = (
                     "\n如果用户问你看过/学到了什么、最近对视频的看法，"
                     "必须先调用 bili_knowledge_search 或 bili_last_opinion；"
                     "没有 OBSERVATION 时不要编造具体视频、作者或评论内容。"
                 )
-            tool_section = f"""
-
-# 已启用的群聊工具（只有这些能调用）
-{chr(10).join(tool_lines)}
-已启用资源：{'、'.join(resources) or '无'}
-
-# 工具协议
-当你确实需要工具时，输出：
-{tool_example}{api_example}
-工具结果会以 OBSERVATION 返回，然后你再决定回复或继续调用。
-参数键必须与工具列表完全一致；如果 OBSERVATION 以 ERROR 开头，先修正参数重试，不要编造结果。
-群聊里不要调用屏幕、鼠标、键盘、终端、沙箱或任意路径读写工具；只允许调用上面列出的群聊安全工具。create_excel 只生成表格，不会读取本地文件；生成后会自动把文件发到群里。
-不要假装调用过工具；没有拿到 OBSERVATION 就不能声称完成。{bili_hint}"""
-        multi_rules = ""
-        multi_format = '{"action": "reply", "reply": "要发送的文字，可为空", "sticker": 3}'
-        if config.multi_message_enabled:
-            message_limit = max(2, min(6, int(config.max_messages or 3)))
-            multi_rules = (
-                f"- 可以像真人一样连续发 1–{message_limit} 条短消息，每条 1–2 句；"
-                "表情包可以穿插在文字之间。\n"
-            )
-            multi_format = (
-                '{"action": "reply", "messages": '
-                '[{"text": "第一句"}, {"sticker": 3}, {"text": "第二句"}]}'
-            )
-        group_info = f"""# 群聊信息
-- 群名：{group.name or '未知群聊'}
-- 你的名字：{self.runtime.bot_name or '小助手'}
-- 当前时间：{now_local}（{settings.get('timezone')}）
-- 触发方式：{trigger_label}
-- 群成员昵称参考：{'、'.join(members[:30]) or '暂未同步'}"""
-        memory_block = f"""# 长期记忆（每次对话自动注入）
-以下是过去总结的群聊记忆，可作为背景参考；不要机械复述，也不要编造记忆里没有的内容：
-{memory_text or '无'}"""
         bili_context = await self._load_bili_context()
-        bili_block = (
-            f"""# 最近看过的 B站内容（背景资料，不是新消息）
-{ bili_context }
-以上只用于回答“你看了什么/学到了什么”；不要把它当成当前群聊的新消息。"""
-            if bili_context
-            else ""
+        prompt = build_group_reply_prompt(
+            persona=persona,
+            group_name=group.name or "",
+            bot_name=self.runtime.bot_name or "",
+            trigger_label=trigger_label,
+            now_local=now_local,
+            timezone=timezone_name,
+            members=members,
+            sticker_catalog=sticker_catalog,
+            sticker_enabled=bool(config.sticker_enabled),
+            tool_lines=tool_lines if use_tools else [],
+            resources=resources if use_tools else [],
+            tool_example=tool_example if use_tools else "",
+            api_example=api_example if use_tools else "",
+            bili_hint=bili_hint if use_tools else "",
+            extra_prompt=str(settings.get("group_prompt_extra") or "").strip(),
+            custom_core=str(settings.get("group_system_prompt") or "").strip(),
+            multi_message_enabled=bool(config.multi_message_enabled),
+            max_messages=int(config.max_messages or 3),
+            memory_text=memory_text,
+            bili_context=bili_context,
+            plan=plan,
+            impression_text=impression_prompt(impression or {}),
+            use_tools=use_tools,
         )
-        intent_block = f"""# 本轮意图（内部参考，绝对不要直接复述）
-- 意图：{plan.get('intent', 'chat')}
-- 用户情绪：{plan.get('user_emotion', 'neutral')}（强度 {float(plan.get('emotion_intensity') or 0):.2f}）
-- 回复语气：{plan.get('tone', 'warm')}
-- 是否需要工具：{'是' if use_tools else '否'}
-- 缺少的能力：{plan.get('missing_capability') or '无'}
-- 对这个人的印象：
-{impression_prompt(impression or {})}
-
-# 输出风格（内部规则，不要复述）
-- 不要输出工具名、工具调用过程、OBSERVATION、🔧、JSON 字段名或分析过程。
-- 需要工具时，用“我去看看”“我查一下”这类自然话过渡；只给最终结果。
-- 缺少的能力不是“无”时，直接如实说明当前做不到，不要编造结果或假装完成。
-- 需要生成表格时调用 create_excel，把内容整理成 sheets[].rows，第一行是表头；不要调用屏幕/鼠标/键盘类工具。
-- 像真人聊天，带一点符合当前情绪的语气，但不要夸张表演。"""
-        extra_prompt = str(settings.get("group_prompt_extra") or "").strip()
-        extra_block = (
-            f"\n# 用户自定义提示词（高优先级，必须遵守）\n{extra_prompt}\n"
-            if extra_prompt
-            else ""
-        )
-        json_block = f"""# JSON 格式（必须遵守）
-{multi_format}
-{{"action": "none"}}
-其中 sticker 填表情包 id 或标签，也可为 null。只有当表情包确实贴合语境时才使用。"""
-        custom_prompt = str(settings.get("group_system_prompt") or "").strip()
-        if custom_prompt:
-            system_prompt = f"""# 用户自定义群聊系统提示词
-{custom_prompt}
-
-# 人设（每次对话自动注入）
-{persona}
-
-{group_info}
-
-{memory_block}
-{bili_block}
-{intent_block}
-{extra_block}
-# 可用表情包
-{sticker_catalog}
-
-{json_block}
-{tool_section}"""
-        else:
-            system_prompt = f"""{persona}
-
-{group_info}
-
-{memory_block}
-{bili_block}
-{intent_block}
-
-# 回复规则
-1. 你是在微信群里自然地接话，回复最新一条消息，不要像客服或机器人。
-2. 通常 1-2 句，最多 80 个汉字；不要使用 Markdown，不要分点列清单。
-{multi_rules}3. 不要复述或总结整段聊天，除非有人明确要求总结。
-4. 不确定的事实不要编造；涉及隐私、金钱、承诺时保持谨慎。
-5. 可以结合上下文和成员昵称，但不要叫错人。
-6. 普通模式最多选择一个表情包；连续消息模式可穿插表情包，但不要每条都发。
-7. 只输出一个 JSON 对象，不要输出 Markdown 代码块或其他文字。
-8. 先直接回应最后一条消息的具体问题；不要用玩笑、人设或旧话题回避。用户在反馈卡顿、答非所问或工具问题时，先说明你实际看到了什么、准备怎么处理。
-9. 同一个人连续发多条时，把它们当成一个完整意图回答，不要只抓最后两个字。涉及查询/泄露他人个人信息、手机号、住址等隐私时，明确说明群聊里不能提供，不要编造。
-{extra_block}
-# 可用表情包
-{sticker_catalog}
-
-{json_block}
-{tool_section}"""
-
+        system_prompt = prompt.system
         user_prompt = f"""以下是「{group.name}」最近的群聊记录（从早到晚）：
 
 {chr(10).join(context)}
 
 请针对最后一条消息决定是否回复，并输出 JSON。"""
+
         model = (config.model or settings.get("llm_model") or "").strip()
         observations: list[str] = []
         tool_trace: list[dict[str, Any]] = []
@@ -2106,16 +2267,17 @@ class AgentEngine:
         tool_required = bool(plan.get("need_tools")) and bool(plan.get("tools"))
         tool_retry_used = False
         nudges: list[str] = []
+        cache_prefix = prompt.cache_prefix_chars
         try:
             for _step in range(max_steps):
-                prompt = user_prompt
+                turn_prompt = user_prompt
                 if observations:
-                    prompt += (
+                    turn_prompt += (
                         "\n\nOBSERVATION\uff08\u771f\u5b9e\u5de5\u5177\u7ed3\u679c\uff0c\u6309\u987a\u5e8f\uff09\uff1a\n"
                         + "\n".join(observations[-3:])
                     )
                 if nudges:
-                    prompt += "\n\n# 系统提醒（必须遵守）\n" + "\n".join(
+                    turn_prompt += "\n\n# 系统提醒（必须遵守）\n" + "\n".join(
                         nudges[-2:]
                     )
                 data, result = await self.llm.complete_json(
@@ -2123,10 +2285,12 @@ class AgentEngine:
                     api_key=str(settings.get("llm_api_key") or ""),
                     model=model,
                     system_prompt=system_prompt,
-                    user_prompt=prompt,
+                    user_prompt=turn_prompt,
                     temperature=float(settings.get("llm_temperature") or 0.8),
                     max_tokens=int(settings.get("llm_max_tokens") or 300),
                     json_mode=bool(settings.get("llm_json_mode", True)),
+                    call_site="group.reply",
+                    cache_prefix_chars=cache_prefix,
                 )
                 last_result = result
                 total_prompt += int(result.get("prompt_tokens") or 0)

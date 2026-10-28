@@ -784,7 +784,6 @@ class BiliAutopilot:
                 api_key=str(settings.get("llm_api_key") or ""),
                 model=str(settings.get("llm_model") or ""),
                 system_prompt=(
-                    f"{context_block}"
                     "你是一个有自己内容品味和独立判断的中文 B站用户。"
                     "上面的 Agent 人设、长期记忆和最近对话是参考；你可以有自己的偏好，"
                     "但如果用户给出了兴趣关键词，那些关键词是强偏好，不是普通建议。"
@@ -798,6 +797,7 @@ class BiliAutopilot:
                     "只输出 JSON：{\"topic\":\"一个简短搜索词\"}"
                 ),
                 user_prompt=(
+                    f"{context_block}"
                     f"用户兴趣关键词（强偏好，优先选择或紧邻方向）：{candidate_text}\n\n"
                     f"最近刷过的视频：\n{history}\n\n"
                     "如果候选关键词非空，请优先直接使用其中一个；只有确实有更好理由时才扩展，"
@@ -806,6 +806,7 @@ class BiliAutopilot:
                 temperature=0.9,
                 max_tokens=120,
                 json_mode=True,
+                call_site="bili.topic",
             )
             topic = str((data or {}).get("topic") or "").strip()[:50]
             if candidate_topics and topic:
@@ -846,7 +847,6 @@ class BiliAutopilot:
                 api_key=str(settings.get("llm_api_key") or ""),
                 model=str(settings.get("llm_model") or ""),
                 system_prompt=(
-                    f"{context_block}"
                     "你是 B站刷视频 Agent，有自己的审美和判断。"
                     "本轮主题来自用户兴趣关键词或关键词相关方向，是强偏好。"
                     "请优先从候选视频中选择与主题直接相关、适合完整观看和内容理解的一条；"
@@ -854,12 +854,14 @@ class BiliAutopilot:
                     "输出 JSON：{\"bvid\":\"BV...\",\"reason\":\"一句话理由\"}"
                 ),
                 user_prompt=(
+                    f"{context_block}"
                     f"本轮主题：{topic}\n候选：\n{listing}\n"
                     "请按自己的判断选择，并说明理由。"
                 ),
                 temperature=0.7,
                 max_tokens=200,
                 json_mode=True,
+                call_site="bili.pick",
             )
             bvid = str((data or {}).get("bvid") or "").strip()
             reason = str((data or {}).get("reason") or "").strip()
@@ -881,7 +883,7 @@ class BiliAutopilot:
         if not settings.get("llm_api_key"):
             return {"summary": transcript[:300], "topics": []}
         context_block = f"{agent_context}\n\n" if agent_context else ""
-        system_prompt = f"""{context_block}你是 B站内容理解 Agent。你有自己的内容品味和独立观点，不需要迎合用户偏好。
+        system_prompt = f"""你是 B站内容理解 Agent。你有自己的内容品味和独立观点，不需要迎合用户偏好。
 请根据视频标题、作者和语音转写，输出一个 JSON：
 {{"summary":"200字以内中文总结","topics":["主题1","主题2"],"sentiment":"positive|neutral|negative","opinion":"你对这个视频的独立评价/态度，80字以内","actions":["like","favorite","comment","reply"],"comment_text":"只有决定评论时才写，否则空字符串","reply_text":"只有决定回复热评时才写，否则空字符串","forward_text":"转发到微信时的简短推荐语"}}
 规则：
@@ -892,7 +894,7 @@ class BiliAutopilot:
 - 如果 actions 包含 comment，comment_text 必须从你的 opinion 出发，写成一条 20-120 字、具体、自然、像真人发的评论；可以赞同、补充、提问或轻微吐槽，但不要空泛复读标题，不要引战、刷屏或广告。
 - 只有热评确实值得回应、且你有具体回复内容时才 reply；否则不要为了回复而回复。
 - 只输出 JSON，不要 Markdown。"""
-        user_prompt = f"""标题：{title}
+        user_prompt = f"""{context_block}标题：{title}
 作者：{author}
 转写文本（可能不完整）：
 {transcript[:8000]}
@@ -908,6 +910,8 @@ class BiliAutopilot:
                 temperature=0.3,
                 max_tokens=1200,
                 json_mode=True,
+                call_site="bili.analyze",
+                cache_prefix_chars=len(system_prompt),
             )
             return data if isinstance(data, dict) else {}
         except Exception as exc:

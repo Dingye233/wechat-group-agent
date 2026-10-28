@@ -647,6 +647,22 @@ async def check_capability(key: str, scope: str) -> bool:
 
 
 async def check_tool_allowed(name: str, args: dict[str, Any], scope: str) -> None:
+    # Core WeChat/chat tools are the group agent's hands.  They are safe by
+    # construction (no shell, no arbitrary path, send goes through
+    # wechatauto-replica); requiring a capability row for each one made the DSH
+    # group profile see ``工具未在当前范围启用`` on its first real task.
+    if scope == "group" and name in {
+        "list_groups",
+        "read_group_messages",
+        "send_group_message",
+        "bili_search",
+        "bili_knowledge_search",
+        "bili_last_opinion",
+        "save_memory",
+        "search_memories",
+        "create_excel",
+    }:
+        return
     if scope == "group" and name in {"run_skill", "run_mcp"}:
         raise PermissionError(
             "群聊不开放通用技能/MCP执行；请使用专用的群聊工具"
