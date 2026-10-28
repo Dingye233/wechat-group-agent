@@ -2519,3 +2519,82 @@ dialog.modal::backdrop {
 .assistant-panel[data-assistant-panel-body="dsh"] .assistant-inline .field-label {
   grid-column: 1 / -1;
 }
+
+/* keep short conversations visually attached to the composer */
+.message-area {
+  display: flex;
+  flex-direction: column;
+}
+.message-area::before {
+  content: "";
+  display: block;
+  margin-top: auto;
+}
+.message-area > * {
+  flex: none;
+}
+
+/* expandable tool calls in the assistant conversation */
+.assistant-tool {
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border-left: 2px solid var(--amber);
+  background: rgba(255, 200, 100, 0.045);
+}
+.assistant-tool-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.assistant-tool-summary::-webkit-details-marker {
+  display: none;
+}
+.assistant-tool-summary:hover {
+  background: rgba(255, 200, 100, 0.06);
+}
+.assistant-tool-name {
+  color: #e4c887;
+  font-weight: 600;
+}
+.assistant-tool-meta {
+  flex: none;
+  color: var(--muted-2);
+  font-size: 9px;
+}
+.assistant-tool-body {
+  padding: 0 10px 9px;
+  border-top: 1px solid rgba(255, 200, 100, 0.12);
+}
+.assistant-tool-label {
+  margin: 7px 0 3px;
+  color: var(--muted-2);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+.assistant-tool-input,
+.assistant-tool-output {
+  max-height: 45vh;
+  overflow: auto;
+  margin: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #d6c69e;
+  font: 9.5px/1.6 "Cascadia Code", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-progress {
+  max-height: 220px;
+}
+.assistant-progress-line span {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

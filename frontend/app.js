@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 /* ============================================================
    群伴 · WeChat Group Agent — frontend
@@ -3214,11 +3214,46 @@ function assistantRichContent(bubble, text) {
   if (last < value.length) bubble.appendChild(document.createTextNode(value.slice(last)));
 }
 
+function assistantToolValue(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function assistantMessageNode(row) {
   if (row.role === 'tool') {
-    const tool = el('div', 'assistant-tool');
-    tool.textContent = `⚙ ${row.tool_name || 'tool'}\n${row.tool_output || row.content || ''}`;
-    return tool;
+    const output = assistantToolValue(row.tool_output ?? row.content);
+    const input = assistantToolValue(row.tool_input);
+    const details = el('details', 'assistant-tool');
+    if (output.length <= 700) details.open = true;
+    const summary = el('summary', 'assistant-tool-summary');
+    summary.appendChild(el('span', 'assistant-tool-name', `⚙ ${row.tool_name || 'tool'}`));
+    const metaText = output
+      ? `${output.length.toLocaleString()} 字符 · ${details.open ? '点击收起' : '点击展开完整输出'}`
+      : '无输出';
+    summary.appendChild(el('span', 'assistant-tool-meta', metaText));
+    details.appendChild(summary);
+    details.addEventListener('toggle', () => {
+      const node = summary.querySelector('.assistant-tool-meta');
+      if (node) {
+        node.textContent = output
+          ? `${output.length.toLocaleString()} 字符 · ${details.open ? '点击收起' : '点击展开完整输出'}`
+          : '无输出';
+      }
+    });
+    const body = el('div', 'assistant-tool-body');
+    if (input) {
+      body.appendChild(el('div', 'assistant-tool-label', '输入'));
+      body.appendChild(el('pre', 'assistant-tool-input', input));
+    }
+    body.appendChild(el('div', 'assistant-tool-label', '输出'));
+    body.appendChild(el('pre', 'assistant-tool-output', output || '（无输出）'));
+    details.appendChild(body);
+    return details;
   }
   const wrapper = el('div', `assistant-msg ${row.role === 'user' ? 'user' : 'assistant'}`);
   const avatar = el('span', 'assistant-avatar', row.role === 'user' ? '你' : 'AI');
@@ -3520,6 +3555,22 @@ function assistantStepLabel(data) {
     : `第 ${data.step}/${data.max_steps} 步`;
 }
 
+function assistantProgressPreview(value, limit = 180) {
+  if (value === null || value === undefined) return '';
+  let text;
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  text = String(text).replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
 function handleAssistantProgress(data) {
   if (!data || data.request_id !== state.assistantProgressId) return;
   let text = data.message || '';
@@ -3529,8 +3580,12 @@ function handleAssistantProgress(data) {
   } else if (data.phase === 'tool') {
     text = `${assistantStepLabel(data)}：调用 ${data.tool}`;
     if (data.thought) text += ` · ${data.thought}`;
+    const args = assistantProgressPreview(data.args, 120);
+    if (args) text += ` · ${args}`;
   } else if (data.phase === 'tool_result') {
     text = `${assistantStepLabel(data)}：${data.ok === false ? '失败' : '完成'} ${data.tool}`;
+    const preview = assistantProgressPreview(data.message, 180);
+    if (preview) text += ` · ${preview}`;
     if (data.ok === false) cls = 'error';
   } else if (data.phase === 'queued') {
     text = data.message || '收到新要求，已插入当前任务';
