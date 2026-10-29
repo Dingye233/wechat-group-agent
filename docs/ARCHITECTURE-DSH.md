@@ -437,3 +437,34 @@ ack → execute → send → verify
 - 任务 API 还没有完整的前端管理页
 - 任务插件生成/晋升还未接入
 - 任务级 session 还没有和 Chat lane 的 session 策略统一
+
+---
+
+## 12. 已开始落地：wechatauto 服务契约
+
+在 worker 真正抽出独立进程之前，先固定了服务契约：
+
+```text
+GET  /api/wechatauto/status
+GET  /api/wechatauto/events?limit=&type=
+POST /api/wechatauto/outbound
+GET  /api/transport/jobs
+```
+
+事件：
+
+- `message.created`：新群消息入库
+- `outbound.queued / sending / sent / failed`：发送任务状态
+
+`POST /api/wechatauto/outbound` 已支持：
+
+- `group_id`
+- `text`
+- `sticker_id`
+- `files`
+- `meta`
+- `reuse_chat`
+- `idempotency_key`
+- `wait`
+
+目前仍是 Qunban 进程内实现；下一阶段把同一个契约搬到独立 wechatauto 服务。

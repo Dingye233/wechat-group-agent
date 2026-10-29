@@ -298,3 +298,18 @@ class WechatautoTransport:
             self.runtime.broadcast("transport.job", {"action": action, "job": job})
         except Exception:
             pass
+        try:
+            from app.services import wechatauto_events
+
+            wechatauto_events.publish(
+                f"outbound.{action}",
+                {
+                    "job_id": job.get("id"),
+                    "group_id": job.get("group_id"),
+                    "status": job.get("status"),
+                    "attempts": job.get("attempts"),
+                    "error": job.get("error") or "",
+                },
+            )
+        except Exception:
+            pass

@@ -1051,6 +1051,21 @@ class RuntimeManager:
         if result is None:
             return
         group_id, message_id, trigger = result
+        from app.services import wechatauto_events
+
+        wechatauto_events.publish(
+            "message.created",
+            {
+                "group_id": group_id,
+                "message_id": message_id,
+                "sender_id": incoming.sender_id,
+                "sender_name": incoming.sender_name,
+                "kind": incoming.kind,
+                "content": str(incoming.content or "")[:2000],
+                "external_id": incoming.external_id or "",
+                "trigger": bool(trigger),
+            },
+        )
         if trigger:
             self._schedule_agent(group_id, message_id)
 
