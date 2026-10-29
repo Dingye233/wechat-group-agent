@@ -2,10 +2,10 @@
   "name": "问道 · 修仙界",
   "short_name": "问道",
   "description": "东方修仙：横版动作闯关 + 文字修行，手机横屏可玩",
-  "start_url": "/rpg/play",
+  "start_url": "/rpg",
   "scope": "/",
   "display": "fullscreen",
-  "orientation": "landscape",
+  
   "background_color": "#050b12",
   "theme_color": "#0b1b2e",
   "lang": "zh-CN",

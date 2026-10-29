@@ -1,6 +1,6 @@
 // 问道 · 修仙界 service worker：把壳页面和两张游戏页缓存起来，离线也能进
 const CACHE = 'qunban-rpg-v1';
-const SHELL = ['/rpg/play', '/rpg', '/rpg/action', '/rpg/manifest.json', '/rpg/icon-192.png', '/rpg/icon-512.png'];
+const SHELL = ['/rpg', '/rpg/manifest.json', '/rpg/icon-192.png', '/rpg/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).catch(() => {}));

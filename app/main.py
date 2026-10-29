@@ -197,10 +197,6 @@ app.include_router(ws.router)
 app.include_router(rpg.api_router, prefix="/api", tags=["rpg"])
 app.include_router(rpg.page_router, tags=["rpg"])
 
-_ASSETS_DIR = Path(__file__).resolve().parents[1] / "frontend" / "assets"
-if _ASSETS_DIR.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="game-assets")
-
 
 @app.middleware("http")
 async def no_store_api(request: Request, call_next):

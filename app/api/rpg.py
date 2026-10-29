@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from app.services import rpg_game
+from app.services import cultivation, rpg_game
 
 router = APIRouter(tags=["rpg"])
 api_router = router
@@ -297,15 +297,10 @@ def page_html() -> HTMLResponse:
     return HTMLResponse(PAGE.read_text(encoding="utf-8"))
 
 
-def action_html() -> HTMLResponse:
-    if not ACTION_PAGE.is_file():
-        return HTMLResponse("<h1>动作模式尚未开辟</h1>", status_code=404)
-    return HTMLResponse(ACTION_PAGE.read_text(encoding="utf-8"))
-
-
-@page_router.get("/rpg/action", response_class=HTMLResponse)
-async def rpg_action_page() -> HTMLResponse:
-    return action_html()
+@page_router.get("/rpg/action")
+async def rpg_action_page_gone() -> RedirectResponse:
+    """动作闯关已下线，统一回到文字修仙。"""
+    return RedirectResponse("/rpg", status_code=307)
 
 
 PLAY_PAGE = Path(__file__).resolve().parents[2] / "frontend" / "rpg-play.html"
@@ -314,11 +309,9 @@ SW_JS = Path(__file__).resolve().parents[2] / "frontend" / "sw.js"
 ICON_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
-@page_router.get("/rpg/play", response_class=HTMLResponse)
-async def rpg_play_page() -> HTMLResponse:
-    if not PLAY_PAGE.is_file():
-        return RedirectResponse("/rpg", status_code=307)
-    return HTMLResponse(PLAY_PAGE.read_text(encoding="utf-8"))
+@page_router.get("/rpg/play")
+async def rpg_play_page() -> RedirectResponse:
+    return RedirectResponse("/rpg", status_code=307)
 
 
 @page_router.get("/rpg/manifest.json")
@@ -366,3 +359,63 @@ async def rpg_action_leaderboard(limit: int = Query(default=10, ge=1, le=50)) ->
 @page_router.get("/rpg", response_class=HTMLResponse)
 async def rpg_page() -> HTMLResponse:
     return page_html()
+
+# ---------------------------------------------------- 文字修仙 v2（属性/场景）
+@router.post("/rpg/c/join")
+async def c_join(payload: dict = Body(...)) -> dict:
+    try:
+        st = cultivation.join(str(payload.get("name") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "state": st, "scenes": cultivation.scenes()["scenes"]}
+
+
+@router.get("/rpg/c/state")
+async def c_state(name: str = Query(...)) -> dict:
+    try:
+        return {"ok": True, "state": cultivation.state(name)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/rpg/c/scenes")
+async def c_scenes() -> dict:
+    return {"ok": True, **cultivation.scenes()}
+
+
+@router.post("/rpg/c/offline")
+async def c_offline(payload: dict = Body(...)) -> dict:
+    name = str(payload.get("name") or "")
+    gain = cultivation.offline_gain(name)
+    return {"ok": True, **gain, "state": cultivation.state(name)}
+
+
+@router.post("/rpg/c/action")
+async def c_action(payload: dict = Body(...)) -> dict:
+    name = str(payload.get("name") or "")
+    action = str(payload.get("action") or "")
+    try:
+        result = cultivation.act(name, action)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.get("ok") and action in {"train", "sect"}:
+        await hub.broadcast({"type": "world", "text": f"🗻 {name}：{result['message']}"})
+    return result
+
+
+@router.post("/rpg/c/breakthrough")
+async def c_breakthrough(payload: dict = Body(...)) -> dict:
+    name = str(payload.get("name") or "")
+    try:
+        result = cultivation.breakthrough(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.get("ok") and result.get("message"):
+        rpg_game.log_event(name, "breakthrough", result["message"])
+        await hub.broadcast({"type": "world", "text": result["message"]})
+    return result
+
+
+@router.get("/rpg/c/leaderboard")
+async def c_leaderboard(limit: int = Query(default=20, ge=1, le=50)) -> dict:
+    return {"ok": True, "players": cultivation.leaderboard(limit)}
