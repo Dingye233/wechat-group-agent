@@ -1488,3 +1488,30 @@ sidecar 收到 assistant.task
 - WebSocket fanout 已迁到 sidecar
 - 事件仍由主 RuntimeManager 产生
 - 消息入库、RuntimeManager、Agent 调度仍在主进程
+
+---
+
+## 44. 测试群问题修复
+
+根据 10-29 测试群记录修复：
+
+1. `lane=task` 不再交给 primary 自由决定；直接创建 durable task、发 ack、启动 Task lane。
+2. 任务标记补充天气、B站、视频、截图、截屏、网页、新闻。
+3. Chat lane 注入真实后台任务进度，提示词禁止“已派后台”式空承诺。
+4. Task lane 要求事实/操作任务先调工具；记录/查询任务必须给最终确认。
+5. DSH `messages[]` 在 multi_message 关闭时也会取第一条，不再静默丢回复。
+6. DSH 返回无最终内容时任务标记 failed 并发失败通知，不再静默结束。
+7. 多段回复默认合并为一条，减少 2–3 个气泡和串行发送时间。
+8. 远程 service queue 发送后补 `_persist_transport_outgoing`，保留 Agent/task/model 元数据；本地模式不重复落库。
+9. 发送预热等待默认 4 秒。
+
+验证：
+
+```text
+mock Task route：
+  ack 1 条
+  task status=done
+  verified=True
+```
+
+尚未用真实测试群复测；缓存命中/token 用量仍缺少 ACP 明细。

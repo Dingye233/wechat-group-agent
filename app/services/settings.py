@@ -110,7 +110,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "reply_delay_random_seconds": 1.5,
     "reply_cooldown_jitter_seconds": 20.0,
     "reply_global_interval_seconds": 1.2,
-    "send_preflight_wait_seconds": 2.0,
+    "send_preflight_wait_seconds": 4.0,
     # Database polling is cheap; keep the default responsive. Per-group
     # read_interval_seconds can still override this.
     "read_poll_interval_seconds": 0.3,

@@ -1339,6 +1339,13 @@ class AgentEngine:
 
             lock = self._locks.setdefault(group_id, asyncio.Lock())
 
+        if route.lane == "task":
+            async with lock:
+                await self._handle_task_route(
+                    message, group, config, settings, route.reason
+                )
+            return
+
         # Merge a burst from the same sender only.  Different members must not
         # cancel each other just because one reply's UI send is still running.
         trigger_key = (
@@ -2097,6 +2104,16 @@ class AgentEngine:
             text = self._clean_reply(reply_data.get("reply"))
             sticker: Sticker | None = None
             value = reply_data.get("sticker")
+            if not text and isinstance(raw, list) and raw:
+                first = raw[0]
+                if isinstance(first, str):
+                    text = self._clean_reply(first)
+                elif isinstance(first, dict):
+                    text = self._clean_reply(
+                        first.get("text") or first.get("reply")
+                    )
+                    if value in (None, "", False):
+                        value = first.get("sticker")
             if config.sticker_enabled and value not in (None, "", False):
                 sticker = await resolve_sticker(db, value)
             if text or sticker is not None:
@@ -2241,6 +2258,58 @@ class AgentEngine:
                 )
                 await self._log(group_id, "proactive", "Agent 主动发起了一条消息")
 
+    async def _handle_task_route(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        reason: str,
+    ) -> None:
+        """Deterministically enter the durable Task lane for lane=task.
+
+        The primary model used to be asked to return action=task; it often
+        answered directly or called a tool and then stopped, so no durable work
+        existed and follow-up progress questions were hallucinated.
+        """
+        request = str(message.content or "").strip()
+        if not request:
+            return
+        task = await task_runs.create(
+            kind="group_task",
+            source="router",
+            group_id=group.id,
+            message_id=message.id,
+            session_id=f"group-{group.id}",
+            request=request,
+        )
+        task_id = int(task["id"])
+        await self._log(
+            group.id,
+            "task_route",
+            f"Router 任务 #{task_id}：{request[:160]}｜{reason}",
+            level="info",
+        )
+        try:
+            await self.runtime.send_agent_message(
+                group.id,
+                text="收到，我处理一下；完成后把结果发群里。",
+                meta={
+                    "source": "llm",
+                    "task_id": task_id,
+                    "task_ack": True,
+                },
+            )
+            await task_runs.step(task_id, "ack", "done")
+        except Exception as exc:
+            await self._log(
+                group.id,
+                "warn",
+                f"任务 #{task_id} 确认消息发送失败：{exc}",
+                level="warn",
+            )
+        self._start_primary_task(task_id)
+
     async def _handle_dsh_chat_lane(
         self,
         message: Message,
@@ -2272,6 +2341,24 @@ class AgentEngine:
             current=f"{sender}：{str(message.content or '')}",
         )
         prompt = capsule.render()
+        try:
+            recent_tasks = await task_runs.list_tasks(30)
+            rows = [
+                item
+                for item in recent_tasks
+                if int(item.get("group_id") or 0) == int(group.id)
+                and item.get("status") in {"queued", "running", "done", "failed"}
+            ][:6]
+            if rows:
+                lines = []
+                for item in rows:
+                    lines.append(
+                        f"#{item.get('id')} {item.get('status')}："
+                        f"{str(item.get('request') or '')[:80]}"
+                    )
+                prompt += "\n\n# 后台任务进度\n" + "\n".join(lines)
+        except Exception:
+            pass
         self.runtime.emit_typing(group.id)
         started = time.perf_counter()
         preflight: asyncio.Task | None = None
@@ -2301,7 +2388,7 @@ class AgentEngine:
                     await asyncio.wait_for(
                         asyncio.shield(preflight),
                         timeout=float(
-                            settings.get("send_preflight_wait_seconds") or 2.0
+                            settings.get("send_preflight_wait_seconds") or 4.0
                         ),
                     )
                 )
@@ -2335,6 +2422,8 @@ class AgentEngine:
             "dsh_chat_lane",
             f"Chat lane 回复｜{int((time.perf_counter() - started) * 1000)}ms"
             f"｜上下文≈{capsule.estimate_tokens()} tokens"
+            f"｜DSH用量={(result.get('usage') or {}).get('used')}"
+            f"/{(result.get('usage') or {}).get('size')}"
             f"｜发送={'是' if sent else '否'}"
             f"｜窗口预热={'是' if reuse_first else '否'}（{preflight_wait_ms}ms）",
             level="info",
@@ -2539,12 +2628,26 @@ class AgentEngine:
         *,
         reuse_first: bool = False,
         task_id: int | None = None,
+        merge_segments: bool = True,
     ) -> bool:
         async with SessionLocal() as db:
             segments = await self._build_segments(db, config, data)
         if not segments:
             await self._log(group.id, "dsh_primary", "DSH 没有可发送的回复", level="warn")
             return False
+        if merge_segments and len(segments) > 1:
+            texts = [
+                str(item.get("text") or "").strip()
+                for item in segments
+                if str(item.get("text") or "").strip()
+            ]
+            sticker = next(
+                (item.get("sticker") for item in segments if item.get("sticker")),
+                None,
+            )
+            merged = "\n".join(texts)
+            if merged or sticker is not None:
+                segments = [{"text": merged, "sticker": sticker}]
         if config.mention_on_reply:
             mention = f"@{message.sender_name}"
             for segment in segments:
@@ -2579,6 +2682,8 @@ class AgentEngine:
                             "engine": "dsh",
                             "model": result.get("model") or "dsh",
                             "action": data.get("action") or "reply",
+                            "context_used": (result.get("usage") or {}).get("used"),
+                            "context_size": (result.get("usage") or {}).get("size"),
                             "segment": index + 1,
                             "segment_count": len(segments),
                             **({"task_id": task_id} if task_id else {}),
@@ -2659,7 +2764,7 @@ class AgentEngine:
             return
         for row in rows:
             if (
-                row.get("source") == "dsh_primary"
+                row.get("source") in {"dsh_primary", "router"}
                 and row.get("status") in {"queued", "running"}
             ):
                 self._start_primary_task(int(row["id"]))
@@ -2706,6 +2811,25 @@ class AgentEngine:
                 if plugin_task
                 else ""
             )
+            if plugin_task:
+                task_hint = ""
+            elif any(marker in request_text for marker in ("记一下", "记住", "记下")):
+                task_hint = (
+                    "# 任务提示\n这是一个记录任务：先调用 qunban_memory_save "
+                    "保存内容，然后回复一句确认，不能只搜索不保存。\n"
+                )
+            elif "天气" in request_text or "查一下" in request_text:
+                task_hint = (
+                    "# 任务提示\n这是一个查询任务：必须调用 qunban_call_interface "
+                    "或可用工具取得真实结果，再根据工具结果回答，禁止凭记忆编造。\n"
+                )
+            elif "b站" in request_text.lower() or "视频" in request_text:
+                task_hint = (
+                    "# 任务提示\n这是一个B站任务：优先调用 qunban_bili_search / "
+                    "qunban_bili_knowledge，引用返回结果，不要编造视频内容。\n"
+                )
+            else:
+                task_hint = ""
             prompt = f"""# 后台任务
 任务编号：#{task_id}
 原始请求：{request_text}
@@ -2722,7 +2846,7 @@ class AgentEngine:
 # 本任务可用工具
 {', '.join(allowed_tools) or '（仅基础工具）'}
 
-{plugin_block}
+{plugin_block}{task_hint}
 # 输出协议
 {{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
 或
@@ -2755,6 +2879,13 @@ class AgentEngine:
                         level="info",
                     )
 
+            preflight_task: asyncio.Task | None = None
+            preflight_fn = getattr(self.runtime, "preflight_group", None)
+            if callable(preflight_fn):
+                preflight_task = asyncio.create_task(
+                    preflight_fn(group.id),
+                    name=f"task-preflight-{group.id}",
+                )
             await service.start(settings)
             try:
                 result = await service.prompt(
@@ -2770,6 +2901,21 @@ class AgentEngine:
                     shutil.rmtree(service.profile_dir, ignore_errors=True)
                 except Exception:
                     pass
+            reuse_first = False
+            if preflight_task is not None:
+                try:
+                    reuse_first = bool(
+                        await asyncio.wait_for(
+                            preflight_task,
+                            timeout=float(
+                                settings.get("send_preflight_wait_seconds")
+                                or 4.0
+                            ),
+                        )
+                    )
+                except (asyncio.TimeoutError, Exception):
+                    preflight_task.cancel()
+                    reuse_first = False
             text = str(result.get("text") or "").strip()
             data = parse_json_object(text)
             if not isinstance(data, dict):
@@ -2778,16 +2924,26 @@ class AgentEngine:
             if action == "task":
                 raise RuntimeError("DSH 任务没有完成，再次返回 task")
             if action == "none" or (
-                not data.get("messages") and not data.get("reply")
+                not data.get("messages")
+                and not str(data.get("reply") or "").strip()
             ):
-                await task_runs.step(task_id, "execute", "done")
+                await task_runs.step(
+                    task_id,
+                    "execute",
+                    "failed",
+                    detail="DSH 没有产出最终回复",
+                )
                 await task_runs.step(task_id, "send", "skipped")
-                await task_runs.step(task_id, "verify", "done")
+                await task_runs.step(task_id, "verify", "skipped")
                 await task_runs.update(
                     task_id,
-                    status="done",
-                    result="任务完成，无需发送",
+                    status="failed",
+                    error="DSH 没有产出最终回复",
                     verified=False,
+                )
+                await self._send_task_notice(
+                    group.id,
+                    f"任务 #{task_id} 没跑出结果，先别当完成；可以让我重试。",
                 )
                 return
             await task_runs.step(task_id, "execute", "done")
@@ -2801,6 +2957,7 @@ class AgentEngine:
                 result,
                 task_send_started,
                 task_id=task_id,
+                reuse_first=reuse_first,
             )
             await task_runs.step(
                 task_id, "send", "done" if sent else "failed"
@@ -2877,6 +3034,13 @@ class AgentEngine:
         except Exception as exc:
             await task_runs.step(task_id, "execute", "failed", detail=str(exc))
             await task_runs.update(task_id, status="failed", error=str(exc))
+            try:
+                await self._send_task_notice(
+                    int(record.get("group_id") or 0),
+                    f"任务 #{task_id} 没完成：{str(exc)[:120]}。可以让我重试。",
+                )
+            except Exception:
+                pass
             await self._log(
                 int(record.get("group_id") or 0),
                 "dsh_primary_task",

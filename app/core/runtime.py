@@ -2607,6 +2607,14 @@ class RuntimeManager:
             raise RuntimeError(
                 str(finished.get("error") or "微信发送失败")
             )
+        if self.adapter_id == "replica-remote":
+            await self._persist_transport_outgoing(
+                group_id,
+                text=text,
+                sticker=sticker,
+                meta=safe_meta,
+                files=files,
+            )
         return True
 
     async def _send_agent_message_now(
@@ -2914,6 +2922,59 @@ class RuntimeManager:
                 ):
                     return True
         return False
+
+    async def _persist_transport_outgoing(
+        self,
+        group_id: int,
+        *,
+        text: str = "",
+        sticker: Sticker | None = None,
+        meta: dict[str, Any] | None = None,
+        files: list[Path] | None = None,
+    ) -> None:
+        """Attribute a service-queue send to the Agent in the dashboard DB.
+
+        In remote mode the transport worker lives in the wechatauto service, so
+        ``_send_agent_message_now`` never runs in Qunban.  Without this bridge
+        the WeChat echo is stored as an ordinary self message and loses task /
+        model / tool metadata.
+        """
+        try:
+            group = await self._get_group(int(group_id))
+            account = self.account or {}
+            if sticker is not None:
+                await self._persist_outgoing(
+                    group,
+                    kind="sticker",
+                    content=sticker.name or "[表情包]",
+                    is_from_agent=True,
+                    meta=meta or {},
+                    account=account,
+                    sticker=sticker,
+                )
+                return
+            if files:
+                await self._persist_outgoing(
+                    group,
+                    kind="file",
+                    content=str(files[0]),
+                    is_from_agent=True,
+                    meta=meta or {},
+                    account=account,
+                    media_path=str(files[0]),
+                )
+                return
+            if str(text or "").strip():
+                await self._persist_outgoing(
+                    group,
+                    kind="text",
+                    content=str(text),
+                    is_from_agent=True,
+                    meta=meta or {},
+                    account=account,
+                )
+        except Exception as exc:
+            logger.warning("远程发送落库失败: %s", exc)
 
     async def _persist_outgoing(
         self,
