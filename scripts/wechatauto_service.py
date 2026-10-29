@@ -229,6 +229,26 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             )
         return {"ok": True}
 
+    @app.post("/v1/send_file", dependencies=[Depends(_auth)])
+    async def send_file(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        await state.adapter.send_file(
+            str(payload.get("room_id") or ""),
+            Path(str(payload.get("path") or "")),
+        )
+        return {"ok": True}
+
+    @app.post("/v1/download_media", dependencies=[Depends(_auth)])
+    async def download_media(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        result = await state.adapter.download_media(
+            str(payload.get("room_id") or ""),
+            dict(payload.get("meta") or {}),
+            tier=str(payload.get("tier") or "best"),
+            original=bool(payload.get("original")),
+        )
+        return {"result": result}
+
     @app.post("/v1/refresh", dependencies=[Depends(_auth)])
     async def refresh() -> dict[str, Any]:
         assert state is not None and state.adapter is not None

@@ -899,3 +899,35 @@ groups/messages 同步正常
 ```
 
 当前 transport worker 仍位于 Qunban 进程内；它通过 `replica-remote` 把发送交给独立服务。因此“适配器所有权”已拆开，“outbound 队列所有权”还没有完全迁移。
+
+---
+
+## 29. 独立传输服务的断线恢复
+
+`replica-remote` 现在处理服务重启：
+
+- 服务断开：Qunban runtime 标记 `offline`，不会假装在线
+- 服务恢复：轮询检测到 sequence 回退
+- 自动重新拉取 status/account/groups
+- 不需要重启 Qunban
+
+已实测：
+
+```text
+停止 8010
+  → Qunban state=offline
+
+重启 8010
+  → Qunban state=online
+  → adapter=replica-remote
+  → transport 继续可用
+```
+
+文件/图片能力也补到远程适配器：
+
+```text
+POST /v1/send_file
+POST /v1/download_media
+```
+
+Qunban 的媒体回填对 `replica-remote` 重新启用。

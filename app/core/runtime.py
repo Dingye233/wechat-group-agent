@@ -914,7 +914,7 @@ class RuntimeManager:
             logger.warning("应用群读取开关失败: %s", exc)
 
     def _schedule_media_backfill(self) -> None:
-        if self.adapter_id != "replica" or not self.is_online:
+        if self.adapter_id not in {"replica", "replica-remote"} or not self.is_online:
             return
         now = time.time()
         if now - self._last_media_backfill < 20:
@@ -930,7 +930,7 @@ class RuntimeManager:
         self, group_id: int | None = None, limit_per_group: int = 30
     ) -> dict[str, int]:
         """Decrypt images already stored before URL support was enabled."""
-        if self.adapter_id != "replica" or self.adapter is None:
+        if self.adapter_id not in {"replica", "replica-remote"} or self.adapter is None:
             return {"updated": 0}
         async with SessionLocal() as db:
             statement = (
@@ -2228,7 +2228,7 @@ class RuntimeManager:
         allow = getattr(self.adapter, "allow_ui_action", None)
         if callable(allow):
             allow(max(1.0, float(allow_seconds)))
-        if self.adapter_id == "replica":
+        if self.adapter_id in {"replica", "replica-remote"}:
             await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
         else:
             await self.adapter.send_text(wxid, text)
@@ -2460,7 +2460,7 @@ class RuntimeManager:
     ) -> None:
         if self.adapter is None:
             raise RuntimeError("微信账号未登录")
-        if reuse_chat and self.adapter_id == "replica":
+        if reuse_chat and self.adapter_id in {"replica", "replica-remote"}:
             await self.adapter.send_text(room_id, text, reuse_chat=True)
         else:
             await self.adapter.send_text(room_id, text)
@@ -2470,7 +2470,7 @@ class RuntimeManager:
     ) -> None:
         if self.adapter is None:
             raise RuntimeError("微信账号未登录")
-        if reuse_chat and self.adapter_id == "replica":
+        if reuse_chat and self.adapter_id in {"replica", "replica-remote"}:
             await self.adapter.send_sticker(room_id, path, reuse_chat=True)
         else:
             await self.adapter.send_sticker(room_id, path)
@@ -2844,7 +2844,7 @@ class RuntimeManager:
                 raise RuntimeError("群聊不存在")
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             record_meta = dict(meta or {})
-            if self.adapter_id == "replica":
+            if self.adapter_id in {"replica", "replica-remote"}:
                 # The 4.x listener reads the message back from the local
                 # database a moment after sending. If that row already landed,
                 # reuse it instead of creating a second dashboard copy.
@@ -3278,7 +3278,7 @@ class RuntimeManager:
             meta = dict(row.meta or {})
             meta["_send_state"] = "pending"
             meta["_send_error"] = ""
-            if self.adapter_id == "replica":
+            if self.adapter_id in {"replica", "replica-remote"}:
                 # Must be set before the UI send starts.  The database
                 # listener can otherwise see the echo first and insert a
                 # second row before we mark this one as awaiting confirmation.
@@ -3309,7 +3309,7 @@ class RuntimeManager:
             ).isoformat()
             if meta.get("_replica_confirmed"):
                 meta["_replica_pending"] = False
-            elif self.adapter_id == "replica":
+            elif self.adapter_id in {"replica", "replica-remote"}:
                 meta["_replica_pending"] = True
             row.meta = meta
             await db.commit()

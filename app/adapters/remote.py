@@ -46,6 +46,7 @@ class RemoteAdapter(BaseAdapter):
         self._groups: list[GroupInfo] = []
         self._account: AccountInfo | None = None
         self._last_error = ""
+        self._connected = False
 
     @classmethod
     def availability(cls) -> tuple[bool, str]:
@@ -97,6 +98,7 @@ class RemoteAdapter(BaseAdapter):
         self._poll = asyncio.create_task(
             self._poll_loop(), name="wechatauto-remote-events"
         )
+        self._connected = True
 
     async def stop(self) -> None:
         self._stop.set()
@@ -111,6 +113,26 @@ class RemoteAdapter(BaseAdapter):
             await self._client.aclose()
             self._client = None
 
+    async def _refresh_snapshot(self) -> None:
+        status = (await self._http().get("/v1/status", timeout=10.0)).json()
+        account = status.get("account")
+        if isinstance(account, dict) and account.get("wxid"):
+            self._account = AccountInfo(
+                wxid=str(account.get("wxid") or ""),
+                name=str(account.get("name") or ""),
+                avatar=str(account.get("avatar") or ""),
+            )
+            self.emit(
+                "account",
+                wxid=self._account.wxid,
+                name=self._account.name,
+                avatar=self._account.avatar,
+            )
+        self.emit("status", **dict(status.get("status") or {}))
+        groups = await self.list_groups()
+        if groups:
+            self.emit("groups", groups=groups)
+
     async def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -121,6 +143,14 @@ class RemoteAdapter(BaseAdapter):
                 )
                 response.raise_for_status()
                 data = response.json()
+                server_seq = int(data.get("seq") or 0)
+                if not self._connected or server_seq < self._seq:
+                    # The service restarted and its sequence reset.  Re-sync
+                    # status/account/groups before consuming new events.
+                    self._seq = 0
+                    self._connected = True
+                    await self._refresh_snapshot()
+                    continue
                 for item in data.get("events") or []:
                     try:
                         seq = int(item.get("seq") or 0)
@@ -159,6 +189,13 @@ class RemoteAdapter(BaseAdapter):
                 raise
             except Exception as exc:
                 self._last_error = str(exc)
+                if self._connected:
+                    self._connected = False
+                    self.emit(
+                        "status",
+                        state="offline",
+                        message=f"wechatauto 服务断开：{exc}",
+                    )
                 self.emit("log", message=f"wechatauto 事件流断开：{exc}", level="warn")
                 await asyncio.sleep(1.5)
 
@@ -181,6 +218,39 @@ class RemoteAdapter(BaseAdapter):
             raise RuntimeError(
                 str(response.json().get("detail") or response.text)[:1000]
             )
+
+    async def send_file(self, room_id: str, path: Path) -> None:
+        response = await self._http().post(
+            "/v1/send_file",
+            json={"room_id": room_id, "path": str(path)},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+
+    async def download_media(
+        self,
+        group_id_external: str,
+        message_meta: dict[str, Any],
+        *,
+        tier: str = "best",
+        original: bool = False,
+    ) -> dict[str, Any]:
+        response = await self._http().post(
+            "/v1/download_media",
+            json={
+                "room_id": group_id_external,
+                "meta": message_meta,
+                "tier": tier,
+                "original": original,
+            },
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json().get("result") or {})
 
     async def list_groups(self) -> list[GroupInfo]:
         response = await self._http().get("/v1/groups")
