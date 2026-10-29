@@ -41,6 +41,7 @@ from app.models import (
     Sticker,
     utcnow,
 )
+from app.services import task_runs
 from app.services.assistant import (
     AssistantService,
     cancel_session,
@@ -319,6 +320,16 @@ class RuntimeManager:
         self.bus = EventBus()
         self.llm = LLMService()
         self.agent = AgentEngine(self, self.llm)
+        task_runs.set_event_sink(
+            lambda task: self.broadcast(
+                "assistant.task",
+                {
+                    "task_id": task.get("id"),
+                    "status": task.get("status"),
+                    "task": task,
+                },
+            )
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[tuple[int, AdapterEvent]] | None = None
         self._consumer: asyncio.Task | None = None

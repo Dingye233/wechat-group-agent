@@ -6540,6 +6540,13 @@ function handleWsEvent(event) {
     case 'assistant.progress':
       handleAssistantProgress(data);
       break;
+    case 'assistant.task':
+      window.clearTimeout(state._assistantTaskTimer);
+      state._assistantTaskTimer = window.setTimeout(() => {
+        if (state.assistantPanel === 'tasks') loadAssistantTasks();
+        loadAssistantStatus().catch(() => {});
+      }, 150);
+      break;
     case 'assistant.tool_task':
       if (state.assistantPanel === 'tasks') loadAssistantTasks();
       loadAssistantStatus().catch(() => {});

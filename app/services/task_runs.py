@@ -8,7 +8,7 @@ create before it says "I will do that".
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import delete, select
 
@@ -16,6 +16,21 @@ from app.db import SessionLocal
 from app.models import AgentTaskRun
 
 STEP_NAMES = ("ack", "execute", "send", "verify")
+_EVENT_SINK: Callable[[dict[str, Any]], None] | None = None
+
+
+def set_event_sink(sink: Callable[[dict[str, Any]], None] | None) -> None:
+    global _EVENT_SINK
+    _EVENT_SINK = sink
+
+
+def _emit(task: dict[str, Any]) -> None:
+    if _EVENT_SINK is None:
+        return
+    try:
+        _EVENT_SINK(task)
+    except Exception:
+        pass
 
 
 def _dict(row: AgentTaskRun) -> dict[str, Any]:
@@ -74,7 +89,9 @@ async def create(
         db.add(row)
         await db.commit()
         await db.refresh(row)
-        return _dict(row)
+        task = _dict(row)
+        _emit(task)
+        return task
 
 
 async def update(
@@ -109,7 +126,9 @@ async def update(
             row.finished_at = datetime.utcnow()
         await db.commit()
         await db.refresh(row)
-        return _dict(row)
+        task = _dict(row)
+        _emit(task)
+        return task
 
 
 async def step(
@@ -144,7 +163,9 @@ async def step(
         row.steps = steps
         await db.commit()
         await db.refresh(row)
-        return _dict(row)
+        task = _dict(row)
+        _emit(task)
+        return task
 
 
 async def get(task_id: int) -> dict[str, Any] | None:
