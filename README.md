@@ -228,6 +228,8 @@ flowchart LR
 
 详细设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+当前 DSH 融合架构与 DSH 的职责边界见 [docs/ARCHITECTURE-DSH.md](docs/ARCHITECTURE-DSH.md)。
+
 ---
 
 ## 3. 快速开始（Windows）
