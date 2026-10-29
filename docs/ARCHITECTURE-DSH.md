@@ -604,3 +604,19 @@ qunban-task-lane 启动成功
 ```
 
 “按任务加载工具”目前仍是静态 task toolset，还没有做到每个任务单独生成 allowlist。
+
+---
+
+## 18. 任务面板支持重试/取消
+
+新增：
+
+```text
+POST /api/tasks/{id}/retry
+POST /api/tasks/{id}/cancel
+```
+
+- 失败/取消/完成的任务可以重新执行
+- 排队/执行中的任务可以取消
+- 任务面板直接提供按钮
+- 取消会取消对应的后台 DSH task job，并标记 `cancelled`

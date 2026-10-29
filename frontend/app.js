@@ -5130,8 +5130,42 @@ function durableTaskChild(task) {
     body.appendChild(el('div', 'assistant-tool-label', '错误'));
     body.appendChild(el('pre', 'assistant-tool-output', task.error));
   }
+  if (status === 'failed' || status === 'cancelled' || status === 'done' || status === 'queued') {
+    const retry = el('button', 'text-btn', status === 'done' ? '重新执行' : '重试');
+    retry.type = 'button';
+    retry.addEventListener('click', () => retryDurableTask(task.id));
+    body.appendChild(retry);
+  }
+  if (status === 'running' || status === 'queued') {
+    const cancel = el('button', 'text-btn', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => cancelDurableTask(task.id));
+    body.appendChild(cancel);
+  }
   item.appendChild(body);
   return item;
+}
+
+async function retryDurableTask(taskId) {
+  try {
+    await api(`/tasks/${taskId}/retry`, { method: 'POST' });
+    toast('任务已重新排队');
+    await loadAssistantTasks();
+    await loadAssistantStatus();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function cancelDurableTask(taskId) {
+  try {
+    await api(`/tasks/${taskId}/cancel`, { method: 'POST' });
+    toast('任务已取消');
+    await loadAssistantTasks();
+    await loadAssistantStatus();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 function durableTaskGroup(tasks) {

@@ -123,6 +123,7 @@ class AgentEngine:
         self._processed_set: set[int] = set()
         self._task_jobs: set[asyncio.Task] = set()
         self._primary_task_jobs: set[asyncio.Task] = set()
+        self._primary_task_by_id: dict[int, asyncio.Task] = {}
 
     async def handle_message(self, group_id: int, message_id: int) -> None:
         if not self._mark_processed(message_id):
@@ -715,6 +716,7 @@ class AgentEngine:
             await asyncio.gather(*jobs, return_exceptions=True)
         self._task_jobs.clear()
         self._primary_task_jobs.clear()
+        self._primary_task_by_id.clear()
 
     async def _run_chat_task(self, task_id: int) -> None:
         async with SessionLocal() as db:
@@ -2497,7 +2499,22 @@ class AgentEngine:
             name=f"dsh-primary-task-{task_id}",
         )
         self._primary_task_jobs.add(job)
-        job.add_done_callback(self._primary_task_jobs.discard)
+        self._primary_task_by_id[int(task_id)] = job
+
+        def _done(_task: asyncio.Task) -> None:
+            self._primary_task_jobs.discard(_task)
+            if self._primary_task_by_id.get(int(task_id)) is _task:
+                self._primary_task_by_id.pop(int(task_id), None)
+
+        job.add_done_callback(_done)
+
+    def restart_primary_task(self, task_id: int) -> None:
+        self._start_primary_task(int(task_id))
+
+    def cancel_primary_task(self, task_id: int) -> None:
+        job = self._primary_task_by_id.pop(int(task_id), None)
+        if job is not None and not job.done():
+            job.cancel()
 
     async def recover_primary_tasks(self) -> None:
         """Resume queued/running primary tasks after a service restart."""
@@ -2628,7 +2645,7 @@ class AgentEngine:
                 level="info",
             )
         except asyncio.CancelledError:
-            await task_runs.update(task_id, status="failed", error="任务已取消")
+            await task_runs.update(task_id, status="cancelled", error="任务已取消")
             raise
         except Exception as exc:
             await task_runs.step(task_id, "execute", "failed", detail=str(exc))

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.deps import get_runtime
+from app.core.runtime import RuntimeManager
 from app.services import task_runs
 
 router = APIRouter(tags=["tasks"])
@@ -30,6 +32,46 @@ async def create_task(payload: dict = Body(...)) -> dict:
         request=str(payload.get("request") or ""),
     )
     return {"task": task}
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_task(
+    task_id: int,
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    row = await task_runs.get(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if row.get("status") not in {"failed", "cancelled", "queued", "done"}:
+        raise HTTPException(status_code=409, detail="任务仍在执行，不能重试")
+    await task_runs.update(
+        task_id,
+        status="queued",
+        result="",
+        error="",
+        verified=False,
+        steps=task_runs.initial_steps(ack=True),
+        attempts=int(row.get("attempts") or 0),
+    )
+    runtime.agent.restart_primary_task(task_id)
+    return {"task": await task_runs.get(task_id)}
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: int,
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    row = await task_runs.get(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    runtime.agent.cancel_primary_task(task_id)
+    await task_runs.update(
+        task_id,
+        status="cancelled",
+        error="用户取消",
+    )
+    return {"task": await task_runs.get(task_id)}
 
 
 @router.delete("/tasks")
