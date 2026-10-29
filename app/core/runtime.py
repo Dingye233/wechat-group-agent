@@ -319,6 +319,7 @@ class RuntimeManager:
 
     def __init__(self) -> None:
         self.bus = EventBus()
+        self._message_write_lock = asyncio.Lock()
         self.event_relay = EventRelay()
         self.llm = LLMService()
         self.agent = AgentEngine(self, self.llm)
@@ -1101,6 +1102,12 @@ class RuntimeManager:
             self._schedule_agent(group_id, message_id)
 
     async def _store_incoming(
+        self, incoming: IncomingMessage
+    ) -> tuple[int, int, bool] | None:
+        async with self._message_write_lock:
+            return await self._store_incoming_locked(incoming)
+
+    async def _store_incoming_locked(
         self, incoming: IncomingMessage
     ) -> tuple[int, int, bool] | None:
         now = time.time()
@@ -2992,6 +2999,30 @@ class RuntimeManager:
             logger.warning("远程发送落库失败: %s", exc)
 
     async def _persist_outgoing(
+        self,
+        group: Group,
+        *,
+        kind: str,
+        content: str,
+        is_from_agent: bool,
+        meta: dict[str, Any],
+        account: dict[str, str],
+        sticker: Sticker | None = None,
+        media_path: str = "",
+    ) -> dict[str, Any]:
+        async with self._message_write_lock:
+            return await self._persist_outgoing_locked(
+                group,
+                kind=kind,
+                content=content,
+                is_from_agent=is_from_agent,
+                meta=meta,
+                account=account,
+                sticker=sticker,
+                media_path=media_path,
+            )
+
+    async def _persist_outgoing_locked(
         self,
         group: Group,
         *,

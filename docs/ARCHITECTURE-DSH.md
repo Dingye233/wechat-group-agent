@@ -1629,3 +1629,36 @@ task2 still waiting
 task1 done/released
 task2 acquired
 ```
+
+---
+
+## 48. 出站乐观落库与回读 echo 的去重锁
+
+测试群出现确认消息重复：
+
+```text
+1717 self  收到，我处理一下
+1718 agent 收到，我处理一下
+```
+
+根因是竞态：
+
+```text
+_persist_outgoing 检查 echo：还没有
+_store_incoming 检查 pending：还没有
+两边各自插入
+```
+
+修复：
+
+```text
+RuntimeManager._message_write_lock
+```
+
+`_store_incoming` 和 `_persist_outgoing` 都先获取同一把消息写锁，再查询/插入/合并。
+
+保证：
+
+- echo 先到：`_persist_outgoing` 找到 echo，补 Agent 元数据
+- 乐观行先到：`_store_incoming` 找到 pending，消费它
+- 不再产生 self + agent 双行
