@@ -1662,3 +1662,34 @@ RuntimeManager._message_write_lock
 - echo 先到：`_persist_outgoing` 找到 echo，补 Agent 元数据
 - 乐观行先到：`_store_incoming` 找到 pending，消费它
 - 不再产生 self + agent 双行
+
+---
+
+## 49. 任务拆解 / 工具链 / 授权 / 脚本生命周期
+
+更新 Task lane、Chat lane、legacy backend prompt：
+
+- 先拆解目标、约束、成功标准
+- 没有现成插件时先盘点能力，再组合工具或写脚本
+- 工具链传递中间结果，不因单次查询失败就放弃
+- 事实/操作任务必须先取工具结果
+- 登录、验证码、2FA、Cookie、密码、支付、删除文件、系统设置必须先确认
+- 禁止收集密码/Cookie、绕过验证码或权限
+- 临时脚本写入 `data/dsh/studio/tasks/<task_id>/`
+- 脚本完成后评级：
+  - temporary：任务结束清理
+  - reusable：参数化保留并安装/更新插件
+- 最终说明步骤、授权状态、脚本保留/清理
+
+Steam 这类没有现成插件的任务：
+
+```text
+检查环境
+→ 向用户确认登录授权
+→ 用户手动登录
+→ 读取/导出目标数据
+→ 验证
+→ 汇报
+```
+
+管理员任务允许 `qunban_powershell` + `qunban_plugin_install`；非管理员仍只能用只读/公开工具。

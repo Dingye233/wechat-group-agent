@@ -1023,6 +1023,10 @@ class AgentEngine:
 - 需要生成新文件时写到：{output_dir}
 - 如果用户要求“放到桌面/保存到桌面”，最终文件要同时复制到桌面和输出目录；群伴只会自动发送输出目录里的文件。
 - 遇到权限确认或选择题直接按最合理方案继续，不要反复追问。
+- 但登录、验证码、账号权限、支付、删除文件、修改系统设置等敏感操作必须先向用户确认，
+  需要本人登录时请用户手动完成；禁止收集密码/Cookie/验证码或绕过风控。
+- 没有现成插件时，先拆步骤、组合工具或写临时脚本解决，不要直接说做不到。
+- 临时脚本写到任务工作区；完成后做泛用性评级：temporary 清理，reusable 保留并更新插件。
 - 最终说明实际做了什么、结果、文件路径、未完成项；不要声称未执行的事情。
 - 给群友的最终答复要短、自然，不要贴绝对路径或内部目录，文件会自动附带。
 """
@@ -2834,11 +2838,33 @@ class AgentEngine:
                 memory_text = await self._load_memory_context(
                     db, group.id, settings, message
                 )
-            from app.services.task_tools import is_plugin_task, tools_for_task
+            from app.services.task_tools import (
+                is_plugin_task,
+                is_script_task,
+                tools_for_task,
+            )
 
             request_text = str(record.get("request") or message.content or "")
             plugin_task = is_plugin_task(request_text)
-            allowed_tools = tools_for_task(request_text)
+            sender_is_admin = False
+            try:
+                from app.models import Contact
+
+                async with SessionLocal() as db:
+                    contact = (
+                        await db.execute(
+                            select(Contact).where(
+                                Contact.wxid == str(message.sender_wxid or "")
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    sender_is_admin = bool(contact and contact.is_admin)
+            except Exception:
+                sender_is_admin = False
+            allow_script = bool(sender_is_admin and is_script_task(request_text))
+            allowed_tools = tools_for_task(
+                request_text, allow_script=allow_script
+            )
             plugin_block = (
                 """# 插件任务
 - 插件代码只能写到项目 data/dsh/studio/<slug>/ 下
@@ -2850,8 +2876,30 @@ class AgentEngine:
                 if plugin_task
                 else ""
             )
+            script_block = (
+                f"""# 工具链 / 临时脚本
+- 没有现成插件时，先把任务拆成可执行步骤：检查环境 → 取得授权 →
+  读取/登录 → 提取数据 → 验证 → 汇报。
+- 可以组合多个工具，并把上一步的输出传给下一步；不要只查一次就放弃。
+- 脚本只能写到 data/dsh/studio/tasks/{task_id}/，文件名清楚，先做基本检查再运行。
+- 登录、验证码、二步验证、Cookie、密码必须由用户本人完成；可以请用户确认或
+  让用户手动登录后继续，禁止收集密码、绕过验证码或盗用会话。
+- 完成前给脚本做泛用性评级：
+  * temporary：只服务本任务，任务结束后删除脚本和临时文件。
+  * reusable：可复用/可配置，保留并用 qunban_plugin_install 更新为插件。
+- 最终回复说明用了什么步骤、是否需要用户继续授权、脚本是保留还是清理。
+"""
+                if allow_script
+                else ""
+            )
             if plugin_task:
                 task_hint = ""
+            elif allow_script:
+                task_hint = (
+                    "# 任务提示\n这是一个本地/登录类任务：先盘点现有能力，再按步骤"
+                    "组合工具；没有插件就规划脚本，不要直接说做不到。涉及账号登录"
+                    "必须让用户本人授权或手动登录。\n"
+                )
             elif any(marker in request_text for marker in ("记一下", "记住", "记下")):
                 task_hint = (
                     "# 任务提示\n这是一个记录任务：先调用 qunban_memory_save "
@@ -2885,7 +2933,7 @@ class AgentEngine:
 # 本任务可用工具
 {', '.join(allowed_tools) or '（仅基础工具）'}
 
-{plugin_block}{task_hint}
+{plugin_block}{script_block}{task_hint}
 # 输出协议
 {{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
 或
@@ -2902,7 +2950,7 @@ class AgentEngine:
                 profile=f"qunban-task-{task_id}",
                 profile_scope="group_primary",
                 toolset="task",
-                env_scope="admin" if plugin_task else "group",
+                env_scope="admin" if (plugin_task or allow_script) else "group",
                 channel="group",
                 use_native=True,
                 system_prompt=TASK_LANE_PROMPT,

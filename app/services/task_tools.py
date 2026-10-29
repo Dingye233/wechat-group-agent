@@ -22,7 +22,7 @@ def _has(text: str, *words: str) -> bool:
     return any(word and word in text for word in words)
 
 
-def tools_for_task(request: str) -> list[str]:
+def tools_for_task(request: str, *, allow_script: bool = False) -> list[str]:
     text = str(request or "").lower()
     tools = list(BASE_TOOLS)
     if _has(text, "b站", "bilibili", "视频", "知识库"):
@@ -35,6 +35,22 @@ def tools_for_task(request: str) -> list[str]:
         tools.extend(["qunban_run_skill", "qunban_skill_*"])
     if _has(text, "mcp", "屏幕", "浏览器"):
         tools.extend(["qunban_run_mcp", "qunban_mcp_*"])
+    if allow_script and _has(
+        text,
+        "steam",
+        "登录",
+        "本地",
+        "桌面",
+        "浏览器",
+        "脚本",
+        "自动化",
+        "powershell",
+        "终端",
+        "文件",
+        "截图",
+        "截屏",
+    ):
+        tools.extend(["qunban_powershell", "qunban_plugin_install"])
     if _has(text, "插件", "plugin"):
         # A plugin task may write studio files and then install them.  The
         # task lane is switched to admin scope only for this allowlist.
@@ -47,6 +63,25 @@ def tools_for_task(request: str) -> list[str]:
         )
     # Preserve order, drop duplicates.
     return list(dict.fromkeys(tools))
+
+
+def is_script_task(request: str) -> bool:
+    text = str(request or "").lower()
+    return _has(
+        text,
+        "steam",
+        "登录",
+        "本地",
+        "桌面",
+        "浏览器",
+        "脚本",
+        "自动化",
+        "powershell",
+        "终端",
+        "文件",
+        "截图",
+        "截屏",
+    )
 
 
 def is_plugin_task(request: str) -> bool:
