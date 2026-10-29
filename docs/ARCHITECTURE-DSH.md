@@ -850,7 +850,7 @@ remote events status/account/groups/message
 remote send_text ok
 ```
 
-当前生产仍默认使用本地 `replica`；切换前需要停止 Qunban 本地适配器，并只启动一个 wechatauto 服务。
+2026-10-29 已完成生产切换：Qunban 使用 `replica-remote`，本地 ReplicaAdapter 只存在于 8010 服务进程。
 
 ---
 
