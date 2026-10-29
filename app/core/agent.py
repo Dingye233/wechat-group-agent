@@ -2558,9 +2558,9 @@ class AgentEngine:
 
 不要调用 wechat_send_message；最终发送由群伴完成。
 """
-            from app.services.dsh_primary import get_dsh_primary_service
+            from app.services.dsh_primary import get_dsh_task_lane_service
 
-            service = get_dsh_primary_service()
+            service = get_dsh_task_lane_service()
 
             async def on_update(event: dict[str, Any]) -> None:
                 if event.get("phase") == "tool" and event.get("tool"):

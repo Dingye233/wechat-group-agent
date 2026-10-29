@@ -579,7 +579,12 @@ export function apply(ctx) {
     ctx.tools.restrict({ deny: DENY_TOOLS })
   }
   for (const item of [...tools, ...capabilityTools]) {
-    if (TOOLSET === 'primary' && item.name === 'wechat_send_message') continue
+    if (
+      (TOOLSET === 'primary' || TOOLSET === 'task') &&
+      item.name === 'wechat_send_message'
+    ) {
+      continue
+    }
     ctx.tools.register(item)
   }
 }

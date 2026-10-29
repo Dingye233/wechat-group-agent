@@ -575,3 +575,32 @@ Chat lane 现在会在生成前尝试取少量 B站知识：
 - 知识库路径改为绝对路径 `settings.data_dir/knowledge/chroma`，不再依赖进程 cwd
 - 已从 `bili_videos` 回填现有视频：当前 collection 约 389 个 chunk
 - 重建脚本：`scripts/rebuild_bili_knowledge.py --limit N`
+
+---
+
+## 17. 已落地：独立 Task lane
+
+新增 profile：
+
+```text
+qunban-task-lane
+  · base + acp-app
+  · @qunban/dsh-native（task toolset）
+  · 独立持久 ACP session
+  · 只处理 durable task 的后台继续执行
+```
+
+- Chat lane、primary、Task lane 现在彼此独立
+- Task lane 使用 `task-<id>` session，不再污染群聊 primary 历史
+- `TOOLSET=task` 隐藏 `wechat_send_message`，最终发送仍由 Qunban 完成
+- `/api/dsh/status` 返回 `task_lane`
+- Task 的最终结果仍经 transport 队列发送
+
+验证：
+
+```text
+qunban-task-lane 启动成功
+测试 prompt 返回 {"action":"none"}
+```
+
+“按任务加载工具”目前仍是静态 task toolset，还没有做到每个任务单独生成 allowlist。

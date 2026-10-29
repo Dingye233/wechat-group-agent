@@ -604,3 +604,40 @@ def get_dsh_chat_lane_service() -> DSHChatLaneService:
     if _chat_lane is None:
         _chat_lane = DSHChatLaneService()
     return _chat_lane
+
+
+TASK_LANE_PROMPT = """你是群伴的 Task Agent，由 DeepSeek Harness 驱动。
+你负责执行群聊里被升级出来的复杂任务，不负责闲聊。
+
+- 使用暴露给你的群伴工具查资料、读群、记忆、B站、接口或生成文件。
+- 不要调用 wechat_send_message；最终发送由群伴完成。
+- 完成后只输出一个 JSON 对象：
+  {"action":"reply","messages":[{"text":"..."}],"sticker":null}
+- 如果确实无法完成，输出 {"action":"none"}，并不要伪造结果。
+- 不要输出 Markdown 代码块或工具名。
+"""
+
+
+class DSHTaskLaneService(DSHPrimaryService):
+    """Persistent task lane with the Qunban toolset."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            profile="qunban-task-lane",
+            profile_scope="group_primary",
+            toolset="task",
+            env_scope="group",
+            channel="group",
+            use_native=True,
+            system_prompt=TASK_LANE_PROMPT,
+        )
+
+
+_task_lane: DSHTaskLaneService | None = None
+
+
+def get_dsh_task_lane_service() -> DSHTaskLaneService:
+    global _task_lane
+    if _task_lane is None:
+        _task_lane = DSHTaskLaneService()
+    return _task_lane
