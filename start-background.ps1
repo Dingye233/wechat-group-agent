@@ -69,6 +69,15 @@ if ($autoLogin -eq "replica-remote") {
     }
 }
 
+# Memory/knowledge/context sidecar.  If it cannot start, Qunban keeps its
+# in-process fallback rather than blocking the whole Agent.
+& (Join-Path $PSScriptRoot "start-qunban-sidecar.ps1")
+if ($LASTEXITCODE -eq 0) {
+    $env:QUNBAN_SIDECAR_URL = "http://127.0.0.1:8020"
+} else {
+    Write-Host "Qunban sidecar unavailable; using in-process memory/knowledge fallback."
+}
+
 # A stale launcher PID can survive while its child owns the port. Prefer the
 # actual listener, and never start a second server on the same port.
 $existingConnection = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1

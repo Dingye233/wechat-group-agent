@@ -1872,16 +1872,26 @@ class AgentEngine:
             build_memory_context,
             format_memory_line,
         )
+        from app.services.qunban_sidecar import get_qunban_sidecar
 
         query = str(message.content or "")[:200] if message is not None else ""
+        sidecar_text = await get_qunban_sidecar().group_memory(
+            group_id=group_id,
+            account_key=self.runtime.account_key,
+            query=query,
+            settings=settings,
+        )
         try:
-            text, _ids = await build_memory_context(
-                db,
-                group_id=group_id,
-                account_key=self.runtime.account_key,
-                settings=settings,
-                query=query,
-            )
+            if sidecar_text is not None:
+                text = sidecar_text
+            else:
+                text, _ids = await build_memory_context(
+                    db,
+                    group_id=group_id,
+                    account_key=self.runtime.account_key,
+                    settings=settings,
+                    query=query,
+                )
         except Exception:
             text = ""
         lines = [text] if text else []
@@ -1925,7 +1935,16 @@ class AgentEngine:
     ) -> str:
         """Load only private/global memories for one contact."""
         from app.services.memory import build_memory_context
+        from app.services.qunban_sidecar import get_qunban_sidecar
 
+        sidecar_text = await get_qunban_sidecar().private_memory(
+            contact_wxid=wxid,
+            account_key=self.runtime.account_key,
+            query=str(query or "")[:200],
+            settings=settings,
+        )
+        if sidecar_text is not None:
+            return sidecar_text
         try:
             text, _ids = await build_memory_context(
                 db,
@@ -1954,15 +1973,23 @@ class AgentEngine:
         query = str(query or "").strip()[:300]
         if not query:
             return ""
-        try:
-            from app.services import bili_knowledge
+        from app.services.qunban_sidecar import get_qunban_sidecar
 
-            rows = await asyncio.wait_for(
-                asyncio.to_thread(bili_knowledge.search, query, max(1, limit)),
-                timeout=2.5,
-            )
-        except Exception:
-            return ""
+        sidecar_rows = await get_qunban_sidecar().knowledge_search(
+            query, max(1, limit)
+        )
+        if sidecar_rows is not None:
+            rows = sidecar_rows
+        else:
+            try:
+                from app.services import bili_knowledge
+
+                rows = await asyncio.wait_for(
+                    asyncio.to_thread(bili_knowledge.search, query, max(1, limit)),
+                    timeout=2.5,
+                )
+            except Exception:
+                rows = []
         lines: list[str] = []
         for row in rows or []:
             text = str(row.get("text") or "").strip()

@@ -1251,3 +1251,57 @@ source=auto_private
 ```
 
 不做额外 LLM 调用，避免每条私聊都增加延迟。
+
+---
+
+## 39. Qunban sidecar v1（记忆/知识/context）
+
+新增独立进程：
+
+```text
+scripts/qunban_sidecar.py :8020
+```
+
+职责：
+
+- group memory context
+- private/contact memory context
+- memory search/save
+- B站知识检索
+
+Qunban 主进程通过：
+
+```text
+QUNBAN_SIDECAR_URL=http://127.0.0.1:8020
+```
+
+调用：
+
+```text
+/v1/memory/group_context
+/v1/memory/private_context
+/v1/memory/search
+/v1/memory/save
+/v1/knowledge/search
+```
+
+主进程保留 fallback：sidecar 不可用时回到本地 `build_memory_context` / `bili_knowledge`。
+
+已验证：
+
+```text
+sidecar health ok
+group_context 200
+private_context 200
+knowledge/search 200
+Qunban diagnostics.sidecar.ok=true
+```
+
+启动：
+
+```text
+start-qunban-sidecar.ps1
+start-background.ps1
+```
+
+当前边界：sidecar 只接管**记忆/知识/context 读取**；规则、任务、RuntimeManager、WebSocket 仍在主 Qunban 进程。

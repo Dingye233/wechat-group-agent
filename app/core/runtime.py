@@ -1938,8 +1938,24 @@ class RuntimeManager:
         ):
             return
         from app.services.memory import save_memory
+        from app.services.qunban_sidecar import get_qunban_sidecar
 
         try:
+            sidecar_saved = await get_qunban_sidecar().save_memory(
+                {
+                    "group_id": None,
+                    "contact_wxid": wxid,
+                    "account_key": self.account_key,
+                    "scope": "private",
+                    "category": "preference",
+                    "title": value[:40],
+                    "content": value[:400],
+                    "importance": 3,
+                    "source": "auto_private",
+                }
+            )
+            if sidecar_saved is not None:
+                return
             await save_memory(
                 group_id=None,
                 contact_wxid=wxid,
