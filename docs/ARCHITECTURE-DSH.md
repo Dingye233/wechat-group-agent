@@ -554,3 +554,22 @@ qunban-chat-lane
 - 复杂私聊仍进入 AssistantService / DSH Task
 
 当前限制：私聊的工具任务没有独立 Task lane，仍走 headless DSH。
+
+---
+
+## 16. Chat lane 的知识检索
+
+Chat lane 现在会在生成前尝试取少量 B站知识：
+
+```text
+当前消息
+  → bili_knowledge.search(top 3)
+  → 2.5 秒超时
+  → 距离阈值 0.92
+  → 拼入 context capsule 的“相关知识”
+```
+
+- 知识是外部检索片段，不写入 session 历史
+- 超时/索引不可用时不阻塞聊天，直接省略
+- 只在 Chat lane 使用；Task lane 仍可通过 `qunban_bili_knowledge` 深挖
+- 当前 Chroma 索引可能为空，检索会返回空列表；需要 B站知识生产线继续写入

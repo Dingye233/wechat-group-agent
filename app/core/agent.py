@@ -1913,6 +1913,49 @@ class AgentEngine:
             pass
         return "\n".join(lines)
 
+    async def _load_knowledge_context(
+        self,
+        query: str,
+        settings: dict[str, Any],
+        *,
+        limit: int = 3,
+    ) -> str:
+        """Retrieve a few B站 knowledge snippets for the chat lane.
+
+        Knowledge is an external retrieval layer, not session history.  A slow
+        or unavailable vector index must never block a WeChat reply.
+        """
+        query = str(query or "").strip()[:300]
+        if not query:
+            return ""
+        try:
+            from app.services import bili_knowledge
+
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(bili_knowledge.search, query, max(1, limit)),
+                timeout=2.5,
+            )
+        except Exception:
+            return ""
+        lines: list[str] = []
+        for row in rows or []:
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            distance = row.get("distance")
+            if isinstance(distance, (int, float)) and distance > 0.92:
+                continue
+            meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            title = str(meta.get("title") or "").strip()
+            source = str(meta.get("author") or "").strip()
+            prefix = f"《{title}》" if title else ""
+            if source:
+                prefix = f"{prefix}（{source}）" if prefix else f"（{source}）"
+            lines.append(f"- {prefix}{text[:320]}")
+            if len(lines) >= max(1, limit):
+                break
+        return "\n".join(lines)
+
     async def _load_sticker_catalog(
         self, db: AsyncSession, config: GroupConfig
     ) -> list[Sticker]:
@@ -2117,6 +2160,9 @@ class AgentEngine:
         sender = str(message.sender_name or message.sender_wxid or "群友")
         persona = (config.persona or settings.get("default_persona") or "").strip()
         recent = "\n".join(context[-12:]) or "（无）"
+        knowledge_text = await self._load_knowledge_context(
+            str(message.content or ""), settings
+        )
         prompt = f"""# 群聊
 群：{group.name or '未命名群'}
 触发者：{sender}
@@ -2127,6 +2173,9 @@ class AgentEngine:
 
 # 长期记忆
 {(memory_text or '无')[:1200]}
+
+# 相关知识（可选用，不要强行引用）
+{knowledge_text or '（无）'}
 
 # 本条消息
 {sender}：{str(message.content or '')[:2000]}
