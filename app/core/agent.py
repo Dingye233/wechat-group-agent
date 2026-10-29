@@ -2737,6 +2737,7 @@ class AgentEngine:
                 task_id,
                 request=str(record.get("request") or ""),
                 result_text=text,
+                send_confirmed=bool(sent),
             )
             await task_runs.step(
                 task_id,

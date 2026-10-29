@@ -2528,15 +2528,31 @@ class RuntimeManager:
         safe_meta = json.loads(
             json.dumps(meta or {}, ensure_ascii=False, default=str)
         )
-        job = await transport.submit(
-            group_id=group_id,
-            text=text,
-            sticker_id=int(sticker.id) if sticker is not None else None,
-            files=[str(path) for path in files or []],
-            meta=safe_meta,
-            reuse_chat=reuse_chat,
-            idempotency_key=str(safe_meta.get("client_msg_id") or ""),
-        )
+        try:
+            job = await transport.submit(
+                group_id=group_id,
+                text=text,
+                sticker_id=int(sticker.id) if sticker is not None else None,
+                files=[str(path) for path in files or []],
+                meta=safe_meta,
+                reuse_chat=reuse_chat,
+                idempotency_key=str(safe_meta.get("client_msg_id") or ""),
+            )
+        except Exception as exc:
+            from app.services.wechatauto_transport import TransportUnavailable
+
+            if not isinstance(exc, TransportUnavailable):
+                raise
+            # The service queue may be unavailable or not support a media
+            # type; the adapter path still owns the actual send.
+            return await self._send_agent_message_now(
+                group_id,
+                text=text,
+                sticker=sticker,
+                meta=safe_meta,
+                files=files,
+                reuse_chat=reuse_chat,
+            )
         finished = await transport.wait(int(job["id"]), timeout=180.0)
         if finished.get("status") != "sent":
             raise RuntimeError(

@@ -315,6 +315,50 @@ class RemoteAdapter(BaseAdapter):
             )
         return dict(response.json().get("result") or {})
 
+    async def submit_outbound(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = await self._http().post(
+            "/v1/outbound", json=payload, timeout=30.0
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json().get("job") or {})
+
+    async def get_outbound(self, job_id: int) -> dict[str, Any]:
+        response = await self._http().get(f"/v1/outbound/{int(job_id)}")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json().get("job") or {})
+
+    async def list_outbound(self, limit: int = 50) -> dict[str, Any]:
+        response = await self._http().get(
+            "/v1/outbound", params={"limit": int(limit)}
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json())
+
+    async def stats_outbound(self) -> dict[str, int]:
+        response = await self._http().get("/v1/outbound/stats")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json())
+
+    async def retry_outbound(self, job_id: int) -> dict[str, Any]:
+        response = await self._http().post(f"/v1/outbound/{int(job_id)}/retry")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json().get("job") or {})
+
     async def _config(self, payload: dict[str, Any]) -> None:
         await self._http().post("/v1/config", json=payload)
 

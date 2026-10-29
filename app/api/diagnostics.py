@@ -39,7 +39,7 @@ async def diagnostics(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
         "transport": {
             "running": bool(getattr(transport, "running", False)),
             "stats": transport_stats,
-            "in_process": True,
+            "in_process": runtime.adapter_id != "replica-remote",
         },
         "lanes": {
             "primary": get_dsh_primary_service().status(),

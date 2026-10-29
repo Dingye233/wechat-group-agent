@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from app.adapters import create_adapter
 from app.adapters.base import AdapterEvent
+from scripts.wechatauto_queue import ServiceQueue
 
 
 class ServiceState:
@@ -35,6 +36,7 @@ class ServiceState:
         self.backend = backend
         self.token = token
         self.adapter: Any = None
+        self.queue: ServiceQueue | None = None
         self.events: deque[dict[str, Any]] = deque(maxlen=2000)
         self.seq = 0
         self.lock = threading.Lock()
@@ -86,8 +88,17 @@ class ServiceState:
     async def start(self) -> None:
         self.adapter = create_adapter(self.backend, self.emit)
         await self.adapter.start()
+        self.queue = ServiceQueue(
+            self.adapter,
+            PROJECT / "data" / "wechatauto-queue.db",
+            group_db_path=PROJECT / "data" / "agent.db",
+        )
+        await self.queue.start()
 
     async def stop(self) -> None:
+        if self.queue is not None:
+            await self.queue.stop()
+            self.queue = None
         if self.adapter is not None:
             await self.adapter.stop()
             self.adapter = None
@@ -147,6 +158,50 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             if rows or time.monotonic() >= end:
                 return {"events": rows, "seq": state.seq}
             await asyncio.sleep(0.08)
+
+    @app.post("/v1/outbound", dependencies=[Depends(_auth)])
+    async def outbound_submit(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        job = await state.queue.submit(
+            group_id=int(payload.get("group_id") or 0),
+            text=str(payload.get("text") or ""),
+            sticker_id=payload.get("sticker_id"),
+            files=[str(item) for item in payload.get("files") or []],
+            meta=dict(payload.get("meta") or {}),
+            reuse_chat=bool(payload.get("reuse_chat")),
+            idempotency_key=str(payload.get("idempotency_key") or ""),
+        )
+        return {"job": job}
+
+    @app.get("/v1/outbound", dependencies=[Depends(_auth)])
+    async def outbound_list(limit: int = 50) -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        return {
+            "jobs": await state.queue.list(limit),
+            "stats": await state.queue.stats(),
+        }
+
+    @app.get("/v1/outbound/stats", dependencies=[Depends(_auth)])
+    async def outbound_stats() -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        return await state.queue.stats()
+
+    @app.get("/v1/outbound/{job_id}", dependencies=[Depends(_auth)])
+    async def outbound_get(job_id: int) -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        job = await state.queue.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="发送任务不存在")
+        return {"job": job}
+
+    @app.post("/v1/outbound/{job_id}/retry", dependencies=[Depends(_auth)])
+    async def outbound_retry(job_id: int) -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        try:
+            job = await state.queue.retry(job_id)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"job": job}
 
     @app.get("/v1/groups", dependencies=[Depends(_auth)])
     async def groups() -> dict[str, Any]:

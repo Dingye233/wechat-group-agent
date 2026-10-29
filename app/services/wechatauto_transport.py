@@ -42,10 +42,22 @@ class WechatautoTransport:
     def running(self) -> bool:
         return self._running
 
+    def _remote(self) -> Any | None:
+        adapter = getattr(self.runtime, "adapter", None)
+        if (
+            getattr(self.runtime, "adapter_id", "") == "replica-remote"
+            and callable(getattr(adapter, "submit_outbound", None))
+        ):
+            return adapter
+        return None
+
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
+        if self._remote() is not None:
+            logger.info("wechatauto transport 使用独立服务队列")
+            return
         await self._recover()
         self._worker = asyncio.create_task(
             self._worker_loop(), name="wechatauto-transport"
@@ -94,6 +106,24 @@ class WechatautoTransport:
         reuse_chat: bool = False,
         idempotency_key: str = "",
     ) -> dict[str, Any]:
+        remote = self._remote()
+        if remote is not None:
+            if not self._running:
+                raise TransportUnavailable("wechatauto transport 未启动")
+            if sticker_id:
+                raise TransportUnavailable(
+                    "远程队列暂不支持表情包，走直连发送"
+                )
+            return await remote.submit_outbound(
+                {
+                    "group_id": int(group_id),
+                    "text": str(text or ""),
+                    "files": [str(Path(item)) for item in files or []],
+                    "meta": meta or {},
+                    "reuse_chat": bool(reuse_chat),
+                    "idempotency_key": str(idempotency_key or ""),
+                }
+            )
         key = str(
             idempotency_key
             or (meta or {}).get("client_msg_id")
@@ -137,6 +167,15 @@ class WechatautoTransport:
         return payload
 
     async def wait(self, job_id: int, timeout: float = 180.0) -> dict[str, Any]:
+        remote = self._remote()
+        if remote is not None:
+            deadline = time.monotonic() + max(1.0, float(timeout))
+            while time.monotonic() < deadline:
+                job = await remote.get_outbound(int(job_id))
+                if job.get("status") in {"sent", "failed"}:
+                    return job
+                await asyncio.sleep(0.2)
+            raise TransportUnavailable("发送任务等待超时")
         future = self._futures.get(int(job_id))
         if future is None:
             # Job may have been submitted by a previous process or recovered;
@@ -155,11 +194,20 @@ class WechatautoTransport:
         return await self._load_job(int(job_id))
 
     async def job(self, job_id: int) -> dict[str, Any] | None:
+        remote = self._remote()
+        if remote is not None:
+            try:
+                return await remote.get_outbound(int(job_id))
+            except Exception:
+                return None
         async with SessionLocal() as db:
             row = await db.get(TransportJob, int(job_id))
             return self._job_dict(row) if row else None
 
     async def requeue(self, job_id: int) -> dict[str, Any]:
+        remote = self._remote()
+        if remote is not None:
+            return await remote.retry_outbound(int(job_id))
         """Manually retry a failed job after the user accepts the risk.
 
         Automatic retry is intentionally disabled for uncertain sends: the
@@ -189,6 +237,10 @@ class WechatautoTransport:
         return payload
 
     async def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        remote = self._remote()
+        if remote is not None:
+            data = await remote.list_outbound(limit)
+            return list(data.get("jobs") or [])
         limit = max(1, min(200, int(limit)))
         async with SessionLocal() as db:
             rows = (
@@ -201,6 +253,9 @@ class WechatautoTransport:
             return [self._job_dict(row) for row in rows]
 
     async def stats(self) -> dict[str, int]:
+        remote = self._remote()
+        if remote is not None:
+            return await remote.stats_outbound()
         async with SessionLocal() as db:
             rows = (
                 await db.execute(

@@ -31,35 +31,46 @@ async def verify_task(
     *,
     request: str,
     result_text: str,
+    send_confirmed: bool = False,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     text = f"{request}\n{result_text}"
     bvids = BVID_RE.findall(text)
     paths = WIN_PATH_RE.findall(text)
 
+    if send_confirmed:
+        checks.append(
+            {
+                "name": "send",
+                "ok": True,
+                "detail": "transport wait 已确认 sent",
+            }
+        )
+
     sent_job = False
     try:
-        async with SessionLocal() as db:
-            rows = (
-                await db.execute(
-                    select(TransportJob)
-                    .order_by(TransportJob.id.desc())
-                    .limit(200)
+        if not send_confirmed:
+            async with SessionLocal() as db:
+                rows = (
+                    await db.execute(
+                        select(TransportJob)
+                        .order_by(TransportJob.id.desc())
+                        .limit(200)
+                    )
+                ).scalars().all()
+            for row in rows:
+                meta = (row.payload or {}).get("meta") or {}
+                if str(meta.get("task_id") or "") != str(task_id):
+                    continue
+                checks.append(
+                    {
+                        "name": "send",
+                        "ok": row.status == "sent",
+                        "detail": f"job #{row.id} {row.status}",
+                    }
                 )
-            ).scalars().all()
-        for row in rows:
-            meta = (row.payload or {}).get("meta") or {}
-            if str(meta.get("task_id") or "") != str(task_id):
-                continue
-            checks.append(
-                {
-                    "name": "send",
-                    "ok": row.status == "sent",
-                    "detail": f"job #{row.id} {row.status}",
-                }
-            )
-            sent_job = row.status == "sent"
-            break
+                sent_job = row.status == "sent"
+                break
     except Exception as exc:
         checks.append({"name": "send", "ok": False, "detail": str(exc)[:200]})
 

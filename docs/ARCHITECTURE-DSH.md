@@ -386,9 +386,10 @@ Agent / Runtime
 - `RuntimeManager.send_agent_message()` 统一投递到 transport
 - transport 未启动时自动回退直发，避免测试/早期启动发送断裂
 
-当前限制：
+当前限制（历史第一阶段）：
 
-- worker 仍在 Qunban 进程内，还不是独立 wechatauto 守护进程
+- 本地模式 worker 仍在 Qunban 进程内
+- 远程模式已迁移到 8010 服务队列
 - 读取事件仍由 RuntimeManager 轮询适配器
 - outbox 补发仍走原链路，未完全迁移
 
@@ -861,11 +862,11 @@ remote send_text ok
 ```text
 微信 4.x
   ↕
-wechatauto service :8010（独占 ReplicaAdapter）
-  ↕ HTTP /v1/events /v1/send_text /v1/preflight /v1/groups ...
+wechatauto service :8010（独占 ReplicaAdapter + outbound queue）
+  ↕ HTTP /v1/events /v1/outbound /v1/preflight /v1/groups ...
 Qunban :8000（replica-remote）
   ├─ RuntimeManager
-  ├─ transport worker
+  ├─ transport client（提交/等待/查询）
   ├─ 规则/记忆/知识/任务
   └─ DSH primary / chat / task lanes
 ```
@@ -1164,3 +1165,53 @@ task_verify
 ```text
 POST /api/dsh/plugins/{id}/rollback
 ```
+
+---
+
+## 37. outbound 队列迁移到 wechatauto 服务
+
+新拓扑：
+
+```text
+Qunban WechatautoTransport
+  → replica-remote.submit_outbound()
+  → 8010 /v1/outbound
+  → ServiceQueue（SQLite + 单 worker）
+  → 服务内 ReplicaAdapter.send_text/send_file
+  → 微信
+```
+
+服务队列：
+
+```text
+data/wechatauto-queue.db
+```
+
+- 幂等键
+- 重启恢复 queued/sending
+- 失败不自动重试
+- `/v1/outbound/{id}/retry` 手动重试
+- Qunban `/api/transport/jobs` 直接查询服务队列
+
+验证：
+
+```text
+mock 服务队列：
+  submit → sent
+  Qunban RemoteTransport → sent
+
+真实生产：
+  group 211
+  job id=4
+  status=sent
+  elapsed_ms=13709
+  messages 1 条 echo，无重复
+```
+
+诊断：
+
+```text
+transport.in_process=false
+```
+
+本地 `replica` 模式仍保留 Qunban 内队列作为回退。
