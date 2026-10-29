@@ -851,3 +851,51 @@ remote send_text ok
 ```
 
 当前生产仍默认使用本地 `replica`；切换前需要停止 Qunban 本地适配器，并只启动一个 wechatauto 服务。
+
+---
+
+## 28. 生产已切换：Qunban ↔ wechatauto 独立进程
+
+当前生产拓扑：
+
+```text
+微信 4.x
+  ↕
+wechatauto service :8010（独占 ReplicaAdapter）
+  ↕ HTTP /v1/events /v1/send_text /v1/groups ...
+Qunban :8000（replica-remote）
+  ├─ RuntimeManager
+  ├─ transport worker
+  ├─ 规则/记忆/知识/任务
+  └─ DSH primary / chat / task lanes
+```
+
+已确认：
+
+```text
+adapter=replica-remote
+service backend=replica
+service status=online
+Qunban runtime=online
+groups/messages 同步正常
+```
+
+启动顺序：
+
+```powershell
+.\start-wechatauto-service.ps1
+.\start-background.ps1 -NoBrowser -NoTray
+```
+
+`start-background.ps1` 会读取 `auto_login`；如果为 `replica-remote`，会先确保 8010 服务健康，再启动 Qunban。
+
+回滚到本地 replica：
+
+```text
+1. 停止 Qunban
+2. 停止 8010 wechatauto 服务
+3. 将 auto_login 设置为 replica
+4. 启动 Qunban
+```
+
+当前 transport worker 仍位于 Qunban 进程内；它通过 `replica-remote` 把发送交给独立服务。因此“适配器所有权”已拆开，“outbound 队列所有权”还没有完全迁移。

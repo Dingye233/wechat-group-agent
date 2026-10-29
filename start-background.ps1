@@ -49,6 +49,25 @@ $pidFile = Join-Path $PSScriptRoot "data\server.pid"
 $outLog = Join-Path $PSScriptRoot "data\server.out.log"
 $errLog = Join-Path $PSScriptRoot "data\server.err.log"
 
+# If production uses the split transport, ensure the independently owned
+# wechatauto service is healthy before Qunban auto-login tries to reach it.
+$autoLogin = ""
+try {
+    $dbPath = Join-Path $PSScriptRoot "data\agent.db"
+    if (Test-Path $dbPath) {
+        $autoLogin = & $python -c "import sqlite3,json; c=sqlite3.connect(r'$dbPath'); r=c.execute(\"select value from settings where key='auto_login'\").fetchone(); print(json.loads(r[0]) if r else '')" 2>$null
+    }
+} catch {
+    $autoLogin = ""
+}
+if ($autoLogin -eq "replica-remote") {
+    & (Join-Path $PSScriptRoot "start-wechatauto-service.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "wechatauto service failed; refusing to start Qunban in remote mode."
+        exit 1
+    }
+}
+
 # A stale launcher PID can survive while its child owns the port. Prefer the
 # actual listener, and never start a second server on the same port.
 $existingConnection = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
