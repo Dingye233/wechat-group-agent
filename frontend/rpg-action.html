@@ -140,6 +140,28 @@
   'use strict';
   const LOGICAL_W = 1280, LOGICAL_H = 720;
   const cv = document.getElementById('cv');
+
+  // ---------------------------------------------------------------- 素材（CC0）
+  // 来源：opengameart.org "Free asset pack"（CC0），见 docs/ASSETS.md
+  const SPRITE_DIR = '/assets/sprites/';
+  function loadImg(name) {
+    const img = new Image();
+    img.src = SPRITE_DIR + name;
+    return img;
+  }
+  const ART = {
+    player: loadImg('Wizard.png'),
+    walker: loadImg('Slime.png'),
+    flyer: loadImg('Ghost.png'),
+    boss: loadImg('Vampire.png'),
+    brute: loadImg('Oldman.png'),
+    ground: loadImg('Ground.png'),
+    grass: loadImg('Grass.png'),
+    crystal: loadImg('Crystal.png'),
+    bush: loadImg('Bush_left.png'),
+  };
+  const artReady = (img) => img && img.complete && img.naturalWidth > 0;
+  const clampV = (v, a, b) => Math.max(a, Math.min(b, v));
   const ctx = cv.getContext('2d');
   const $ = (id) => document.getElementById(id);
 
@@ -481,6 +503,122 @@
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
+
+  // ---------------------------------------------------------------- 精灵绘制（CC0 素材）
+  function drawPlatforms() {
+    if (!artReady(ART.ground)) { drawPlatformsProc(); return; }
+    const TILE = 128;
+    for (const p of platforms) {
+      const x = p.x - G.cameraX;
+      if (x + p.w < -90 || x > LOGICAL_W + 90) continue;
+      if (p.kind === 'ground') {
+        const g = ctx.createLinearGradient(0, p.y, 0, p.y + 140);
+        g.addColorStop(0, '#2b4a38');
+        g.addColorStop(1, '#08140f');
+        ctx.fillStyle = g;
+        ctx.fillRect(x, p.y + 20, p.w, 140);
+        for (let tx = 0; tx < p.w; tx += TILE) {
+          const w = Math.min(TILE, p.w - tx);
+          ctx.drawImage(ART.ground, x + tx, p.y - 4, w, 38);
+        }
+        if (artReady(ART.grass)) {
+          ctx.globalAlpha = 0.95;
+          for (let tx = 0; tx < p.w; tx += TILE) {
+            const w = Math.min(TILE, p.w - tx);
+            ctx.drawImage(ART.grass, x + tx, p.y - 12, w, 20);
+          }
+          ctx.globalAlpha = 1;
+        }
+      } else {
+        for (let tx = 0; tx < p.w; tx += TILE) {
+          const w = Math.min(TILE, p.w - tx);
+          ctx.drawImage(ART.ground, x + tx, p.y, w, 24);
+        }
+      }
+    }
+  }
+
+  function drawPlayer() {
+    if (!artReady(ART.player)) { drawPlayerProc(); return; }
+    const cx = player.x - G.cameraX + player.w / 2;
+    const by = player.y + player.h + 4;
+    ctx.save();
+    ctx.globalAlpha = 0.26; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(cx, by, 24, 6, 0, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    const h = 110;
+    const w = h * (ART.player.naturalWidth / ART.player.naturalHeight);
+    const bob = player.onGround ? Math.sin(player.animT) * 2.4 : 0;
+    ctx.translate(cx, by + bob);
+    ctx.scale(player.face, 1);
+    ctx.rotate(clampV(player.vx / 1500, -0.1, 0.1) + (player.atkTimer > 0 ? -player.face * 0.1 : 0));
+    if (player.invuln > 0 && Math.floor(G.time * 22) % 2 === 0) ctx.globalAlpha = 0.55;
+    ctx.drawImage(ART.player, -w / 2, -h, w, h);
+    ctx.globalAlpha = 1;
+    if (player.atkTimer > 0) {
+      ctx.strokeStyle = 'rgba(160,240,220,.9)'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(w * 0.24, -h * 0.55, 46, -1.2, 0.8); ctx.stroke();
+    }
+    ctx.restore();
+
+    for (const t of (player.trail || [])) {
+      ctx.globalAlpha = t.life * 0.5;
+      ctx.fillStyle = '#7ef0c0';
+      ctx.fillRect(t.x - G.cameraX + 8, t.y + 12, 26, 52);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawEnemy(e) {
+    const key = e.kind === 'boss' ? ART.boss : e.kind === 'brute' ? ART.brute : e.kind === 'flyer' ? ART.flyer : ART.walker;
+    if (!artReady(key)) { drawEnemyProc(e); return; }
+    const x = e.x - G.cameraX;
+    const baseY = e.y + e.h;
+    const scale = e.kind === 'boss' ? 1.85 : e.kind === 'brute' ? 1.2 : 1.0;
+    const h = 66 * scale;
+    const w = h * (key.naturalWidth / key.naturalHeight);
+    ctx.save();
+    ctx.globalAlpha = 0.25; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(x + e.w / 2, baseY + 3, w * 0.34, 6, 0, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+    const floatY = e.kind === 'flyer' ? Math.sin(e.t * 2.6) * 5 : 0;
+    ctx.translate(x + e.w / 2, baseY + floatY);
+    if (e.flash > 0) ctx.globalAlpha = 0.85;
+    ctx.scale(e.face * -1, 1);
+    ctx.drawImage(key, -w / 2, -h, w, h);
+    ctx.globalAlpha = 1;
+    if (e.kind === 'boss') {
+      const aura = ctx.createRadialGradient(0, -h * 0.5, 8, 0, -h * 0.5, w * 0.9);
+      aura.addColorStop(0, 'rgba(255,90,110,.22)');
+      aura.addColorStop(1, 'rgba(255,90,110,0)');
+      ctx.fillStyle = aura;
+      ctx.beginPath(); ctx.arc(0, -h * 0.5, w * 0.9, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    if (e.hp < e.maxHp) {
+      const bw = Math.max(44, e.w * 0.9);
+      const bx = x + e.w / 2 - bw / 2;
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(bx, e.y - 16, bw, 5);
+      ctx.fillStyle = e.kind === 'boss' ? '#ff8b7a' : '#7ce0a0';
+      ctx.fillRect(bx, e.y - 16, bw * Math.max(0, e.hp / e.maxHp), 5);
+    }
+  }
+
+  function drawDrops() {
+    if (!artReady(ART.crystal)) { drawDropsProc(); return; }
+    for (const d of drops) {
+      const x = d.x - G.cameraX, y = d.y;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(1 + Math.sin(d.t * 6) * 0.12, 1 + Math.sin(d.t * 6) * 0.12);
+      ctx.shadowColor = d.item.color; ctx.shadowBlur = 18;
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(ART.crystal, -19, -19, 38, 38);
+      ctx.restore();
+    }
+  }
+
   function update(dt) {
     G.time += dt;
     if (G.state !== 'play') { updateDrops(dt); updateParticles(dt); return; }
@@ -802,7 +940,7 @@
     ctx.restore();
   }
 
-  function drawPlatforms() {
+  function drawPlatformsProc() {
     for (const p of platforms) {
       const x = p.x - G.cameraX;
       if (x + p.w < -50 || x > LOGICAL_W + 50) continue;
@@ -835,7 +973,7 @@
     }
   }
 
-  function drawPlayer() {
+  function drawPlayerProc() {
     const x = player.x - G.cameraX + player.w / 2;
     const y = player.y + player.h;
     ctx.save();
@@ -889,7 +1027,7 @@
     ctx.restore();
   }
 
-  function drawEnemy(e) {
+  function drawEnemyProc(e) {
     const x = e.x - G.cameraX, y = e.y;
     ctx.save();
     ctx.translate(x + e.w / 2, y + e.h);
@@ -957,7 +1095,7 @@
     }
   }
 
-  function drawDrops() {
+  function drawDropsProc() {
     for (const d of drops) {
       const x = d.x - G.cameraX, y = d.y;
       const pulse = 1 + Math.sin(d.t * 6) * 0.12;

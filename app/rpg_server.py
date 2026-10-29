@@ -8,8 +8,11 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.api.rpg import api_router, page_html, page_router
@@ -23,6 +26,10 @@ app.add_middleware(
 )
 app.include_router(api_router, prefix="/api")
 app.include_router(page_router)
+
+_ASSETS = Path(__file__).resolve().parents[1] / "frontend" / "assets"
+if _ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_ASSETS)), name="game-assets")
 
 
 @app.get("/", response_class=HTMLResponse)
