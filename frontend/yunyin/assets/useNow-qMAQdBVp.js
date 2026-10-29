@@ -1,0 +1,1 @@
+import{As as e,Qn as t}from"./player-znxurnWa.js";import{n}from"./index-rop21BOR.js";function r(r=1e3){let i=e(t());return n(()=>{i.value=t()},r),i}export{r as t};
