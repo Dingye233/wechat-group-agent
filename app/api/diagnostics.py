@@ -11,6 +11,7 @@ from app.services.dsh_primary import (
     get_dsh_task_lane_service,
 )
 from app.services.qunban_sidecar import get_qunban_sidecar
+from app.services.dsh_router import get_dsh_router
 
 router = APIRouter(tags=["diagnostics"])
 
@@ -55,6 +56,7 @@ async def diagnostics(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
             "task": get_dsh_task_lane_service().status(),
         },
         "sidecar": await get_qunban_sidecar().health(),
+        "router": get_dsh_router().status(),
         "knowledge": knowledge,
         "tasks": {"counts": counts, "recent": tasks[:10]},
         "events": {

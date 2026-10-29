@@ -1356,3 +1356,58 @@ RuntimeManager
 WebSocket
 DSH lane 生命周期
 ```
+
+---
+
+## 41. DSH Router 与规则 sidecar
+
+### DSH Router
+
+新增 profile：
+
+```text
+qunban-router
+  base + acp-app
+  无工具
+  只输出 lane JSON
+```
+
+链路：
+
+```text
+Qunban 规则 Router
+  → confidence >= threshold：直接用
+  → confidence < threshold：DSH Router 仲裁
+  → lane chat/task/ignore
+```
+
+默认：
+
+```text
+dsh_router_enabled=true
+dsh_router_threshold=0.6
+```
+
+DSH Router 是懒启动；`/api/diagnostics.router` 可查。
+
+### 规则门 sidecar
+
+`/v1/rules/trigger` 已迁到 8020：
+
+```text
+content
+mode
+keywords
+aliases
+mentioned_me
+→ triggered
+```
+
+主进程 `_triggered` 优先调用 sidecar，失败回退本地。
+
+仍未迁：
+
+- `_passes_limits` / 冷却 / 每小时上限（内存状态）
+- RuntimeManager
+- 消息入库
+- WebSocket

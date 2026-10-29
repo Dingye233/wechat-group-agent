@@ -115,6 +115,33 @@ class QunbanSidecar:
         except Exception:
             return None
 
+    async def trigger(
+        self,
+        *,
+        content: str,
+        mode: str,
+        keywords: list[str],
+        aliases: list[str],
+        mentioned_me: bool,
+    ) -> bool | None:
+        try:
+            data = await self._post(
+                "/v1/rules/trigger",
+                {
+                    "content": content,
+                    "mode": mode,
+                    "keywords": keywords,
+                    "aliases": aliases,
+                    "mentioned_me": mentioned_me,
+                },
+                timeout=3.0,
+            )
+            if data is None:
+                return None
+            return bool(data.get("triggered"))
+        except Exception:
+            return None
+
 
 _sidecar: QunbanSidecar | None = None
 

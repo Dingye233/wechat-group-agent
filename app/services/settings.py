@@ -59,6 +59,8 @@ PUBLIC_KEYS = {
     "group_chat_engine",
     "group_channel_mode",
     "dsh_chat_lane_enabled",
+    "dsh_router_enabled",
+    "dsh_router_threshold",
     "tray_close_action",
     "takeover_hotkey",
     "auto_retry_failed_sends",
@@ -150,6 +152,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # AgentEngine planner as an emergency fallback.
     "group_channel_mode": "dsh_primary",
     "dsh_chat_lane_enabled": True,
+    "dsh_router_enabled": True,
+    "dsh_router_threshold": 0.6,
     "opencode_enabled": False,
     # tray = closing the background window hides to the notification area;
     # exit = closing stops the service.
@@ -328,6 +332,7 @@ async def update_settings(
         "reply_cooldown_jitter_seconds": (0.0, 300.0, float),
         "reply_global_interval_seconds": (0.0, 300.0, float),
     "send_preflight_wait_seconds": (0.0, 10.0, float),
+    "dsh_router_threshold": (0.0, 1.0, float),
         "read_poll_interval_seconds": (0.2, 300.0, float),
         "memory_search_timeout_seconds": (0.3, 8.0, float),
         "memory_summary_max_input_chars": (1000, 30000, int),
@@ -375,6 +380,11 @@ async def update_settings(
         and payload["dsh_chat_lane_enabled"] is not None
     ):
         updates["dsh_chat_lane_enabled"] = bool(payload["dsh_chat_lane_enabled"])
+    if (
+        "dsh_router_enabled" in payload
+        and payload["dsh_router_enabled"] is not None
+    ):
+        updates["dsh_router_enabled"] = bool(payload["dsh_router_enabled"])
     if (
         "auto_retry_failed_sends" in payload
         and payload["auto_retry_failed_sends"] is not None

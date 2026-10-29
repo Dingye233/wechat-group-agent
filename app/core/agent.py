@@ -1296,7 +1296,7 @@ class AgentEngine:
                 return
 
             settings = await get_settings(db)
-            if not self._triggered(message, config, settings):
+            if not await self._triggered(message, config, settings):
                 return
             if config.probability <= 0 or random.random() > config.probability:
                 return
@@ -1317,6 +1317,25 @@ class AgentEngine:
                 f"建议 lane={route.lane}｜置信度={route.confidence:.2f}｜{route.reason}",
                 level="info",
             )
+            if bool(settings.get("dsh_router_enabled", True)) and route.confidence < float(
+                settings.get("dsh_router_threshold") or 0.6
+            ):
+                from app.services.dsh_router import get_dsh_router
+
+                dsh_route = await get_dsh_router().classify(
+                    str(message.content or ""),
+                    settings=settings,
+                    timeout=12.0,
+                )
+                if dsh_route is not None:
+                    route = dsh_route
+                    await self._log(
+                        group_id,
+                        "router",
+                        f"DSH Router：lane={route.lane}"
+                        f"｜置信度={route.confidence:.2f}｜{route.reason}",
+                        level="info",
+                    )
 
             lock = self._locks.setdefault(group_id, asyncio.Lock())
 
@@ -1672,7 +1691,7 @@ class AgentEngine:
                 )
 
     # ------------------------------------------------------------------ trigger
-    def _triggered(
+    async def _triggered(
         self,
         message: Message,
         config: GroupConfig,
@@ -1681,6 +1700,17 @@ class AgentEngine:
         text = (message.content or "").strip()
         if not text:
             return False
+        from app.services.qunban_sidecar import get_qunban_sidecar
+
+        sidecar_result = await get_qunban_sidecar().trigger(
+            content=text,
+            mode=str(config.trigger_mode or "mention"),
+            keywords=[str(item) for item in (config.keywords or [])],
+            aliases=self._bot_aliases(settings),
+            mentioned_me=bool((message.meta or {}).get("mentioned_me")),
+        )
+        if sidecar_result is not None:
+            return sidecar_result
         mode = config.trigger_mode
         if mode == "all":
             return True

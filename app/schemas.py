@@ -138,6 +138,8 @@ class SettingsUpdate(BaseModel):
     operator_engine: Literal["opencode", "dsh"] | None = None
     dsh_enabled: bool | None = None
     dsh_chat_lane_enabled: bool | None = None
+    dsh_router_enabled: bool | None = None
+    dsh_router_threshold: float | None = Field(default=None, ge=0, le=1)
     dsh_channel: Literal["stable", "alpha"] | None = None
     tray_close_action: Literal["tray", "exit"] | None = None
     takeover_hotkey: str | None = Field(default=None, max_length=40)

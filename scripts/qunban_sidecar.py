@@ -117,6 +117,35 @@ async def memory_save(payload: SaveMemoryRequest) -> dict[str, Any]:
     return {"memory": memory_dict(row)}
 
 
+@app.post("/v1/rules/trigger")
+async def rules_trigger(payload: dict[str, Any]) -> dict[str, Any]:
+    text = str(payload.get("content") or "").strip()
+    mode = str(payload.get("mode") or "mention")
+    if not text:
+        return {"triggered": False}
+    if mode == "all":
+        return {"triggered": True}
+    if mode == "keyword":
+        lowered = text.lower()
+        keywords = [
+            str(item).strip()
+            for item in payload.get("keywords") or []
+            if str(item).strip()
+        ]
+        return {"triggered": any(item.lower() in lowered for item in keywords)}
+    if mode == "mention":
+        if bool(payload.get("mentioned_me")):
+            return {"triggered": True}
+        compact = text.replace("\u2005", " ").replace("\xa0", " ")
+        aliases = [
+            str(item).strip()
+            for item in payload.get("aliases") or []
+            if str(item).strip()
+        ]
+        return {"triggered": any(f"@{alias}" in compact for alias in aliases)}
+    return {"triggered": False}
+
+
 @app.post("/v1/knowledge/search")
 async def knowledge_search(payload: dict[str, Any]) -> dict[str, Any]:
     query = str(payload.get("query") or "").strip()
