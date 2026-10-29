@@ -369,6 +369,40 @@ if (SCOPE === 'group') {
         ),
     ),
   )
+  if (TOOLSET !== 'primary') {
+    tools.push(
+      tool(
+        'qunban_run_skill',
+        '运行群伴已开放给群聊的技能。',
+        {
+          name: { type: 'string', required: true, description: '技能名' },
+          args: { type: 'string', description: '传给技能脚本的参数' },
+        },
+        async (args) =>
+          textResult(
+            await callQunban('run_skill', {
+              name: String(args.name || ''),
+              args: String(args.args || ''),
+            }),
+          ),
+      ),
+      tool(
+        'qunban_run_mcp',
+        '运行群伴已开放给群聊的 MCP 项目。',
+        {
+          name: { type: 'string', required: true, description: 'MCP 项目名' },
+          args: { type: 'object', additionalProperties: true, description: 'MCP 参数' },
+        },
+        async (args) =>
+          textResult(
+            await callQunban('run_mcp', {
+              name: String(args.name || ''),
+              args: args.args && typeof args.args === 'object' ? args.args : {},
+            }),
+          ),
+      ),
+    )
+  }
 }
 
 if (SCOPE === 'admin') {
