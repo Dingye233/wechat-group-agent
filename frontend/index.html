@@ -801,20 +801,14 @@
             </div>
             <div class="page-actions">
               <div id="rpg-seg" style="display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-right:8px">
-                <button type="button" data-rpg-view="game" class="rpg-seg-btn" style="padding:8px 14px;background:var(--accent,#2a6b4f);color:#fff;border:0;cursor:pointer">文字修仙</button>
-                <button type="button" data-rpg-view="yunyin" class="rpg-seg-btn" style="padding:8px 14px;background:transparent;color:inherit;border:0;cursor:pointer">云隐修仙录</button>
+                                <button type="button" data-rpg-view="yunyin" class="rpg-seg-btn" style="padding:8px 14px;background:var(--accent,#2a6b4f);color:#fff;border:0;cursor:pointer">云隐修仙录</button>
                 <button type="button" data-rpg-view="admin" class="rpg-seg-btn" style="padding:8px 14px;background:transparent;color:inherit;border:0;cursor:pointer">后台管理</button>
               </div>
               <a class="btn btn-ghost" id="rpg-open-lan" href="/rpg" target="_blank" rel="noreferrer">新窗口打开</a>
             </div>
           </div>
-
-          <div class="rpg-frame-wrap" id="rpg-view-game">
-            <iframe id="rpg-frame" title="修仙界" data-src="/rpg" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#08110c"></iframe>
-          </div>
-
-          <div class="rpg-frame-wrap" id="rpg-view-yunyin" hidden>
-            <iframe id="yunyin-frame" title="云隐修仙录" data-src="/rpg/yunyin/" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#0b0f0c"></iframe>
+<div class="rpg-frame-wrap" id="rpg-view-yunyin">
+            <iframe id="yunyin-frame" title="云隐修仙录" src="/rpg/yunyin/" data-src="/rpg/yunyin/" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#0b0f0c"></iframe>
           </div>
 
           <div id="rpg-view-admin" hidden>
@@ -866,10 +860,9 @@
       <script>
       (() => {
         const seg = document.getElementById('rpg-seg');
-        const viewGame = document.getElementById('rpg-view-game');
         const viewAdmin = document.getElementById('rpg-view-admin');
         const viewYunyin = document.getElementById('rpg-view-yunyin');
-        if (!seg || !viewGame || !viewAdmin) return;
+        if (!seg || !viewAdmin) return;
 
         function paint(active) {
           seg.querySelectorAll('button').forEach((b) => {
@@ -877,7 +870,6 @@
             b.style.background = on ? 'var(--accent,#2a6b4f)' : 'transparent';
             b.style.color = on ? '#fff' : 'inherit';
           });
-          viewGame.hidden = active !== 'game';
           viewAdmin.hidden = active !== 'admin';
           if (viewYunyin) viewYunyin.hidden = active !== 'yunyin';
           if (active === 'yunyin' && viewYunyin) {

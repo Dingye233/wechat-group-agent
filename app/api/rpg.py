@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from app.services import cultivation, rpg_game
+from app.services import mp_game, rpg_game
 
 router = APIRouter(tags=["rpg"])
 api_router = router
@@ -356,66 +356,143 @@ async def rpg_action_leaderboard(limit: int = Query(default=10, ge=1, le=50)) ->
     return {"ok": True, "players": rpg_game.action_leaderboard(limit)}
 
 
-@page_router.get("/rpg", response_class=HTMLResponse)
-async def rpg_page() -> HTMLResponse:
-    return page_html()
+@page_router.get("/rpg")
+async def rpg_page() -> RedirectResponse:
+    """内置文字修仙已下线，统一进云隐修仙录。"""
+    return RedirectResponse("/rpg/yunyin/", status_code=307)
 
-# ---------------------------------------------------- 文字修仙 v2（属性/场景）
-@router.post("/rpg/c/join")
-async def c_join(payload: dict = Body(...)) -> dict:
+# ---------------------------------------------------- 联机：云隐修仙录
+@router.post("/rpg/mp/sync")
+async def mp_sync(payload: dict = Body(...)) -> dict:
     try:
-        st = cultivation.join(str(payload.get("name") or ""))
+        state = mp_game.sync_player(
+            str(payload.get("name") or ""),
+            str(payload.get("realm") or ""),
+            int(payload.get("base_cp") or 0) or None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "state": st, "scenes": cultivation.scenes()["scenes"]}
+    return {"ok": True, "state": state}
 
 
-@router.get("/rpg/c/state")
-async def c_state(name: str = Query(...)) -> dict:
+@router.get("/rpg/mp/state")
+async def mp_state(name: str = Query(...)) -> dict:
     try:
-        return {"ok": True, "state": cultivation.state(name)}
+        return {"ok": True, "state": mp_game.player_state(name)}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/rpg/c/scenes")
-async def c_scenes() -> dict:
-    return {"ok": True, **cultivation.scenes()}
+@router.get("/rpg/mp/leaderboard")
+async def mp_rank(limit: int = Query(default=30, ge=1, le=50)) -> dict:
+    return {"ok": True, "players": mp_game.leaderboard(limit), "records": mp_game.records(10)}
 
 
-@router.post("/rpg/c/offline")
-async def c_offline(payload: dict = Body(...)) -> dict:
-    name = str(payload.get("name") or "")
-    gain = cultivation.offline_gain(name)
-    return {"ok": True, **gain, "state": cultivation.state(name)}
+@router.get("/rpg/mp/records")
+async def mp_records(limit: int = Query(default=20, ge=1, le=50)) -> dict:
+    return {"ok": True, "records": mp_game.records(limit)}
 
 
-@router.post("/rpg/c/action")
-async def c_action(payload: dict = Body(...)) -> dict:
-    name = str(payload.get("name") or "")
-    action = str(payload.get("action") or "")
+@router.post("/rpg/mp/gear/equip")
+async def mp_equip(payload: dict = Body(...)) -> dict:
     try:
-        result = cultivation.act(name, action)
+        return mp_game.equip_item(str(payload.get("name") or ""), None, payload.get("slot"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if result.get("ok") and action in {"train", "sect"}:
-        await hub.broadcast({"type": "world", "text": f"🗻 {name}：{result['message']}"})
+
+
+@router.post("/rpg/mp/gear/enhance")
+async def mp_enhance(payload: dict = Body(...)) -> dict:
+    try:
+        return mp_game.enhance(str(payload.get("name") or ""), str(payload.get("slot") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/rpg/mp/gear/reroll")
+async def mp_reroll(payload: dict = Body(...)) -> dict:
+    try:
+        return mp_game.reroll(str(payload.get("name") or ""), str(payload.get("slot") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/rpg/mp/team/create")
+async def mp_team_create(payload: dict = Body(...)) -> dict:
+    try:
+        team = mp_game.team_create(str(payload.get("name") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await hub.broadcast({"type": "party", "text": f"🤝 {payload.get('name')} 建了队伍 {team['code']}"})
+    return {"ok": True, "team": team}
+
+
+@router.post("/rpg/mp/team/join")
+async def mp_team_join(payload: dict = Body(...)) -> dict:
+    try:
+        team = mp_game.team_join(str(payload.get("name") or ""), str(payload.get("code") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await hub.broadcast({"type": "party", "text": f"➕ {payload.get('name')} 加入队伍 {team['code']}"})
+    return {"ok": True, "team": team}
+
+
+@router.post("/rpg/mp/team/leave")
+async def mp_team_leave(payload: dict = Body(...)) -> dict:
+    return {"ok": True, **mp_game.team_leave(str(payload.get("name") or ""))}
+
+
+@router.get("/rpg/mp/teams")
+async def mp_teams() -> dict:
+    return {"ok": True, "teams": mp_game.teams()}
+
+
+@router.post("/rpg/mp/dungeon")
+async def mp_dungeon(payload: dict = Body(...)) -> dict:
+    name = str(payload.get("name") or "")
+    try:
+        result = mp_game.dungeon(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    text = f"⚔️ {name} 的队伍{'讨伐' if result['victory'] else '折戟'}【{result['boss']}】"
+    await hub.broadcast({"type": "dungeon", "text": text, "log": result["log"]})
     return result
 
 
-@router.post("/rpg/c/breakthrough")
-async def c_breakthrough(payload: dict = Body(...)) -> dict:
-    name = str(payload.get("name") or "")
+@router.post("/rpg/mp/duel")
+async def mp_duel(payload: dict = Body(...)) -> dict:
+    a = str(payload.get("from") or payload.get("name") or "")
+    b = str(payload.get("to") or "")
     try:
-        result = cultivation.breakthrough(name)
+        result = mp_game.duel(a, b)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if result.get("ok") and result.get("message"):
-        rpg_game.log_event(name, "breakthrough", result["message"])
-        await hub.broadcast({"type": "world", "text": result["message"]})
+    await hub.broadcast({"type": "duel", "text": f"🥋 {a} 论武 {b}，{result['winner']} 胜"})
     return result
 
 
-@router.get("/rpg/c/leaderboard")
-async def c_leaderboard(limit: int = Query(default=20, ge=1, le=50)) -> dict:
-    return {"ok": True, "players": cultivation.leaderboard(limit)}
+@router.websocket("/rpg/mp/ws")
+async def mp_ws(ws: WebSocket, name: str = Query(default="无名散修")) -> None:
+    await ws.accept()
+    name = (name or "无名散修")[:16]
+    await hub.join(ws, name)
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                msg = {"type": "chat", "text": raw}
+            if str(msg.get("type") or "chat") == "chat":
+                text = str(msg.get("text") or "").strip()[:120]
+                if text:
+                    await hub.broadcast({"type": "chat", "channel": msg.get("channel") or "world",
+                                         "name": name, "text": text, "at": time.time()})
+            else:
+                await ws.send_text(json.dumps({"type": "pong"}, ensure_ascii=False))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await hub.leave(ws)
