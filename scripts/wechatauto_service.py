@@ -204,6 +204,12 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"job": job}
 
+    @app.post("/v1/outbound/retry_failed_private", dependencies=[Depends(_auth)])
+    async def outbound_retry_failed_private() -> dict[str, Any]:
+        assert state is not None and state.queue is not None
+        jobs = await state.queue.retry_failed_private()
+        return {"jobs": jobs, "count": len(jobs)}
+
     @app.get("/v1/groups", dependencies=[Depends(_auth)])
     async def groups() -> dict[str, Any]:
         assert state is not None and state.adapter is not None

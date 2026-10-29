@@ -1776,3 +1776,32 @@ POST /v1/admin_contacts
 /api/contacts → 442
 outbound target_wxid jobs 45-48 → sent
 ```
+
+---
+
+## 52. 私聊失败重试与重新接管
+
+私聊回复曾全部失败：
+
+```text
+检测到鼠标被用户移动
+```
+
+原因是 UI takeover guard 在用户操作鼠标时暂停自动化，失败任务留在 service queue，
+重新接管后没有重发。
+
+修复：
+
+- `POST /v1/outbound/retry_failed_private`
+- 只重试最近的私聊失败任务
+- 同一 target+text 只保留最新一条
+- 已经有 sent 同内容的失败副本不再重发
+- `RuntimeManager.reattach()` 调用该接口
+
+同时修正 `auto_login` 白名单，允许：
+
+```text
+replica-remote
+```
+
+否则远程模式重启后无法自动登录，联系人/私聊都会变成空。

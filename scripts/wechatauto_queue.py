@@ -257,6 +257,59 @@ class ServiceQueue:
         await self.queue.put(int(job_id))
         return job
 
+    async def retry_failed_private(self, max_age: float = 600.0) -> list[dict[str, Any]]:
+        """Retry the latest failed private reply once per target/text.
+
+        Private replies can fail when the UI takeover guard pauses automation.
+        Once the user reattaches, retrying every duplicate attempt would send the
+        same answer twice; keep only the newest failed row for each target/text.
+        """
+        cutoff = time.time() - max(1.0, float(max_age))
+        with self._connect() as con:
+            recent = con.execute(
+                "SELECT * FROM outbound_jobs WHERE finished_at >= ? "
+                "ORDER BY id DESC LIMIT 400",
+                (cutoff,),
+            ).fetchall()
+            sent_keys: set[tuple[str, str]] = set()
+            failed_rows: list[sqlite3.Row] = []
+            for row in recent:
+                payload = json.loads(row["payload"] or "{}")
+                target = str(payload.get("target_wxid") or "")
+                text = str(payload.get("text") or "").strip()
+                if not target or not text:
+                    continue
+                key = (target, text)
+                if row["status"] == "sent":
+                    sent_keys.add(key)
+                elif row["status"] == "failed":
+                    failed_rows.append(row)
+            selected: dict[tuple[str, str], sqlite3.Row] = {}
+            for row in failed_rows:
+                payload = json.loads(row["payload"] or "{}")
+                key = (
+                    str(payload.get("target_wxid") or ""),
+                    str(payload.get("text") or "").strip(),
+                )
+                if key[0] and key[1] and key not in sent_keys:
+                    selected.setdefault(key, row)
+            ids = [int(row["id"]) for row in selected.values()]
+            for job_id in ids:
+                con.execute(
+                    "UPDATE outbound_jobs SET status='queued', error='', "
+                    "result='{}', finished_at=NULL, started_at=NULL WHERE id=?",
+                    (job_id,),
+                )
+            con.commit()
+        jobs: list[dict[str, Any]] = []
+        for job_id in ids:
+            job = await self.get(job_id)
+            if job is not None:
+                jobs.append(job)
+                self._event("queued", job)
+                await self.queue.put(job_id)
+        return jobs
+
     async def _worker_loop(self) -> None:
         while self._started:
             try:

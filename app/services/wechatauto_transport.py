@@ -203,6 +203,14 @@ class WechatautoTransport:
             row = await db.get(TransportJob, int(job_id))
             return self._job_dict(row) if row else None
 
+    async def retry_failed_private(self) -> dict[str, Any]:
+        remote = self._remote()
+        if remote is None or not callable(
+            getattr(remote, "retry_failed_private", None)
+        ):
+            return {"jobs": [], "count": 0}
+        return await remote.retry_failed_private()
+
     async def requeue(self, job_id: int) -> dict[str, Any]:
         remote = self._remote()
         if remote is not None:

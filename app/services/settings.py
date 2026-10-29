@@ -175,7 +175,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 VALID_TRIGGER_MODES = {"mention", "keyword", "all"}
-VALID_ADAPTERS = {"", "mock", "replica", "wcf"}
+VALID_ADAPTERS = {"", "mock", "replica", "wcf", "replica-remote"}
 MAX_STRING = 2000
 MAX_PROMPT = 12000
 
@@ -285,7 +285,7 @@ async def update_settings(
         except Exception as exc:
             raise ValueError(f"无效时区：{updates['timezone']}") from exc
     if "auto_login" in updates and updates["auto_login"] not in VALID_ADAPTERS:
-        raise ValueError("auto_login 只能是 mock、replica、wcf 或留空")
+        raise ValueError("auto_login 只能是 mock、replica、replica-remote、wcf 或留空")
     if "default_trigger_mode" in updates:
         if updates["default_trigger_mode"] not in VALID_TRIGGER_MODES:
             raise ValueError("默认触发方式无效")

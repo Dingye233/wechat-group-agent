@@ -3310,6 +3310,11 @@ class RuntimeManager:
         self.broadcast("adapter.reattached", {})
         self.broadcast("status", self.status_dict())
         retry_scheduled = False
+        if self.transport is not None:
+            try:
+                await self.transport.retry_failed_private()
+            except Exception:
+                logger.warning("重发失败的私聊消息失败", exc_info=True)
         try:
             async with SessionLocal() as db:
                 data = await get_settings(db)

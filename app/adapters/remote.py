@@ -362,6 +362,16 @@ class RemoteAdapter(BaseAdapter):
             )
         return dict(response.json().get("job") or {})
 
+    async def retry_failed_private(self) -> dict[str, Any]:
+        response = await self._http().post(
+            "/v1/outbound/retry_failed_private", timeout=30.0
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json() or {})
+
     async def get_outbound(self, job_id: int) -> dict[str, Any]:
         response = await self._http().get(f"/v1/outbound/{int(job_id)}")
         if response.status_code >= 400:
