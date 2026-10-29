@@ -854,37 +854,51 @@ remote send_text ok
 
 ---
 
-## 28. 生产切换演练：已回滚到本地 replica
+## 28. 生产已切换：Qunban ↔ wechatauto 独立进程
 
-2026-10-29 曾把生产切到：
+当前生产拓扑：
 
 ```text
 微信 4.x
   ↕
 wechatauto service :8010（独占 ReplicaAdapter）
-  ↕ HTTP /v1/events /v1/send_text /v1/groups ...
+  ↕ HTTP /v1/events /v1/send_text /v1/preflight /v1/groups ...
 Qunban :8000（replica-remote）
+  ├─ RuntimeManager
+  ├─ transport worker
+  ├─ 规则/记忆/知识/任务
+  └─ DSH primary / chat / task lanes
 ```
 
-读取、群同步、服务重启恢复都验证通过。
+2026-10-29 第一次切换时真实发送卡在 GUI 聊天页，已回滚修复；修复后重新切换。
 
-但真实发送测试失败：
+修复：
+
+- 发送前 `ShowWindow + SetForegroundWindow`
+- 先 `back_to_chat_tab()`
+- 增加 `/v1/preflight`
+- RemoteAdapter 暴露 `preflight`，Chat lane 可提前打开目标会话
+
+真实发送验证：
 
 ```text
 group 211 测试消息
-transport job failed after 120s
-service GUI 无法回到聊天页/搜索框
+transport job status=sent
+elapsed_ms=8725
+messages 表只有 1 条 echo，无重复
 ```
 
-为避免生产继续处于不可发送状态，已回滚：
+当前状态：
 
 ```text
-adapter=replica（本地）
-auto_login=replica
-8010 service stopped
+adapter=replica-remote
+service backend=replica
+service status=online
+Qunban runtime=online
+transport: sent 1 / failed 0
+groups/messages 同步正常
 ```
 
-当前生产以本地 `replica` 运行；`replica-remote` 保留为待修复的迁移路径。
 
 ---
 
@@ -986,3 +1000,32 @@ error 为空
 2. 发送前确认主窗口在聊天 tab，而不是只判断 DB 在线
 3. 远程 send 增加明确的超时和错误信息，禁止空错误
 4. 先在 mock/测试窗口验证，再切生产
+
+---
+
+## 32. 远程发送修复结果
+
+第 31 节的失败已修复：
+
+- `ShowWindow(SW_RESTORE)`
+- `SetForegroundWindow`
+- `back_to_chat_tab()` before `ChatWith`
+- 服务 `/v1/preflight`
+- RemoteAdapter preflight
+- `Back` 失败时记录明确 warning，不再静默卡住
+
+真实发送结果：
+
+```text
+job=1 status=sent
+elapsed_ms=8725
+message 表 1 条 echo
+无重复
+```
+
+生产已重新切到：
+
+```text
+adapter=replica-remote
+service :8010
+```
