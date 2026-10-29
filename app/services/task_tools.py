@@ -35,8 +35,23 @@ def tools_for_task(request: str) -> list[str]:
         tools.extend(["qunban_run_skill", "qunban_skill_*"])
     if _has(text, "mcp", "屏幕", "浏览器"):
         tools.extend(["qunban_run_mcp", "qunban_mcp_*"])
+    if _has(text, "插件", "plugin"):
+        # A plugin task may write studio files and then install them.  The
+        # task lane is switched to admin scope only for this allowlist.
+        tools.extend(
+            [
+                "qunban_plugin_install",
+                "qunban_powershell",
+                "qunban_run_skill",
+            ]
+        )
     # Preserve order, drop duplicates.
     return list(dict.fromkeys(tools))
+
+
+def is_plugin_task(request: str) -> bool:
+    text = str(request or "").lower()
+    return _has(text, "插件", "plugin")
 
 
 def allow_env(request: str) -> str:

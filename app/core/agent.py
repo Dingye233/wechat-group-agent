@@ -2581,11 +2581,25 @@ class AgentEngine:
                 memory_text = await self._load_memory_context(
                     db, group.id, settings, message
                 )
-            from app.services.task_tools import tools_for_task
+            from app.services.task_tools import is_plugin_task, tools_for_task
 
+            request_text = str(record.get("request") or message.content or "")
+            plugin_task = is_plugin_task(request_text)
+            allowed_tools = tools_for_task(request_text)
+            plugin_block = (
+                """# 插件任务
+- 插件代码只能写到项目 data/dsh/studio/<slug>/ 下
+- 必须有 package.json 和 lib/index.js
+- 写完后先做基本语法检查，再调用 qunban_plugin_install
+- 安装失败要报告真实错误，不要假装安装成功
+- 不要修改 data/dsh/home/profiles 下的现有 profile
+"""
+                if plugin_task
+                else ""
+            )
             prompt = f"""# 后台任务
 任务编号：#{task_id}
-原始请求：{record.get('request') or str(message.content or '')}
+原始请求：{request_text}
 
 你刚才已经把这条消息标记为 task，并给群友发了确认。现在继续执行任务，
 完成后输出最终的群聊回复 JSON；不要再返回 task，也不要重复确认话术。
@@ -2597,8 +2611,9 @@ class AgentEngine:
 {(memory_text or '无')[:1600]}
 
 # 本任务可用工具
-{', '.join(tools_for_task(str(record.get('request') or message.content or ''))) or '（仅基础工具）'}
+{', '.join(allowed_tools) or '（仅基础工具）'}
 
+{plugin_block}
 # 输出协议
 {{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
 或
@@ -2611,14 +2626,11 @@ class AgentEngine:
                 TASK_LANE_PROMPT,
             )
 
-            allowed_tools = tools_for_task(
-                str(record.get("request") or message.content or "")
-            )
             service = DSHPrimaryService(
                 profile=f"qunban-task-{task_id}",
                 profile_scope="group_primary",
                 toolset="task",
-                env_scope="group",
+                env_scope="admin" if plugin_task else "group",
                 channel="group",
                 use_native=True,
                 system_prompt=TASK_LANE_PROMPT,

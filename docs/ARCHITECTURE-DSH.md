@@ -750,3 +750,20 @@ data/wechatauto-events.jsonl
 - `clear()` 同时清空内存和文件
 
 这为独立 wechatauto 服务的 event stream / replay 提供了第一个持久化落点。
+
+---
+
+## 25. 任务级插件生成/安装（受控）
+
+当任务请求明确包含“插件/plugin”时：
+
+- Task lane 切换到 `admin` scope
+- allowlist 只增加：
+  - `qunban_plugin_install`
+  - `qunban_powershell`
+  - `qunban_run_skill`
+- 任务提示强制：代码只能写 `data/dsh/studio/<slug>/`，必须有 package.json + lib/index.js
+- 安装走现有 `qunban_plugin_install` 校验
+- 任务结束验证会检查插件是否真的出现在 DSH catalog
+
+这是受控的“生成 → 语法/安装校验 → catalog 验证”第一版；还没有自动回滚/晋升策略。
