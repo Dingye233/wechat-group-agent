@@ -264,7 +264,18 @@ _TOOL_ACKS = {
     "web_request": "我去查一下",
     "write_file": "我整理一下再写下来",
     "run_powershell": "我处理一下这个操作",
+    "powershell": "我正在执行本机命令",
+    "run_skill": "我正在运行这个技能",
+    "run_mcp": "我正在连接工具服务",
     "screen_capture": "我先看一眼屏幕",
+    "screen_ocr": "我正在识别屏幕内容",
+    "screen_find_text": "我正在屏幕上找目标",
+    "mouse_click": "我正在操作界面",
+    "mouse_move": "我正在定位界面元素",
+    "keyboard_type": "我正在输入内容",
+    "keyboard_hotkey": "我正在使用快捷键",
+    "browser": "我正在打开网页",
+    "playwright": "我正在操作浏览器",
     "display_image": "我把图片打开看看",
     "read_image": "我看看这张图",
     "create_task": "我先记一下这件事",
@@ -360,6 +371,7 @@ class RuntimeManager:
         self._memory_tasks: dict[int, asyncio.Task] = {}
         self._admin_tasks: dict[str, asyncio.Task] = {}
         self._admin_side_tasks: set[asyncio.Task] = set()
+        self._admin_progress: dict[str, dict[str, Any]] = {}
         self._proactive_tasks: dict[int, asyncio.Task] = {}
         self._memory_loop: asyncio.Task | None = None
         self._hotkey = GlobalHotkey()
@@ -1790,23 +1802,27 @@ class RuntimeManager:
         self, event: dict[str, Any], state: dict[str, Any]
     ) -> str:
         phase = str(event.get("phase") or "")
+        elapsed = max(
+            0,
+            int(time.monotonic() - float(state.get("started") or time.monotonic())),
+        )
         if phase == "start":
-            # Do not spend a full WeChat UI send on an acknowledgement. For a
-            # normal chat this was adding 5-15 seconds before the model even
-            # started. Tool/failure progress is still sent when it is useful.
             state["started"] = time.monotonic()
             return ""
         if phase == "queued":
+            state["stage"] = "已插入新要求"
             state["sent"] = int(state.get("sent") or 0) + 1
             state["last_sent"] = time.monotonic()
-            return "收到你的新要求，已插入当前任务。"
+            return f"收到新要求，已插入当前任务（已用 {elapsed}s）。"
         if phase == "permission":
-            return f"已自动确认：{event.get('tool') or '权限'}"
+            state["stage"] = "等待确认"
+            return f"进度：已自动确认权限（{event.get('tool') or '工具'}），已用 {elapsed}s。"
         if phase == "question":
-            return "已自动回答确认选项，继续执行"
+            state["stage"] = "确认操作选项"
+            return f"进度：已自动回答确认选项，继续执行（已用 {elapsed}s）。"
         if phase == "tool":
             sent = int(state.get("sent") or 0)
-            if sent >= int(state.get("max") or 6):
+            if sent >= int(state.get("max") or 10):
                 return ""
             now = time.monotonic()
             if sent > 1 and now - float(state.get("last_sent") or 0.0) < 20.0:
@@ -1819,23 +1835,17 @@ class RuntimeManager:
                 .removeprefix("qunban_")
                 .replace("qunban_", "")
             )
-            ack = _TOOL_ACKS.get(normalized) or _TOOL_ACKS.get(tool) or "我处理一下"
-            return ack + random.choice(
-                ["，稍等～", "，马上回来", "，我看一眼就回"]
-            )
+            ack = _TOOL_ACKS.get(normalized) or _TOOL_ACKS.get(tool) or "正在处理下一步"
+            state["stage"] = ack
+            return f"进度：{ack}｜已用 {elapsed}s"
         if phase == "tool_result" and event.get("ok") is False:
             sent = int(state.get("sent") or 0)
-            if sent >= int(state.get("max") or 6) + 3:
+            if sent >= int(state.get("max") or 10) + 3:
                 return ""
             state["sent"] = sent + 1
             state["last_sent"] = time.monotonic()
-            return random.choice(
-                [
-                    "刚才那步没成功，我换个办法再试试",
-                    "这边卡了一下，我换个方式再来",
-                    "没查到想要的结果，我再试试别的路子",
-                ]
-            )
+            state["stage"] = "换一条路径重试"
+            return f"进度：刚才那步没成功，我换个办法再试｜已用 {elapsed}s"
         return ""
 
     async def _send_admin_notice(
@@ -2095,6 +2105,28 @@ class RuntimeManager:
         self._admin_side_tasks.add(task)
         task.add_done_callback(self._admin_side_tasks.discard)
 
+    @staticmethod
+    def _admin_progress_query(text: str) -> bool:
+        value = str(text or "").strip()
+        return bool(
+            re.search(
+                r"(进度|到哪|在干嘛|在做什么|卡住|还在吗|还活着|多久|状态|完成了没|好了没)",
+                value,
+            )
+        )
+
+    def _admin_progress_snapshot(
+        self, wxid: str, *, query: str = ""
+    ) -> str:
+        state = self._admin_progress.get(wxid)
+        if not state:
+            return "当前没有正在执行的任务。"
+        elapsed = max(0, int(time.monotonic() - float(state.get("started") or 0.0)))
+        stage = str(state.get("stage") or "准备中")
+        request = str(state.get("request") or "").strip()
+        suffix = f"｜请求：{request[:60]}" if request and len(request) > 8 else ""
+        return f"任务仍在执行：{stage}｜已用 {elapsed}s{suffix}"
+
     def _schedule_admin_reply(self, contact_id: int, wxid: str, text: str) -> None:
         session_id = f"admin:{wxid}"
         clean = str(text or "").strip()
@@ -2131,6 +2163,14 @@ class RuntimeManager:
             return
 
         if starting:
+            if self._admin_progress_query(clean):
+                asyncio.create_task(
+                    self._send_admin_notice(
+                        contact_id, self._admin_progress_snapshot(wxid, query=clean)
+                    ),
+                    name=f"admin-progress-{wxid}",
+                )
+                return
             # A long OpenCode run must not swallow casual messages. Answer
             # chat/status questions in a separate LLM call while the task keeps
             # running; only real task instructions are inserted into the loop.
@@ -2191,8 +2231,13 @@ class RuntimeManager:
                 progress_state: dict[str, Any] = {
                     "sent": 0,
                     "last_sent": 0.0,
-                    "max": 6,
+                    "max": 10,
+                    "started": time.monotonic(),
+                    "stage": "准备中",
+                    "request": clean,
                 }
+                self._admin_progress[wxid] = progress_state
+                heartbeat: asyncio.Task | None = None
 
                 async def progress_worker_loop() -> None:
                     while True:
@@ -2211,6 +2256,36 @@ class RuntimeManager:
                 progress_worker = asyncio.create_task(
                     progress_worker_loop(), name=f"admin-progress-{wxid}"
                 )
+
+                async def heartbeat_loop() -> None:
+                    while True:
+                        await asyncio.sleep(25.0)
+                        elapsed = max(
+                            0,
+                            int(
+                                time.monotonic()
+                                - float(progress_state.get("started") or 0.0)
+                            ),
+                        )
+                        stage = str(progress_state.get("stage") or "处理中")
+                        if int(progress_state.get("sent") or 0) >= 8:
+                            continue
+                        progress_state["sent"] = int(
+                            progress_state.get("sent") or 0
+                        ) + 1
+                        progress_state["last_sent"] = time.monotonic()
+                        progress_queue.put_nowait(
+                            f"任务进度：{stage}｜已用 {elapsed}s"
+                        )
+
+                heartbeat = asyncio.create_task(
+                    heartbeat_loop(), name=f"admin-heartbeat-{wxid}"
+                )
+                progress_queue.put_nowait(
+                    f"开始处理：{clean[:80]}{'…' if len(clean) > 80 else ''}"
+                )
+                progress_state["sent"] = 1
+                progress_state["last_sent"] = time.monotonic()
 
                 async def emit_progress(event: dict[str, Any]) -> None:
                     message = self._admin_progress_text(event, progress_state)
@@ -2267,6 +2342,11 @@ class RuntimeManager:
                     contact_id, f"Agent 执行失败：{exc}"
                 )
             finally:
+                self._admin_progress.pop(wxid, None)
+                if heartbeat is not None:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
                 if progress_worker is not None:
                     progress_worker.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
