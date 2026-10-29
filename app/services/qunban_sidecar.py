@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import httpx
@@ -13,18 +14,23 @@ class QunbanSidecar:
         self.base_url = str(
             base_url or os.environ.get("QUNBAN_SIDECAR_URL") or ""
         ).rstrip("/")
+        self._cooldown_until = 0.0
 
     @property
     def enabled(self) -> bool:
         return bool(self.base_url)
 
     async def _post(self, path: str, payload: dict[str, Any], timeout: float = 8.0) -> Any:
-        if not self.enabled:
+        if not self.enabled or time.monotonic() < self._cooldown_until:
             return None
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=timeout) as client:
-            response = await client.post(path, json=payload)
-            response.raise_for_status()
-            return response.json()
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=timeout) as client:
+                response = await client.post(path, json=payload)
+                response.raise_for_status()
+                return response.json()
+        except Exception:
+            self._cooldown_until = time.monotonic() + 20.0
+            raise
 
     async def health(self) -> dict[str, Any] | None:
         if not self.enabled:
@@ -33,8 +39,10 @@ class QunbanSidecar:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=3.0) as client:
                 response = await client.get("/v1/health")
                 response.raise_for_status()
+                self._cooldown_until = 0.0
                 return dict(response.json())
         except Exception as exc:
+            self._cooldown_until = time.monotonic() + 20.0
             return {"ok": False, "error": str(exc) or type(exc).__name__}
 
     async def group_memory(
@@ -55,6 +63,8 @@ class QunbanSidecar:
                     "settings": settings,
                 },
             )
+            if data is None:
+                return None
             return str((data or {}).get("memory") or "")
         except Exception:
             return None
@@ -77,6 +87,8 @@ class QunbanSidecar:
                     "settings": settings,
                 },
             )
+            if data is None:
+                return None
             return str((data or {}).get("memory") or "")
         except Exception:
             return None
@@ -88,6 +100,8 @@ class QunbanSidecar:
                 {"query": query, "limit": limit},
                 timeout=5.0,
             )
+            if data is None:
+                return None
             return list((data or {}).get("results") or [])
         except Exception:
             return None
@@ -95,6 +109,8 @@ class QunbanSidecar:
     async def save_memory(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
             data = await self._post("/v1/memory/save", payload)
+            if data is None:
+                return None
             return dict((data or {}).get("memory") or {})
         except Exception:
             return None
