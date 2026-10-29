@@ -2744,6 +2744,39 @@ class AgentEngine:
                 "done" if verification.get("ok") else "failed",
                 detail=str(verification.get("summary") or "")[:500],
             )
+            if plugin_task and verification.get("ok"):
+                plugin_check = next(
+                    (
+                        item
+                        for item in verification.get("checks") or []
+                        if item.get("name") == "plugin"
+                    ),
+                    {},
+                )
+                plugin_id = str(plugin_check.get("plugin_id") or "")
+                if plugin_id:
+                    try:
+                        from app.services import dsh_plugins
+
+                        await asyncio.to_thread(
+                            dsh_plugins.promote_plugin,
+                            plugin_id,
+                            private=True,
+                            group=False,
+                        )
+                        await self._log(
+                            group.id,
+                            "dsh_plugin",
+                            f"插件任务 #{task_id} 已晋升：{plugin_id}",
+                            level="info",
+                        )
+                    except Exception as exc:
+                        await self._log(
+                            group.id,
+                            "dsh_plugin",
+                            f"插件晋升失败：{exc}",
+                            level="warn",
+                        )
             verified_text = (
                 f"{text[:3800]}\n\n[验证] "
                 f"{'通过' if verification.get('ok') else '未通过'}："

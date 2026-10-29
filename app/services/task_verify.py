@@ -122,10 +122,20 @@ async def verify_task(
                 (marker for marker in markers if marker and marker in haystack),
                 "",
             )
+            plugin_id = ""
+            for row in rows:
+                row_text = " ".join(
+                    str(row.get(key) or "")
+                    for key in ("id", "name", "path", "package")
+                )
+                if matched and matched in row_text:
+                    plugin_id = str(row.get("id") or "")
+                    break
             checks.append(
                 {
                     "name": "plugin",
                     "ok": bool(matched),
+                    "plugin_id": plugin_id,
                     "detail": matched or "未在插件目录中找到结果中的插件",
                 }
             )

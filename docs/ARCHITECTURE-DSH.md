@@ -1137,3 +1137,30 @@ catalog 移除成功
 ```
 
 说明“任务生成 → 校验 → 安装 → 晋升 → 回滚”这条链路已经真实跑通一次。
+
+---
+
+## 36. 任务级插件晋升
+
+持久任务完成后：
+
+```text
+task_verify
+  → plugin check
+  → plugin_id
+  → dsh_plugins.promote_plugin(private=True, group=False)
+```
+
+成功后记录：
+
+```text
+插件任务 #<id> 已晋升：studio-<slug>
+```
+
+失败只记 warn，不把已经发送成功的任务重新标 failed。
+
+任务级回滚仍通过：
+
+```text
+POST /api/dsh/plugins/{id}/rollback
+```
