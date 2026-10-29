@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- 云隐修仙录 · maskable 图标:全出血背景 + 内容居中在安全区(圆心 ~40%) -->
+  <rect width="512" height="512" fill="#F3EFE4"/>
+
+  <!-- 暖朱朝阳 -->
+  <circle cx="256" cy="184" r="74" fill="#C2542B"/>
+  <circle cx="256" cy="184" r="74" fill="none" stroke="#A64422" stroke-width="6" opacity="0.45"/>
+
+  <!-- 墨色山峦 -->
+  <path d="M52 368 L206 202 L248 246 L300 182 L462 368 L462 452 L50 452 Z" fill="#4A3B2E"/>
+  <path d="M52 368 L206 202 L248 246 L300 182 L344 292 L296 368 Z" fill="#3A2E22" opacity="0.55"/>
+
+  <!-- 山前云带 -->
+  <g fill="#FFFFFF" opacity="0.94">
+    <ellipse cx="156" cy="378" rx="96" ry="32"/>
+    <ellipse cx="256" cy="366" rx="110" ry="38"/>
+    <ellipse cx="362" cy="384" rx="88" ry="28"/>
+    <ellipse cx="212" cy="398" rx="82" ry="22"/>
+    <ellipse cx="316" cy="402" rx="74" ry="20"/>
+  </g>
+</svg>

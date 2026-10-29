@@ -1,0 +1,1 @@
+import{js as e,ms as t,ps as n}from"./player-CSb8QTAn.js";function r(e,t=1e3){let n=window.setInterval(e,t);return()=>window.clearInterval(n)}function i(i=1e3){let a=e(Date.now()),o;return n(()=>{o=r(()=>{a.value=Date.now()},i)}),t(()=>o?.()),a}export{i as t};

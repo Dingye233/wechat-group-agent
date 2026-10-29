@@ -1,0 +1,1 @@
+(function(){System.register([`./player-legacy-DTnPrJep.js`,`./index-legacy-DtSACdMc.js`],function(e,t){var n,r,i;function a(){var e=arguments.length>0&&arguments[0]!==void 0?arguments[0]:1e3,t=r(n());return i(function(){t.value=n()},e),t}return e(`t`,a),{setters:[function(e){n=e.Qn,r=e.js},function(e){i=e.n}],execute:function(){}}})})();

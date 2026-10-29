@@ -197,6 +197,10 @@ app.include_router(ws.router)
 app.include_router(rpg.api_router, prefix="/api", tags=["rpg"])
 app.include_router(rpg.page_router, tags=["rpg"])
 
+_YUNYIN_DIR = Path(__file__).resolve().parents[1] / "frontend" / "yunyin"
+if _YUNYIN_DIR.is_dir():
+    app.mount("/rpg/yunyin", StaticFiles(directory=str(_YUNYIN_DIR), html=True), name="yunyin-game")
+
 
 @app.middleware("http")
 async def no_store_api(request: Request, call_next):
