@@ -296,6 +296,21 @@ class RemoteAdapter(BaseAdapter):
                 str(response.json().get("detail") or response.text)[:1000]
             )
 
+    async def send_image(self, room_id: str, path: Path, *, reuse_chat: bool = True) -> None:
+        """发送图片（截图/表情包）。
+
+        独立服务里图片和表情包走同一条 ``SendFiles`` 通道，WeChat 会把结果
+        记成图片消息，所以这里复用 sticker 接口，PNG/GIF 都能发。
+        """
+        response = await self._http().post(
+            "/v1/send_sticker",
+            json={"room_id": room_id, "path": str(path), "reuse_chat": reuse_chat},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+
     async def download_media(
         self,
         group_id_external: str,

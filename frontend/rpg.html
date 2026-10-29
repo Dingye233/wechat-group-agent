@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1410">
+<title>问道 · 修仙界</title>
+<style>
+  :root{
+    --ink:#0b1410; --ink2:#101d17; --panel:#12241c; --line:#1f3b2e;
+    --gold:#e8c06a; --jade:#63d3a6; --text:#e7f0e8; --dim:#8fa89a; --blood:#e2654f;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;color:var(--text);font:15px/1.6 "Noto Serif SC","Songti SC",Georgia,"Microsoft YaHei",serif;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, #16352a 0%, transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, #1b2f45 0%, transparent 55%),
+      linear-gradient(180deg,#0b1410,#08100c 60%,#050a08);
+    min-height:100%;
+  }
+  a{color:var(--jade)}
+  .wrap{max-width:1180px;margin:0 auto;padding:14px;display:grid;gap:12px;grid-template-columns:1fr 340px}
+  @media (max-width:860px){ .wrap{grid-template-columns:1fr;padding:10px;padding-bottom:78px} }
+  .card{background:linear-gradient(180deg,#ffffff08,#ffffff03);border:1px solid var(--line);border-radius:16px;padding:14px}
+  .title{font-size:20px;letter-spacing:2px;color:var(--gold);display:flex;align-items:center;gap:8px}
+  .title small{color:var(--dim);font-size:12px;letter-spacing:0}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .muted{color:var(--dim);font-size:13px}
+  /* 登录 */
+  #login{position:fixed;inset:0;display:grid;place-items:center;padding:18px;
+    background:radial-gradient(700px 400px at 50% 30%,#17342688,transparent 70%),#060d0a;z-index:20}
+  #login .box{width:100%;max-width:380px;text-align:center}
+  #login h1{font-size:30px;letter-spacing:8px;color:var(--gold);margin:0 0 6px}
+  input,button{font-family:inherit}
+  input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);
+    background:#0d1a14;color:var(--text);font-size:16px;outline:none}
+  input:focus{border-color:var(--jade)}
+  .btn{appearance:none;border:1px solid #2b5644;background:linear-gradient(180deg,#1a3a2c,#12271e);
+    color:var(--text);padding:11px 16px;border-radius:12px;font-size:15px;cursor:pointer;transition:.15s}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:linear-gradient(180deg,#2a6b4f,#1a4733);border-color:#3d8a66;color:#eafff3}
+  .btn.gold{background:linear-gradient(180deg,#7a5c20,#4d3a12);border-color:#a58333;color:#ffe9b0}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .bar{height:10px;border-radius:99px;background:#0a1712;border:1px solid var(--line);overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3ba97b,#8ff0c3);transition:width .35s}
+  .bar.hp>i{background:linear-gradient(90deg,#b1442f,#f08a6b)}
+  .grid2{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .stat{background:#0d1c15;border:1px solid var(--line);border-radius:12px;padding:10px}
+  .stat b{color:var(--gold);font-size:17px;display:block}
+  .log{height:280px;overflow:auto;background:#07110c;border:1px solid var(--line);border-radius:12px;
+    padding:10px;font-size:14px;line-height:1.7;white-space:pre-wrap}
+  .log .sys{color:var(--dim)}
+  .log .win{color:var(--jade)}
+  .log .lose{color:var(--blood)}
+  .log .gold{color:var(--gold)}
+  .chat{height:200px;overflow:auto;font-size:14px}
+  .chat p{margin:0 0 4px}
+  .chat .who{color:var(--jade)}
+  .online{display:flex;flex-wrap:wrap;gap:6px}
+  .pill{border:1px solid var(--line);border-radius:99px;padding:3px 10px;font-size:13px;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  td{padding:5px 4px;border-bottom:1px dashed #1b332a}
+  td.r{text-align:right;color:var(--dim)}
+  .actions{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  .toast{position:fixed;left:50%;bottom:86px;transform:translateX(-50%) translateY(20px);
+    background:#14261d;border:1px solid #2c5744;color:#e8fff4;padding:10px 16px;border-radius:12px;
+    opacity:0;transition:.25s;pointer-events:none;max-width:88vw;text-align:center;z-index:30}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .tabs{display:none}
+  @media (max-width:860px){
+    .side{display:none}
+    .side.active{display:block}
+    .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;position:fixed;left:0;right:0;bottom:0;
+      padding:8px env(safe-area-inset-right) calc(8px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
+      background:#08120dcc;backdrop-filter:blur(8px);border-top:1px solid var(--line);z-index:15}
+    .tabs button{background:none;border:0;color:var(--dim);font-size:13px;padding:8px 0}
+    .tabs button.on{color:var(--gold)}
+  }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <h1>问 道</h1>
+    <p class="muted">东方修仙 · 多人同修</p>
+    <input id="nameInput" maxlength="16" placeholder="输入你的道号">
+    <p></p>
+    <button class="btn primary" id="enterBtn" style="width:100%">踏入修行界</button>
+    <p class="muted" id="loginHint"></p>
+  </div>
+</div>
+
+<div class="wrap">
+  <main>
+    <section class="card">
+      <div class="title">☯ <span id="whoami">道友</span> <small id="realmTag">练气</small></div>
+      <div class="row" style="margin:10px 0 6px">
+        <span class="muted">修为</span><div class="bar" style="flex:1"><i id="expBar"></i></div>
+        <span class="muted" id="expText">0 / 80</span>
+      </div>
+      <div class="row">
+        <span class="muted">气血</span><div class="bar hp" style="flex:1"><i id="hpBar"></i></div>
+        <span class="muted" id="hpText">100 / 100</span>
+      </div>
+      <div class="grid2" style="margin-top:12px">
+        <div class="stat">灵石<b id="stones">30</b></div>
+        <div class="stat">战绩<b id="record">0 胜 0 负</b></div>
+        <div class="stat">在线道友<b id="onlineCount">1</b></div>
+        <div class="stat">全服最高<b id="topRealm">练气</b></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="actions">
+        <button class="btn" data-act="cultivate">🧘 打坐修炼</button>
+        <button class="btn gold" data-act="breakthrough">⚡ 突破境界</button>
+        <button class="btn" data-act="explore">🗺 探索秘境</button>
+        <button class="btn" data-act="heal">💊 服丹疗伤</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title" style="font-size:16px">⛩ 组队副本</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="partyCreate">创建队伍</button>
+        <input id="partyCode" maxlength="3" placeholder="队伍编号" style="width:110px;text-align:center;letter-spacing:4px">
+        <button class="btn" id="partyJoin">加入</button>
+        <button class="btn" id="partyLeave">离队</button>
+        <button class="btn gold" id="partyStart">开始副本（队长）</button>
+      </div>
+      <div class="row" style="margin-top:10px"><span class="muted" id="partyInfo">尚未组队</span></div>
+      <div class="online" id="partyMembers" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <div class="title" style="font-size:16px">📜 见闻录</div>
+      <div class="log" id="log"></div>
+    </section>
+  </main>
+
+  <aside class="side card" id="side-people">
+    <div class="title" style="font-size:16px">👥 在线道友</div>
+    <div class="online" id="online"></div>
+    <div class="title" style="font-size:16px;margin-top:14px">🏯 天骄榜</div>
+    <table id="board"></table>
+  </aside>
+
+  <aside class="side card" id="side-chat">
+    <div class="title" style="font-size:16px">💬 世界频道</div>
+    <div class="chat" id="chat"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="chatInput" maxlength="120" placeholder="说点什么…">
+      <button class="btn" id="chatSend" style="flex:0 0 auto">传音</button>
+    </div>
+  </aside>
+</div>
+
+<div class="tabs" id="tabs">
+  <button class="on" data-tab="play">修行</button>
+  <button data-tab="people">道友</button>
+  <button data-tab="chat">传音</button>
+  <button data-tab="log">见闻</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const API = location.pathname.startsWith('/rpg') ? '' : '';
+  const state = { name: '', player: null, ws: null, tab: 'play' };
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log');
+
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+  function logLine(text, cls = 'sys') {
+    const div = document.createElement('div');
+    div.className = cls;
+    div.textContent = text;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.children.length > 300) logEl.removeChild(logEl.firstChild);
+  }
+  function render(p) {
+    if (!p) return;
+    state.player = p;
+    $('whoami').textContent = p.name;
+    $('realmTag').textContent = p.realm_name + '期';
+    const pct = Math.min(100, Math.round((p.exp / Math.max(1, p.exp_needed)) * 100));
+    $('expBar').style.width = pct + '%';
+    $('expText').textContent = `${p.exp} / ${p.exp_needed}`;
+    const hpPct = Math.min(100, Math.round((p.hp / Math.max(1, p.max_hp)) * 100));
+    $('hpBar').style.width = hpPct + '%';
+    $('hpText').textContent = `${p.hp} / ${p.max_hp}`;
+    $('stones').textContent = p.stones;
+    $('record').textContent = `${p.wins} 胜 ${p.losses} 负`;
+    document.querySelectorAll('.btn[data-act]').forEach((b) => {
+      b.disabled = false;
+    });
+  }
+  async function post(path, body) {
+    const res = await fetch(path, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || '请求失败');
+    return data;
+  }
+  async function get(path) {
+    const res = await fetch(path);
+    return res.json();
+  }
+
+  async function join() {
+    const name = ($('nameInput').value || '').trim();
+    if (!name) { $('loginHint').textContent = '先取个道号吧'; return; }
+    try {
+      const data = await post('/api/rpg/join', {name});
+      state.name = name;
+      localStorage.setItem('rpg.name', name);
+      $('login').style.display = 'none';
+      render(data.state);
+      logLine(`🌫 你以「${name}」之名踏入修行界，四周灵气缭绕。`);
+      if (data.state.new) logLine('✨ 初入练气，先去打坐吐纳吧。');
+      connect();
+      refreshBoard();
+      refreshWorld();
+      refreshParty();
+      tickStats();
+    } catch (err) {
+      $('loginHint').textContent = err.message;
+    }
+  }
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/api/rpg/ws?name=${encodeURIComponent(state.name)}`;
+    const ws = new WebSocket(url);
+    state.ws = ws;
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === 'chat') {
+        const p = document.createElement('p');
+        p.innerHTML = `<span class="who"></span>：<span class="msg"></span>`;
+        p.querySelector('.who').textContent = msg.name;
+        p.querySelector('.msg').textContent = msg.text;
+        const chat = $('chat');
+        chat.appendChild(p);
+        chat.scrollTop = chat.scrollHeight;
+        while (chat.children.length > 200) chat.removeChild(chat.firstChild);
+      } else if (msg.type === 'world') {
+        logLine(msg.text, 'sys');
+        if (msg.text && msg.text.includes('突破')) logLine(msg.text, 'gold');
+      } else if (msg.type === 'presence') {
+        renderOnline(msg.players);
+      } else if (msg.type === 'party' || msg.type === 'duel' || msg.type === 'dungeon') {
+        logLine(msg.text || '', msg.type === 'duel' ? 'gold' : 'sys');
+        (msg.log || []).forEach((line) => logLine(line, 'sys'));
+        if (msg.type === 'party') refreshParty().catch(() => {});
+      }
+    };
+    ws.onclose = () => { setTimeout(connect, 3000); };
+  }
+
+  function renderOnline(players) {
+    const box = $('online');
+    box.innerHTML = '';
+    (players || []).forEach((n) => {
+      const s = document.createElement('span');
+      s.className = 'pill';
+      s.textContent = n;
+      s.title = '点一下向他论道（PvP）';
+      s.style.cursor = 'pointer';
+      s.addEventListener('click', () => duel(n));
+      box.appendChild(s);
+    });
+    $('onlineCount').textContent = (players || []).length;
+  }
+
+  async function duel(target) {
+    if (!state.name) return;
+    if (target === state.name) { toast('不能和自己论道'); return; }
+    try {
+      const data = await post('/api/rpg/pvp/duel', {from: state.name, to: target});
+      if (data.state) render(data.state);
+      (data.log || []).forEach((line) => logLine(line, 'sys'));
+      toast(data.winner === state.name ? '论道胜出！' : '技不如人，再练练');
+      refreshBoard();
+    } catch (err) { toast(err.message); }
+  }
+
+  async function refreshParty() {
+    try {
+      const data = await get('/api/rpg/party/list');
+      const mine = (data.parties || []).find((p) => (p.members || []).includes(state.name));
+      state.party = mine || null;
+      const info = $('partyInfo');
+      const box = $('partyMembers');
+      box.innerHTML = '';
+      if (!mine) { info.textContent = '尚未组队'; return; }
+      info.textContent = `队伍 ${mine.code}｜队长 ${mine.leader}｜${mine.size}/4 人`;
+      (mine.members || []).forEach((n) => {
+        const s = document.createElement('span');
+        s.className = 'pill';
+        s.textContent = n + (n === mine.leader ? ' 👑' : '');
+        box.appendChild(s);
+      });
+      if (mine.leader === state.name) $('partyCode').value = mine.code;
+    } catch {}
+  }
+
+  async function act(kind) {
+    const btn = document.querySelector(`.btn[data-act="${kind}"]`);
+    if (btn) btn.disabled = true;
+    try {
+      const data = await post(`/api/rpg/${kind}`, {name: state.name});
+      if (data.state) render(data.state);
+      if (data.message) logLine(data.message, data.ok ? (data.success === false ? 'lose' : 'win') : 'sys');
+      if (data.battle && data.battle.length) data.battle.forEach((line) => logLine(line, 'sys'));
+      if (!data.ok && data.cooldown) logLine(`⏳ ${data.message}`, 'sys');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function refreshBoard() {
+    try {
+      const data = await get('/api/rpg/leaderboard');
+      const t = $('board');
+      t.innerHTML = (data.players || []).map((p) => `<tr><td>${p.rank}. ${p.name}</td><td class="r">${p.realm_name}</td></tr>`).join('');
+    } catch {}
+  }
+  async function refreshWorld() {
+    try {
+      const data = await get('/api/rpg/world');
+      renderOnline(data.online || []);
+      (data.events || []).slice(0, 10).reverse().forEach((e) => logLine(e.text, 'gold'));
+    } catch {}
+  }
+  async function tickStats() {
+    try {
+      const data = await get('/api/rpg/stats');
+      $('topRealm').textContent = data.top_realm;
+      $('onlineCount').textContent = data.online;
+    } catch {}
+    setTimeout(tickStats, 15000);
+  }
+
+  document.querySelectorAll('.btn[data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => act(btn.dataset.act));
+  });
+  $('enterBtn').addEventListener('click', join);
+  $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+  $('chatSend').addEventListener('click', () => {
+    const input = $('chatInput');
+    const text = (input.value || '').trim();
+    if (!text || !state.ws || state.ws.readyState !== 1) return;
+    state.ws.send(JSON.stringify({type: 'chat', text}));
+    input.value = '';
+  });
+  $('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('chatSend').click(); });
+
+  // 组队副本
+  $('partyCreate').addEventListener('click', async () => {
+    try {
+      const data = await post('/api/rpg/party/create', {name: state.name});
+      $('partyCode').value = data.party.code;
+      logLine(`🤝 你创建了队伍 ${data.party.code}，招呼道友输入编号加入吧`);
+      await refreshParty();
+    } catch (err) { toast(err.message); }
+  });
+  $('partyJoin').addEventListener('click', async () => {
+    const code = ($('partyCode').value || '').trim();
+    if (!code) { toast('先填队伍编号'); return; }
+    try {
+      const data = await post('/api/rpg/party/join', {name: state.name, code});
+      logLine(`➕ 已加入队伍 ${data.party.code}`);
+      await refreshParty();
+    } catch (err) { toast(err.message); }
+  });
+  $('partyLeave').addEventListener('click', async () => {
+    try {
+      await post('/api/rpg/party/leave', {name: state.name});
+      logLine('👋 你离开了队伍');
+      $('partyCode').value = '';
+      await refreshParty();
+    } catch (err) { toast(err.message); }
+  });
+  $('partyStart').addEventListener('click', async () => {
+    try {
+      const data = await post('/api/rpg/party/start', {name: state.name});
+      logLine(data.victory ? `🏆 讨伐【${data.boss}】成功！` : `💀 队伍败于【${data.boss}】`, data.victory ? 'win' : 'lose');
+      (data.log || []).forEach((line) => logLine(line, 'sys'));
+      (data.rewards || []).forEach((r) => logLine(`　${r.name}：修为 ${r.exp >= 0 ? '+' : ''}${r.exp}，灵石 +${r.stones}`, 'gold'));
+      const st = await get(`/api/rpg/state?name=${encodeURIComponent(state.name)}`);
+      if (st.state) render(st.state);
+      await refreshParty().catch(() => {});
+      refreshBoard();
+    } catch (err) { toast(err.message); }
+  });
+
+  document.querySelectorAll('#tabs button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b === btn));
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.side').forEach((el) => el.classList.remove('active'));
+      if (tab === 'people') $('side-people').classList.add('active');
+      if (tab === 'chat') $('side-chat').classList.add('active');
+      if (tab === 'log') { document.querySelector('main').scrollIntoView({behavior: 'smooth'}); }
+    });
+  });
+
+  const saved = localStorage.getItem('rpg.name');
+  if (saved) $('nameInput').value = saved;
+})();
+</script>
+</body>
+</html>

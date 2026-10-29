@@ -6226,6 +6226,7 @@ const PAGE_META = {
   assistant: { title: '助手', eyebrow: 'OPERATOR' },
   plugins: { title: '插件', eyebrow: 'PLUGIN STUDIO' },
   stickers: { title: '表情包', eyebrow: 'STICKER LIBRARY' },
+  rpg: { title: '修仙界', eyebrow: 'IMMORTAL REALM' },
   settings: { title: '设置', eyebrow: 'SETTINGS' },
 };
 
@@ -6268,6 +6269,10 @@ function showTab(tab, options = {}) {
   $('#inspector')?.classList.remove('open');
   if (tab === 'stickers') {
     loadStickers().catch((error) => toast(error.message, 'error'));
+  }
+  if (tab === 'rpg') {
+    const frame = $('#rpg-frame');
+    if (frame && !frame.getAttribute('src')) frame.setAttribute('src', frame.dataset.src || '/rpg');
   }
   if (tab === 'plugins') {
     loadPlugins().catch((error) => toast(error.message, 'error'));

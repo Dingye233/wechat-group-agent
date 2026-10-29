@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -95,6 +95,7 @@
         <button class="nav-tab" data-tab="assistant"><span data-icon="sparkles"></span><span>助手</span></button>
         <button class="nav-tab" data-tab="plugins"><span data-icon="plug"></span><span>插件</span></button>
         <button class="nav-tab" data-tab="stickers"><span data-icon="smile"></span><span>表情包</span></button>
+        <button class="nav-tab" data-tab="rpg"><span data-icon="sparkles"></span><span>修仙界</span></button>
         <button class="nav-tab" data-tab="settings"><span data-icon="settings"></span><span>设置</span></button>
       </nav>
       <div class="sidebar-spacer"></div>
@@ -788,6 +789,222 @@
           </div>
         </div>
       </dialog>
+
+      <!-- IMMORTAL REALM -->
+      <section class="tab-panel" id="tab-rpg" hidden>
+        <div class="page" style="padding:0">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">IMMORTAL REALM</p>
+              <h1 class="page-title">修仙界</h1>
+              <p class="page-sub">东方修仙多人 RPG · 打坐、突破、秘境、组队副本、论道。手机/电脑自适应，局域网可玩。</p>
+            </div>
+            <div class="page-actions">
+              <div id="rpg-seg" style="display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-right:8px">
+                <button type="button" data-rpg-view="game" class="rpg-seg-btn" style="padding:8px 14px;background:var(--accent,#2a6b4f);color:#fff;border:0;cursor:pointer">游戏</button>
+                <button type="button" data-rpg-view="admin" class="rpg-seg-btn" style="padding:8px 14px;background:transparent;color:inherit;border:0;cursor:pointer">后台管理</button>
+              </div>
+              <a class="btn btn-ghost" id="rpg-open-lan" href="/rpg" target="_blank" rel="noreferrer">新窗口打开</a>
+            </div>
+          </div>
+
+          <div class="rpg-frame-wrap" id="rpg-view-game">
+            <iframe id="rpg-frame" title="修仙界" data-src="/rpg" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#08110c"></iframe>
+          </div>
+
+          <div id="rpg-view-admin" hidden>
+            <div style="display:grid;gap:12px">
+              <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+                <div class="stat-card"><span class="muted">玩家数</span><b id="rpg-stat-players">-</b></div>
+                <div class="stat-card"><span class="muted">最高境界</span><b id="rpg-stat-top">-</b></div>
+                <div class="stat-card"><span class="muted">灵石总量</span><b id="rpg-stat-stones">-</b></div>
+                <div class="stat-card"><span class="muted">胜 / 负</span><b id="rpg-stat-record">-</b></div>
+                <div class="stat-card"><span class="muted">事件数</span><b id="rpg-stat-events">-</b></div>
+                <div class="stat-card"><span class="muted">在线</span><b id="rpg-stat-online">-</b></div>
+              </div>
+
+              <div class="panel" style="border:1px solid var(--line);border-radius:12px;padding:12px">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <input id="rpg-search" placeholder="搜索道号" style="padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit;min-width:180px">
+                  <button class="btn btn-ghost" id="rpg-refresh">刷新</button>
+                  <input id="rpg-broadcast" placeholder="全服播报内容" style="padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:inherit;min-width:220px">
+                  <button class="btn btn-ghost" id="rpg-broadcast-send">发播报</button>
+                  <button class="btn btn-ghost" id="rpg-reset" style="margin-left:auto;color:#e2654f">重置全部</button>
+                </div>
+                <div class="muted" id="rpg-party-list" style="margin-top:8px">队伍：无</div>
+              </div>
+
+              <div class="panel" style="border:1px solid var(--line);border-radius:12px;overflow:auto">
+                <table class="table" style="width:100%;border-collapse:collapse;font-size:14px">
+                  <thead><tr>
+                    <th style="text-align:left;padding:8px">道号</th>
+                    <th style="text-align:left;padding:8px">境界</th>
+                    <th style="text-align:right;padding:8px">修为</th>
+                    <th style="text-align:right;padding:8px">灵石</th>
+                    <th style="text-align:right;padding:8px">气血</th>
+                    <th style="text-align:right;padding:8px">胜/负</th>
+                    <th style="text-align:right;padding:8px">操作</th>
+                  </tr></thead>
+                  <tbody id="rpg-players"></tbody>
+                </table>
+              </div>
+
+              <div class="panel" style="border:1px solid var(--line);border-radius:12px;padding:12px">
+                <div class="muted">最近事件</div>
+                <ul id="rpg-events" style="margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.8"></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <script>
+      (() => {
+        const seg = document.getElementById('rpg-seg');
+        const viewGame = document.getElementById('rpg-view-game');
+        const viewAdmin = document.getElementById('rpg-view-admin');
+        if (!seg || !viewGame || !viewAdmin) return;
+
+        function paint(active) {
+          seg.querySelectorAll('button').forEach((b) => {
+            const on = b.dataset.rpgView === active;
+            b.style.background = on ? 'var(--accent,#2a6b4f)' : 'transparent';
+            b.style.color = on ? '#fff' : 'inherit';
+          });
+          viewGame.hidden = active !== 'game';
+          viewAdmin.hidden = active !== 'admin';
+          if (active === 'admin') loadAdmin();
+        }
+        seg.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-rpg-view]');
+          if (btn) paint(btn.dataset.rpgView);
+        });
+
+        async function api(path, options) {
+          const res = await fetch(path, options);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || '请求失败');
+          return data;
+        }
+        const $ = (id) => document.getElementById(id);
+
+        function renderPlayers(list) {
+          const body = $('rpg-players');
+          body.innerHTML = '';
+          (list || []).forEach((p) => {
+            const tr = document.createElement('tr');
+            tr.style.borderTop = '1px solid var(--line)';
+            tr.innerHTML = `
+              <td style="padding:8px">${p.name}</td>
+              <td style="padding:8px">${p.realm_name}</td>
+              <td style="padding:8px;text-align:right">${p.exp}</td>
+              <td style="padding:8px;text-align:right">${p.stones}</td>
+              <td style="padding:8px;text-align:right">${p.hp}/${p.max_hp}</td>
+              <td style="padding:8px;text-align:right">${p.wins}/${p.losses}</td>
+              <td style="padding:8px;text-align:right"></td>`;
+            const cell = tr.lastElementChild;
+            const edit = document.createElement('button');
+            edit.className = 'btn btn-ghost';
+            edit.textContent = '编辑';
+            edit.addEventListener('click', () => editPlayer(p));
+            const del = document.createElement('button');
+            del.className = 'btn btn-ghost';
+            del.textContent = '删除';
+            del.style.marginLeft = '6px';
+            del.style.color = '#e2654f';
+            del.addEventListener('click', () => deletePlayer(p));
+            cell.append(edit, del);
+            body.appendChild(tr);
+          });
+          if (!(list || []).length) {
+            body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center" class="muted">暂无角色</td></tr>';
+          }
+        }
+
+        async function editPlayer(p) {
+          const realm = window.prompt(`【${p.name}】境界 1–9（当前 ${p.realm} ${p.realm_name}）`, String(p.realm));
+          if (realm === null) return;
+          const exp = window.prompt('修为', String(p.exp));
+          if (exp === null) return;
+          const stones = window.prompt('灵石', String(p.stones));
+          if (stones === null) return;
+          const hp = window.prompt(`气血（上限 ${p.max_hp}）`, String(p.hp));
+          if (hp === null) return;
+          try {
+            await api('/api/rpg/admin/player/update', {
+              method: 'POST', headers: {'content-type': 'application/json'},
+              body: JSON.stringify({name: p.name, realm, exp, stones, hp}),
+            });
+            loadAdmin();
+          } catch (err) { alert(err.message); }
+        }
+
+        async function deletePlayer(p) {
+          if (!window.confirm(`确定删除角色「${p.name}」？此操作不可撤销。`)) return;
+          try {
+            await api('/api/rpg/admin/player/delete', {
+              method: 'POST', headers: {'content-type': 'application/json'},
+              body: JSON.stringify({name: p.name}),
+            });
+            loadAdmin();
+          } catch (err) { alert(err.message); }
+        }
+
+        async function loadAdmin() {
+          try {
+            const [overview, players] = await Promise.all([
+              api('/api/rpg/admin/overview'),
+              api('/api/rpg/admin/players?limit=200&query=' + encodeURIComponent($('rpg-search')?.value || '')),
+            ]);
+            $('rpg-stat-players').textContent = overview.players;
+            $('rpg-stat-top').textContent = overview.top_realm;
+            $('rpg-stat-stones').textContent = overview.stones;
+            $('rpg-stat-record').textContent = `${overview.wins} / ${overview.losses}`;
+            $('rpg-stat-events').textContent = overview.events;
+            $('rpg-stat-online').textContent = (overview.online || []).length;
+            $('rpg-party-list').textContent = '队伍：' + ((overview.parties || []).length
+              ? overview.parties.map((p) => `${p.code}(${p.members.join('、')})`).join('  ')
+              : '无');
+            const ul = $('rpg-events');
+            ul.innerHTML = '';
+            (overview.latest_events || []).forEach((e) => {
+              const li = document.createElement('li');
+              li.textContent = e.text;
+              ul.appendChild(li);
+            });
+            renderPlayers(players.players || []);
+          } catch (err) {
+            console.warn('修仙界后台加载失败', err);
+          }
+        }
+
+        $('rpg-refresh')?.addEventListener('click', loadAdmin);
+        $('rpg-search')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadAdmin(); });
+        $('rpg-broadcast-send')?.addEventListener('click', async () => {
+          const text = ($('rpg-broadcast')?.value || '').trim();
+          if (!text) return;
+          try {
+            await api('/api/rpg/admin/broadcast', {
+              method: 'POST', headers: {'content-type': 'application/json'},
+              body: JSON.stringify({text}),
+            });
+            $('rpg-broadcast').value = '';
+            loadAdmin();
+          } catch (err) { alert(err.message); }
+        });
+        $('rpg-reset')?.addEventListener('click', async () => {
+          if (!window.confirm('确定清空所有角色和事件？不可撤销。')) return;
+          try {
+            await api('/api/rpg/admin/reset', {
+              method: 'POST', headers: {'content-type': 'application/json'}, body: '{}',
+            });
+            loadAdmin();
+          } catch (err) { alert(err.message); }
+        });
+
+        document.querySelector('.nav-tab[data-tab="rpg"]')?.addEventListener('click', () => paint('game'));
+      })();
+      </script>
 
       <!-- SETTINGS -->
       <section class="tab-panel" id="tab-settings" hidden>
