@@ -1515,3 +1515,40 @@ mock Task route：
 ```
 
 尚未用真实测试群复测；缓存命中/token 用量仍缺少 ACP 明细。
+
+---
+
+## 45. 多会话 / 多任务并发
+
+问题根因：
+
+- `_send_primary_reply` 原来用全局 `_global_lock` 包住整个发送循环
+- 一个群发送 10–30 秒时，其他群/私聊只能排队
+- Task lane 没有并发上限，多个任务会同时启动多个 DSH 进程
+
+修改：
+
+- 去掉 DSH 发送的全局锁；发送顺序交给 wechatauto service queue
+- 保留每群 `_locks`，同群仍串行
+- DSH Chat lane 继续按 `chat-group-*` / `chat-admin-*` 独立 session
+- Task lane 增加全局 Semaphore(3)，第 4 个任务保持 queued
+- 任务完成后各自汇报，不再共用一个发送锁
+
+实测：
+
+```text
+3 个并发 Chat session：
+  group-101 0.92s
+  group-102 0.94s
+  admin-103 0.81s
+
+2 个群同时发任务：
+  group 4 task done verified=True
+  group 1 task done verified=True
+```
+
+注意：
+
+- wechatauto 服务队列仍是单 worker，真实微信 UI 发送按队列串行
+- 不会丢消息，但发送仍是顺序的
+- 超过 3 个任务会排队，不会无限起 DSH 进程
