@@ -492,3 +492,42 @@ GET  /api/transport/jobs
 - 空消息 → ignore
 
 当前它先作为观测和后续 lane 分流的依据，还没有替换主链路：群聊仍由 DSH 决定，私聊简单消息仍走 `quick_chat`。下一步才会把 Router 结果接到 Chat lane / Task lane。
+
+---
+
+## 14. 已落地：DSH Chat lane（群聊简单消息）
+
+新增 profile：
+
+```text
+qunban-chat-lane
+  · base + acp-app
+  · 无 @qunban/dsh-native
+  · 无原生工具
+  · 无 qunban 工具
+  · 持久 ACP session，按群复用
+```
+
+链路：
+
+```text
+群消息 → 规则门 → Router
+  ├─ lane=chat → DSH Chat lane（无工具）
+  └─ lane=task → DSH primary（带工具）
+```
+
+- Chat lane 使用 `chat-group-<id>` session
+- 第一条消息冷启动，后续复用
+- 失败自动回退 primary
+- 私聊 quick_chat 暂未迁移到 Chat lane
+- 默认开关：`dsh_chat_lane_enabled=true`
+- 可查询 `/api/dsh/status` 的 `chat_lane`
+
+实测：
+
+```text
+首条 Chat lane 约 3.7 秒
+同 session 后续约 0.66–0.8 秒
+```
+
+这解决了“所有群聊消息都带全工具”的 token 和首轮问题。

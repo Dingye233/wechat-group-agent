@@ -57,6 +57,7 @@ PUBLIC_KEYS = {
     "dsh_channel",
     "group_chat_engine",
     "group_channel_mode",
+    "dsh_chat_lane_enabled",
     "tray_close_action",
     "takeover_hotkey",
     "auto_retry_failed_sends",
@@ -146,6 +147,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # routing, tools and the final reply.  ``legacy`` keeps the old
     # AgentEngine planner as an emergency fallback.
     "group_channel_mode": "dsh_primary",
+    "dsh_chat_lane_enabled": True,
     "opencode_enabled": False,
     # tray = closing the background window hides to the notification area;
     # exit = closing stops the service.
@@ -365,6 +367,11 @@ async def update_settings(
         updates["opencode_enabled"] = bool(payload["opencode_enabled"])
     if "dsh_enabled" in payload and payload["dsh_enabled"] is not None:
         updates["dsh_enabled"] = bool(payload["dsh_enabled"])
+    if (
+        "dsh_chat_lane_enabled" in payload
+        and payload["dsh_chat_lane_enabled"] is not None
+    ):
+        updates["dsh_chat_lane_enabled"] = bool(payload["dsh_chat_lane_enabled"])
     if (
         "auto_retry_failed_sends" in payload
         and payload["auto_retry_failed_sends"] is not None

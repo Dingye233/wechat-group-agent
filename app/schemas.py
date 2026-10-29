@@ -136,6 +136,7 @@ class SettingsUpdate(BaseModel):
     group_channel_mode: Literal["dsh_primary", "legacy"] | None = None
     operator_engine: Literal["opencode", "dsh"] | None = None
     dsh_enabled: bool | None = None
+    dsh_chat_lane_enabled: bool | None = None
     dsh_channel: Literal["stable", "alpha"] | None = None
     tray_close_action: Literal["tray", "exit"] | None = None
     takeover_hotkey: str | None = Field(default=None, max_length=40)

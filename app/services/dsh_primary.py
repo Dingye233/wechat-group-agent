@@ -52,7 +52,25 @@ class DSHPrimaryError(RuntimeError):
 
 
 class DSHPrimaryService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        profile: str = PROFILE,
+        profile_scope: str = "group_primary",
+        toolset: str = "primary",
+        env_scope: str = "group",
+        channel: str = "group",
+        use_native: bool = True,
+        system_prompt: str = "",
+    ) -> None:
+        self.profile = profile
+        self.profile_dir = HOME_DIR / "profiles" / profile
+        self.profile_scope = profile_scope
+        self.toolset = toolset
+        self.env_scope = env_scope
+        self.channel = channel
+        self.use_native = use_native
+        self.system_prompt = system_prompt or self._default_system_prompt()
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
@@ -67,9 +85,24 @@ class DSHPrimaryService:
         self._started_at = 0.0
 
     # ------------------------------------------------------------- status
+    def _default_system_prompt(self) -> str:
+        return (
+            "你是群伴的群聊主 Agent，由 DeepSeek Harness 驱动。"
+            "你直接阅读群消息、判断是否参与、调用工具并给出最终结果。"
+            "群伴只负责通道和发送，不会替你做意图分流。\n\n"
+            "# 输出协议（必须遵守）\n"
+            "只输出一个 JSON 对象，不要 Markdown 代码块：\n"
+            '{"action":"none"}\n'
+            '{"action":"reply","messages":[{"text":"..."}],"sticker":null}\n'
+            '{"action":"task","ack":"收到，我处理一下","messages":[{"text":"..."}]}\n'
+            "action=none 表示不参与；reply 表示直接回复；"
+            "task 表示需要继续处理，ack/messages 会由群伴发送。\n"
+            "不要调用 wechat_send_message；最终发送由群伴统一完成。"
+        )
+
     def status(self) -> dict[str, Any]:
         return {
-            "profile": PROFILE,
+            "profile": self.profile,
             "running": bool(self._process and self._process.returncode is None),
             "sessions": len(self._sessions),
             "pid": self._process.pid if self._process else None,
@@ -78,9 +111,9 @@ class DSHPrimaryService:
 
     # ------------------------------------------------------------- profile
     def _ensure_profile(self, settings: dict[str, Any]) -> None:
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        self.profile_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
-            "name": PROFILE,
+            "name": self.profile,
             "private": True,
             "version": "1.0.0",
             "dsh": {
@@ -95,39 +128,52 @@ class DSHPrimaryService:
         model = str(settings.get("llm_model") or "deepseek-chat")
         source_profile = HOME_DIR / "profiles" / "qunban"
         dependencies: dict[str, Any] = {}
-        try:
-            source_manifest = json.loads(
-                (source_profile / "package.json").read_text(encoding="utf-8")
-            )
-            dependencies = dict(source_manifest.get("dependencies") or {})
-        except Exception:
-            dependencies = {}
-        rows = _profile_patch("group_primary")
-        imported_ids: set[str] = set()
-        try:
-            preserved = _preserved_plugin_rows(source_profile)
-            rows.extend(plugin_policy.filter_rows(preserved, "group"))
-            imported_ids = {
-                str(item.get("id") or "")
-                for row in preserved
-                if isinstance(row.get("insert"), list)
-                for item in row["insert"]
-                if isinstance(item, dict)
-            }
-        except Exception:
-            pass
-        for plugin_id, policy in plugin_policy.all_policies().items():
-            if not isinstance(policy, dict) or plugin_id in imported_ids:
-                continue
-            rows.append(
-                {
-                    "id": str(plugin_id),
-                    "disabled": not (
-                        bool(policy.get("enabled", True))
-                        and bool(policy.get("group", True))
-                    ),
+        rows = _profile_patch(self.profile_scope)
+        if self.use_native:
+            try:
+                source_manifest = json.loads(
+                    (source_profile / "package.json").read_text(encoding="utf-8")
+                )
+                dependencies = dict(source_manifest.get("dependencies") or {})
+            except Exception:
+                dependencies = {}
+            imported_ids: set[str] = set()
+            try:
+                preserved = _preserved_plugin_rows(source_profile)
+                rows.extend(plugin_policy.filter_rows(preserved, self.channel))
+                imported_ids = {
+                    str(item.get("id") or "")
+                    for row in preserved
+                    if isinstance(row.get("insert"), list)
+                    for item in row["insert"]
+                    if isinstance(item, dict)
                 }
-            )
+            except Exception:
+                pass
+            for plugin_id, policy in plugin_policy.all_policies().items():
+                if not isinstance(policy, dict) or plugin_id in imported_ids:
+                    continue
+                rows.append(
+                    {
+                        "id": str(plugin_id),
+                        "disabled": not (
+                            bool(policy.get("enabled", True))
+                            and bool(policy.get(self.channel, True))
+                        ),
+                    }
+                )
+            try:
+                toggles = json.loads(
+                    (source_profile / "plugin-toggles.json").read_text(encoding="utf-8")
+                )
+                if isinstance(toggles, dict):
+                    for plugin_id, enabled in toggles.items():
+                        if plugin_policy.get(str(plugin_id)) is None:
+                            rows.append(
+                                {"id": str(plugin_id), "disabled": not bool(enabled)}
+                            )
+            except Exception:
+                pass
         rows.extend(
             [
                 {
@@ -146,47 +192,22 @@ class DSHPrimaryService:
                 },
                 {
                     "id": "system-prompt",
-                    "config": {
-                        "personaPrefix": (
-                            "你是群伴的群聊主 Agent，由 DeepSeek Harness 驱动。"
-                            "你直接阅读群消息、判断是否参与、调用工具并给出最终结果。"
-                            "群伴只负责通道和发送，不会替你做意图分流。\n\n"
-                            "# 输出协议（必须遵守）\n"
-                            "只输出一个 JSON 对象，不要 Markdown 代码块：\n"
-                            '{"action":"none"}\n'
-                            '{"action":"reply","messages":[{"text":"..."}],"sticker":null}\n'
-                            '{"action":"task","ack":"收到，我处理一下","messages":[{"text":"..."}]}\n'
-                            "action=none 表示不参与；reply 表示直接回复；"
-                            "task 表示需要继续处理，ack/messages 会由群伴发送。\n"
-                            "不要调用 wechat_send_message；最终发送由群伴统一完成。"
-                        )
-                    },
+                    "config": {"personaPrefix": self.system_prompt},
                 },
             ]
         )
-        try:
-            toggles = json.loads(
-                (source_profile / "plugin-toggles.json").read_text(encoding="utf-8")
-            )
-            if isinstance(toggles, dict):
-                for plugin_id, enabled in toggles.items():
-                    if plugin_policy.get(str(plugin_id)) is None:
-                        rows.append(
-                            {"id": str(plugin_id), "disabled": not bool(enabled)}
-                        )
-        except Exception:
-            pass
         if dependencies:
             manifest["dependencies"] = dependencies
             for name in dependencies:
                 source = source_profile / "node_modules" / name
-                target = PROFILE_DIR / "node_modules" / name
+                target = self.profile_dir / "node_modules" / name
                 if source.exists() and not target.exists():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(source, target)
-        _write_json(PROFILE_DIR / "package.json", manifest)
-        _write_json(PROFILE_DIR / "cordis.patch.yml", rows)
-        _ensure_native_plugin(PROFILE_DIR)
+        _write_json(self.profile_dir / "package.json", manifest)
+        _write_json(self.profile_dir / "cordis.patch.yml", rows)
+        if self.use_native:
+            _ensure_native_plugin(self.profile_dir)
 
     # ------------------------------------------------------------- process
     def _env(self, settings: dict[str, Any]) -> dict[str, str]:
@@ -205,10 +226,14 @@ class DSHPrimaryService:
                 "PYTHONUTF8": "1",
                 "QUNBAN_API_BASE": f"http://127.0.0.1:{process_settings.port}",
                 "QUNBAN_TOKEN": tool_token(),
-                "QUNBAN_SCOPE": "group",
-                "QUNBAN_CHANNEL": "group",
-                "QUNBAN_DENY_TOOLS": ",".join(plugin_policy.deny_tools("group")),
-                "QUNBAN_TOOLSET": "primary",
+                "QUNBAN_SCOPE": self.env_scope,
+                "QUNBAN_CHANNEL": self.channel,
+                "QUNBAN_DENY_TOOLS": ",".join(
+                    plugin_policy.deny_tools(self.channel)
+                )
+                if self.use_native
+                else "",
+                "QUNBAN_TOOLSET": self.toolset,
                 "QUNBAN_DSH_RUNTIME_ROOT": str(RUNTIME_DIR / version),
             }
         )
@@ -234,7 +259,7 @@ class DSHPrimaryService:
                 node,
                 str(bin_path),
                 "--profile",
-                PROFILE,
+                self.profile,
                 cwd=str(WORKSPACE_DIR),
                 env=self._env(settings),
                 stdin=asyncio.subprocess.PIPE,
@@ -536,3 +561,42 @@ def get_dsh_primary_service() -> DSHPrimaryService:
     if _service is None:
         _service = DSHPrimaryService()
     return _service
+
+
+CHAT_LANE_PROMPT = """你是群伴的 Chat Agent，由 DeepSeek Harness 驱动。
+你负责像真人一样接话，不调用工具，不操作系统，不发送微信。
+
+# 风格
+- 简短、自然、有语境感，通常 1–2 句，最多 80 个汉字。
+- 可以幽默、接梗，但不要油腻、不要长篇说教。
+- 不要复述整段聊天，不要输出 Markdown、JSON、工具名或分析过程。
+- 不确定的事实不要编造；需要工具或复杂操作时，用一句自然话说明需要后台处理。
+
+# 输出
+直接输出要发给群友/用户的文字。
+"""
+
+
+class DSHChatLaneService(DSHPrimaryService):
+    """Persistent, tool-free ACP chat lane."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            profile="qunban-chat-lane",
+            profile_scope="chat",
+            toolset="none",
+            env_scope="group",
+            channel="group",
+            use_native=False,
+            system_prompt=CHAT_LANE_PROMPT,
+        )
+
+
+_chat_lane: DSHChatLaneService | None = None
+
+
+def get_dsh_chat_lane_service() -> DSHChatLaneService:
+    global _chat_lane
+    if _chat_lane is None:
+        _chat_lane = DSHChatLaneService()
+    return _chat_lane

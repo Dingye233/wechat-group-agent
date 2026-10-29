@@ -1346,6 +1346,30 @@ class AgentEngine:
                 )
                 stickers = await self._load_sticker_catalog(db, config)
                 message = await db.get(Message, message_id)
+                if (
+                    message is not None
+                    and route.lane == "chat"
+                    and bool(settings.get("dsh_chat_lane_enabled", True))
+                    and str(settings.get("group_channel_mode") or "dsh_primary")
+                    == "dsh_primary"
+                ):
+                    try:
+                        if await self._handle_dsh_chat_lane(
+                            message,
+                            group,
+                            config,
+                            settings,
+                            context,
+                            memory_text,
+                        ):
+                            return
+                    except Exception as exc:
+                        await self._log(
+                            group_id,
+                            "warn",
+                            f"DSH chat lane 失败，回退 primary：{exc}",
+                            level="warn",
+                        )
                 if message is not None and str(
                     settings.get("group_channel_mode") or "dsh_primary"
                 ) == "dsh_primary":
@@ -2077,6 +2101,74 @@ class AgentEngine:
                     time.time() + max(int(config.cooldown_seconds or 0), 0)
                 )
                 await self._log(group_id, "proactive", "Agent 主动发起了一条消息")
+
+    async def _handle_dsh_chat_lane(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+    ) -> bool:
+        """Tool-free persistent DSH chat lane for simple messages."""
+        from app.services.dsh_primary import get_dsh_chat_lane_service
+
+        sender = str(message.sender_name or message.sender_wxid or "群友")
+        persona = (config.persona or settings.get("default_persona") or "").strip()
+        recent = "\n".join(context[-12:]) or "（无）"
+        prompt = f"""# 群聊
+群：{group.name or '未命名群'}
+触发者：{sender}
+人设：{persona or '自然、简短、像群友一样接话'}
+
+# 最近群聊
+{recent}
+
+# 长期记忆
+{(memory_text or '无')[:1200]}
+
+# 本条消息
+{sender}：{str(message.content or '')[:2000]}
+
+# 你的任务
+直接回复群友，不要调用工具，不要输出 JSON、Markdown 或分析过程。
+通常 1–2 句；需要工具/复杂操作时，用一句自然话说明后台会处理。
+"""
+        self.runtime.emit_typing(group.id)
+        started = time.perf_counter()
+        result = await get_dsh_chat_lane_service().prompt(
+            f"chat-group-{group.id}",
+            prompt,
+            settings=settings,
+            timeout=180.0,
+        )
+        text = str(result.get("text") or "").strip()
+        if not text:
+            await self._log(
+                group.id,
+                "skip",
+                "DSH Chat lane 返回空回复",
+            )
+            return True
+        data = {"action": "reply", "reply": text}
+        sent = await self._send_primary_reply(
+            message,
+            group,
+            config,
+            settings,
+            data,
+            result,
+            started,
+        )
+        await self._log(
+            group.id,
+            "dsh_chat_lane",
+            f"Chat lane 回复｜{int((time.perf_counter() - started) * 1000)}ms"
+            f"｜发送={'是' if sent else '否'}",
+            level="info",
+        )
+        return True
 
     async def _handle_dsh_primary(
         self,

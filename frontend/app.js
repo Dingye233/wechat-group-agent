@@ -3856,6 +3856,8 @@ async function loadDSH() {
       parts.push(`当前引擎：${data.engine || '—'}`);
       if (st.running) parts.push(`运行中 ${st.running}`);
       if (data.primary?.running) parts.push('主链路：DSH primary 运行中');
+      if (data.chat_lane?.running) parts.push('Chat lane 运行中');
+      else if (data.chat_lane_enabled) parts.push('Chat lane 待命');
       if (st.update_available) parts.push(`可更新到 ${st.latest}`);
       statusLine.textContent = parts.join(' · ');
     }

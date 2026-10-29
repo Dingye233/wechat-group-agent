@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body
 from app.db import SessionLocal
 from app.services.agent_engines import resolve_agent_engine
 from app.services.dsh_agent import get_dsh_agent_runtime
-from app.services.dsh_primary import get_dsh_primary_service
+from app.services.dsh_primary import get_dsh_chat_lane_service, get_dsh_primary_service
 from app.services.dsh_runtime import get_dsh_runtime
 from app.services.settings import get_settings
 
@@ -22,6 +22,8 @@ async def dsh_status() -> dict:
             **get_dsh_agent_runtime().status(),
         },
         "primary": get_dsh_primary_service().status(),
+        "chat_lane": get_dsh_chat_lane_service().status(),
+        "chat_lane_enabled": bool(settings.get("dsh_chat_lane_enabled", True)),
         "engine": resolve_agent_engine(settings),
         "channel": settings.get("dsh_channel", "stable"),
         "group_channel_mode": settings.get("group_channel_mode", "dsh_primary"),
