@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
 import re
@@ -125,6 +126,7 @@ class AgentEngine:
         self._task_jobs: set[asyncio.Task] = set()
         self._primary_task_jobs: set[asyncio.Task] = set()
         self._primary_task_by_id: dict[int, asyncio.Task] = {}
+        self._task_sem = asyncio.Semaphore(3)
 
     async def handle_message(self, group_id: int, message_id: int) -> None:
         if not self._mark_processed(message_id):
@@ -1620,8 +1622,8 @@ class AgentEngine:
                 global_interval = float(
                     settings.get("reply_global_interval_seconds") or 0
                 )
-                async with self._global_lock:
-                    wait = self._global_next_reply - time.time()
+                async with contextlib.nullcontext():
+                    wait = 0.0
                     if wait > 0:
                         await asyncio.sleep(wait)
                     if not self.runtime.is_online or self.runtime.detached:
@@ -2657,8 +2659,8 @@ class AgentEngine:
                         segment["text"] = f"{mention} {text}"
                     break
         global_interval = float(settings.get("reply_global_interval_seconds") or 0)
-        async with self._global_lock:
-            wait = self._global_next_reply - time.time()
+        async with contextlib.nullcontext():
+            wait = 0.0
             if wait > 0:
                 await asyncio.sleep(wait)
             if not self.runtime.is_online or self.runtime.detached:
@@ -2770,6 +2772,10 @@ class AgentEngine:
                 self._start_primary_task(int(row["id"]))
 
     async def _run_primary_task(self, task_id: int) -> None:
+        async with self._task_sem:
+            await self._run_primary_task_inner(task_id)
+
+    async def _run_primary_task_inner(self, task_id: int) -> None:
         record = await task_runs.get(task_id)
         if not record or record.get("status") not in {"running", "queued"}:
             return
