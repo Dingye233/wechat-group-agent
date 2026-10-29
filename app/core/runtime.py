@@ -2301,7 +2301,22 @@ class RuntimeManager:
         allow = getattr(self.adapter, "allow_ui_action", None)
         if callable(allow):
             allow(max(1.0, float(allow_seconds)))
-        if self.adapter_id in {"replica", "replica-remote"}:
+        if self.adapter_id == "replica-remote" and self.transport is not None:
+            job = await self.transport.submit(
+                group_id=0,
+                text=text,
+                meta={"source": "contact", "target_wxid": wxid},
+                reuse_chat=reuse_chat,
+                target_wxid=wxid,
+            )
+            finished = await self.transport.wait(
+                int(job["id"]), timeout=max(30.0, float(allow_seconds) + 30.0)
+            )
+            if finished.get("status") != "sent":
+                raise RuntimeError(
+                    str(finished.get("error") or "私聊消息发送失败")
+                )
+        elif self.adapter_id in {"replica", "replica-remote"}:
             await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
         else:
             await self.adapter.send_text(wxid, text)

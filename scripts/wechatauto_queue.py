@@ -162,6 +162,7 @@ class ServiceQueue:
         meta: dict[str, Any] | None = None,
         reuse_chat: bool = False,
         idempotency_key: str = "",
+        target_wxid: str = "",
     ) -> dict[str, Any]:
         key = str(idempotency_key or (meta or {}).get("client_msg_id") or uuid.uuid4().hex)[:160]
         payload = {
@@ -170,6 +171,7 @@ class ServiceQueue:
             "files": [str(Path(item)) for item in files or []],
             "meta": meta or {},
             "reuse_chat": bool(reuse_chat),
+            "target_wxid": str(target_wxid or ""),
         }
         with self._connect() as con:
             if key:
@@ -289,9 +291,13 @@ class ServiceQueue:
         payload = job["payload"]
         started = time.perf_counter()
         try:
-            if int(job["group_id"]) <= 0:
-                raise RuntimeError("缺少目标群")
-            external_id = self._external_id(int(job["group_id"]), payload)
+            target = str(payload.get("target_wxid") or "").strip()
+            if target:
+                external_id = target
+            else:
+                if int(job["group_id"]) <= 0:
+                    raise RuntimeError("缺少目标群")
+                external_id = self._external_id(int(job["group_id"]), payload)
             text = str(payload.get("text") or "")
             files = [Path(item) for item in payload.get("files") or []]
             sticker_id = int(payload.get("sticker_id") or 0)

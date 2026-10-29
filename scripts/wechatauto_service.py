@@ -170,6 +170,7 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             meta=dict(payload.get("meta") or {}),
             reuse_chat=bool(payload.get("reuse_chat")),
             idempotency_key=str(payload.get("idempotency_key") or ""),
+            target_wxid=str(payload.get("target_wxid") or ""),
         )
         return {"job": job}
 

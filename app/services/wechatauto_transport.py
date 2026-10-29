@@ -105,6 +105,7 @@ class WechatautoTransport:
         meta: dict[str, Any] | None = None,
         reuse_chat: bool = False,
         idempotency_key: str = "",
+        target_wxid: str = "",
     ) -> dict[str, Any]:
         remote = self._remote()
         if remote is not None:
@@ -119,6 +120,7 @@ class WechatautoTransport:
                     "meta": meta or {},
                     "reuse_chat": bool(reuse_chat),
                     "idempotency_key": str(idempotency_key or ""),
+                    "target_wxid": str(target_wxid or ""),
                 }
             )
         key = str(

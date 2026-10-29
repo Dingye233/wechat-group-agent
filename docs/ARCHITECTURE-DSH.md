@@ -1552,3 +1552,51 @@ mock Task route：
 - wechatauto 服务队列仍是单 worker，真实微信 UI 发送按队列串行
 - 不会丢消息，但发送仍是顺序的
 - 超过 3 个任务会排队，不会无限起 DSH 进程
+
+---
+
+## 46. 私聊与群聊共用发送队列
+
+之前私聊：
+
+```text
+RuntimeManager.send_contact_message
+  → RemoteAdapter /v1/send_text
+```
+
+群聊：
+
+```text
+service queue worker
+  → adapter.send_text
+```
+
+两条路径会同时操作微信 UI。
+
+现在私聊也进入 8010 outbound 队列：
+
+```text
+group_id=0
+target_wxid=<wxid>
+→ ServiceQueue worker
+→ adapter.send_text(target)
+```
+
+群聊和私聊统一由单 worker 串行发送，避免互相抢占输入框。
+
+队列 DB 结构不变，目标放在 payload.target_wxid。
+
+验证：
+
+```text
+submit(group_id=0,target_wxid=wxid_test)
+status=sent
+adapter.calls=[(wxid_test, hi)]
+```
+
+多会话测试：
+
+```text
+3 个 Chat session 并发：0.92s / 0.94s / 0.81s
+2 个群同时发任务：两个都 done + verified
+```
