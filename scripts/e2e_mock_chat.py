@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -56,9 +57,35 @@ def read_prod_settings() -> dict[str, object]:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--task", action="store_true")
+    parser.add_argument(
+        "--dsh",
+        action="store_true",
+        help="reuse the project's installed DSH runtime/profile (chat lane only)",
+    )
     args = parser.parse_args()
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="qunban-e2e-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix=".e2e-", dir=PROJECT))
+    if args.dsh:
+        dsh_source = PROJECT / "data" / "dsh"
+        if not dsh_source.exists():
+            print("SKIP: project DSH runtime not found")
+            return 2
+        result = subprocess.run(
+            [
+                "cmd",
+                "/c",
+                "mklink",
+                "/J",
+                str(temp_dir / "dsh"),
+                str(dsh_source),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print("SKIP: cannot create DSH junction:", result.stderr.strip())
+            return 2
     os.environ["DATA_DIR"] = str(temp_dir)
     prod = read_prod_settings()
     if not str(prod.get("llm_api_key") or "").strip():
@@ -83,7 +110,8 @@ async def main() -> int:
             print("FAIL: mock adapter did not become online", runtime.last_error)
             return 3
         from app.adapters.base import IncomingMessage
-        from app.models import Group
+        from app.models import AgentTaskRun, Group
+        from sqlalchemy import select
 
         async with SessionLocal() as db:
             group = (
@@ -101,7 +129,11 @@ async def main() -> int:
                 room_id=str(group.external_id),
                 sender_id="wxid_laowang",
                 sender_name="老王",
-                content="@小助手 在吗？今天好累",
+                content=(
+                    "@小助手 帮我记一下：明天十点开项目会"
+                    if args.task
+                    else "@小助手 在吗？今天好累"
+                ),
                 timestamp=time.time(),
                 external_id=f"mock-e2e-{uuid.uuid4().hex[:10]}",
             )
@@ -116,7 +148,31 @@ async def main() -> int:
         print(f"group_id={group_id} online={runtime.is_online} sent={len(sent)}")
         for kind, _room, text in sent[:3]:
             print(f"SENT[{kind}]:", str(text)[:300])
-        return 0 if sent else 5
+        if not args.task:
+            return 0 if sent else 5
+        task_deadline = time.monotonic() + 75
+        task = None
+        while time.monotonic() < task_deadline:
+            async with SessionLocal() as db:
+                task = (
+                    await db.execute(
+                        select(AgentTaskRun)
+                        .order_by(AgentTaskRun.id.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            if task is not None and task.status in {"done", "failed", "cancelled"}:
+                break
+            await asyncio.sleep(1.0)
+        print(
+            "TASK:",
+            getattr(task, "status", None),
+            "verified=",
+            getattr(task, "verified", None),
+            "error=",
+            getattr(task, "error", "")[:200],
+        )
+        return 0 if task is not None and task.status == "done" else 6
     finally:
         await runtime.close()
         if not args.keep:

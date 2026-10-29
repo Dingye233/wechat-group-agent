@@ -2182,7 +2182,6 @@ class AgentEngine:
         self.runtime.emit_typing(group.id)
         started = time.perf_counter()
         preflight: asyncio.Task | None = None
-        preflight_started = time.perf_counter()
         preflight_wait_ms = 0
         preflight_fn = getattr(self.runtime, "preflight_group", None)
         if callable(preflight_fn):
@@ -2202,6 +2201,7 @@ class AgentEngine:
                 preflight.cancel()
             raise
         reuse_first = False
+        preflight_wait_started = time.perf_counter()
         if preflight is not None:
             try:
                 reuse_first = bool(
@@ -2216,7 +2216,7 @@ class AgentEngine:
                 preflight.cancel()
                 reuse_first = False
             preflight_wait_ms = int(
-                (time.perf_counter() - preflight_started) * 1000
+                (time.perf_counter() - preflight_wait_started) * 1000
             )
         text = str(result.get("text") or "").strip()
         if not text:
