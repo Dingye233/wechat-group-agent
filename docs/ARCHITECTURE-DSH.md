@@ -1449,3 +1449,42 @@ after → allowed=false, reason=cooldown
 - 消息入库
 - WebSocket
 - 全局发送间隔 `_global_next_reply`（仍在主进程）
+
+---
+
+## 43. WebSocket/event hub 迁到 sidecar
+
+sidecar 新增：
+
+```text
+POST /v1/events/publish
+WS   /ws
+```
+
+主进程 `RuntimeManager.broadcast`：
+
+```text
+EventBus（本地保底）
+  + EventRelay → sidecar /v1/events/publish
+```
+
+前端：
+
+```text
+优先 ws://127.0.0.1:8020/ws
+失败自动回退 ws://127.0.0.1:8000/ws
+```
+
+实测：
+
+```text
+sidecar ws 连接
+主进程 create task
+sidecar 收到 assistant.task
+```
+
+当前边界：
+
+- WebSocket fanout 已迁到 sidecar
+- 事件仍由主 RuntimeManager 产生
+- 消息入库、RuntimeManager、Agent 调度仍在主进程

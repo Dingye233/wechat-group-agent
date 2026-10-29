@@ -41,6 +41,7 @@ from app.models import (
     Sticker,
     utcnow,
 )
+from app.services.event_relay import EventRelay
 from app.services import task_runs
 from app.services.assistant import (
     AssistantService,
@@ -318,6 +319,7 @@ class RuntimeManager:
 
     def __init__(self) -> None:
         self.bus = EventBus()
+        self.event_relay = EventRelay()
         self.llm = LLMService()
         self.agent = AgentEngine(self, self.llm)
         task_runs.set_event_sink(
@@ -370,6 +372,7 @@ class RuntimeManager:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=3000)
+        await self.event_relay.start()
         self._consumer = asyncio.create_task(
             self._consume_events(), name="adapter-event-consumer"
         )
@@ -542,6 +545,8 @@ class RuntimeManager:
             self.broadcast("status", self.status_dict())
 
     async def close(self) -> None:
+        with contextlib.suppress(Exception):
+            await self.event_relay.stop()
         with contextlib.suppress(Exception):
             await self.agent.close()
         if self.transport is not None:
@@ -3604,6 +3609,7 @@ class RuntimeManager:
 
     def broadcast(self, event_type: str, data: dict[str, Any]) -> None:
         self.bus.publish(event_type, data)
+        self.event_relay.publish(event_type, data)
 
     # ---------------------------------------------------------------- groups API
     async def list_group_payloads(self) -> list[dict[str, Any]]:

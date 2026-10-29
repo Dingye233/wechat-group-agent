@@ -6476,20 +6476,25 @@ function bindDialogBackdrops() {
 }
 
 /* ------------------------------------------------------------ websocket */
-function connectWS() {
+function connectWS(forceMain = false) {
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const mainUrl = `${protocol}//${window.location.host}/ws`;
+  const sidecarUrl = `${protocol}//${window.location.hostname}:8020/ws`;
+  const target = forceMain || state.wsFallback ? mainUrl : sidecarUrl;
   let socket;
   try {
-    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    socket = new WebSocket(target);
   } catch {
     setWs(false);
     scheduleReconnect();
     return;
   }
   state.ws = socket;
+  state.wsOpened = false;
   socket.addEventListener('open', () => {
     state.wsAttempts = 0;
+    state.wsOpened = true;
     setWs(true);
     refreshStatus(true);
     if (state.appReady) {
@@ -6498,7 +6503,13 @@ function connectWS() {
     }
   });
   socket.addEventListener('close', () => {
+    state.ws = null;
     setWs(false);
+    if (!state.wsOpened && !forceMain && !state.wsFallback) {
+      state.wsFallback = true;
+      connectWS(true);
+      return;
+    }
     scheduleReconnect();
   });
   socket.addEventListener('error', () => {

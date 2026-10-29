@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 
@@ -33,6 +33,7 @@ from app.services.memory import build_memory_context, search_memories
 app = FastAPI(title="qunban-sidecar")
 _reply_times: dict[int, deque[float]] = defaultdict(deque)
 _next_reply: dict[int, float] = {}
+_ws_clients: set[WebSocket] = set()
 
 
 class GroupContextRequest(BaseModel):
@@ -63,7 +64,40 @@ class SaveMemoryRequest(BaseModel):
 
 @app.get("/v1/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "service": "qunban-sidecar", "version": 1}
+    return {
+        "ok": True,
+        "service": "qunban-sidecar",
+        "version": 1,
+        "ws_clients": len(_ws_clients),
+    }
+
+
+@app.websocket("/ws")
+async def websocket_hub(websocket: WebSocket) -> None:
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
+
+
+@app.post("/v1/events/publish")
+async def events_publish(payload: dict[str, Any]) -> dict[str, Any]:
+    dead: list[WebSocket] = []
+    for client in list(_ws_clients):
+        try:
+            await client.send_json(payload)
+        except Exception:
+            dead.append(client)
+    for client in dead:
+        _ws_clients.discard(client)
+    return {"ok": True, "clients": len(_ws_clients)}
 
 
 @app.post("/v1/memory/group_context")
