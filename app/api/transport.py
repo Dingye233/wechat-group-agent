@@ -16,7 +16,17 @@ async def transport_jobs(
     transport = getattr(runtime, "transport", None)
     if transport is None:
         return {"jobs": [], "stats": {}}
-    return {"jobs": await transport.list_jobs(limit), "stats": await transport.stats()}
+    try:
+        return {
+            "jobs": await transport.list_jobs(limit),
+            "stats": await transport.stats(),
+        }
+    except Exception as exc:
+        return {
+            "jobs": [],
+            "stats": {},
+            "error": str(exc) or type(exc).__name__,
+        }
 
 
 @router.get("/transport/jobs/{job_id}")

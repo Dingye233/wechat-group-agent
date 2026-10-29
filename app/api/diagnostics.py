@@ -17,7 +17,13 @@ router = APIRouter(tags=["diagnostics"])
 @router.get("/diagnostics")
 async def diagnostics(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
     transport = getattr(runtime, "transport", None)
-    transport_stats = await transport.stats() if transport else {}
+    transport_stats: dict = {}
+    transport_error = ""
+    if transport:
+        try:
+            transport_stats = await transport.stats()
+        except Exception as exc:
+            transport_error = str(exc) or type(exc).__name__
     try:
         knowledge = await bili_knowledge.stats_async()
     except Exception as exc:
@@ -39,6 +45,7 @@ async def diagnostics(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
         "transport": {
             "running": bool(getattr(transport, "running", False)),
             "stats": transport_stats,
+            "error": transport_error,
             "in_process": runtime.adapter_id != "replica-remote",
         },
         "lanes": {
