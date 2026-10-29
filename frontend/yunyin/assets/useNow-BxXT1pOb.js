@@ -1,1 +1,0 @@
-import{Qn as e,js as t}from"./player-CSb8QTAn.js";import{n}from"./index-Bp_Vpzdk.js";function r(r=1e3){let i=t(e());return n(()=>{i.value=e()},r),i}export{r as t};
