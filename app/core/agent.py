@@ -2163,27 +2163,19 @@ class AgentEngine:
         knowledge_text = await self._load_knowledge_context(
             str(message.content or ""), settings
         )
-        prompt = f"""# 群聊
-群：{group.name or '未命名群'}
-触发者：{sender}
-人设：{persona or '自然、简短、像群友一样接话'}
+        from app.services.context_capsule import build_chat_capsule
 
-# 最近群聊
-{recent}
-
-# 长期记忆
-{(memory_text or '无')[:1200]}
-
-# 相关知识（可选用，不要强行引用）
-{knowledge_text or '（无）'}
-
-# 本条消息
-{sender}：{str(message.content or '')[:2000]}
-
-# 你的任务
-直接回复群友，不要调用工具，不要输出 JSON、Markdown 或分析过程。
-通常 1–2 句；需要工具/复杂操作时，用一句自然话说明后台会处理。
-"""
+        capsule = build_chat_capsule(
+            scope="微信群聊",
+            group_name=group.name or "未命名群",
+            sender=sender,
+            persona=persona,
+            memory=memory_text,
+            knowledge=knowledge_text,
+            recent=recent,
+            current=f"{sender}：{str(message.content or '')}",
+        )
+        prompt = capsule.render()
         self.runtime.emit_typing(group.id)
         started = time.perf_counter()
         result = await get_dsh_chat_lane_service().prompt(
@@ -2214,6 +2206,7 @@ class AgentEngine:
             group.id,
             "dsh_chat_lane",
             f"Chat lane 回复｜{int((time.perf_counter() - started) * 1000)}ms"
+            f"｜上下文≈{capsule.estimate_tokens()} tokens"
             f"｜发送={'是' if sent else '否'}",
             level="info",
         )
