@@ -572,4 +572,6 @@ Chat lane 现在会在生成前尝试取少量 B站知识：
 - 知识是外部检索片段，不写入 session 历史
 - 超时/索引不可用时不阻塞聊天，直接省略
 - 只在 Chat lane 使用；Task lane 仍可通过 `qunban_bili_knowledge` 深挖
-- 当前 Chroma 索引可能为空，检索会返回空列表；需要 B站知识生产线继续写入
+- 知识库路径改为绝对路径 `settings.data_dir/knowledge/chroma`，不再依赖进程 cwd
+- 已从 `bili_videos` 回填现有视频：当前 collection 约 389 个 chunk
+- 重建脚本：`scripts/rebuild_bili_knowledge.py --limit N`

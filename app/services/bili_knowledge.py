@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from app.config import settings as process_settings
+
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
@@ -25,7 +27,7 @@ def _ensure_collection():
         import chromadb
         from chromadb.config import Settings
 
-        path = Path("data") / "knowledge" / "chroma"
+        path = process_settings.data_dir / "knowledge" / "chroma"
         path.mkdir(parents=True, exist_ok=True)
         _CLIENT = chromadb.PersistentClient(
             path=str(path),
