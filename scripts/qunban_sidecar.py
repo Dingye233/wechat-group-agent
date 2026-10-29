@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import random
 import sys
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
@@ -27,6 +31,8 @@ from app.services import bili_knowledge
 from app.services.memory import build_memory_context, search_memories
 
 app = FastAPI(title="qunban-sidecar")
+_reply_times: dict[int, deque[float]] = defaultdict(deque)
+_next_reply: dict[int, float] = {}
 
 
 class GroupContextRequest(BaseModel):
@@ -144,6 +150,53 @@ async def rules_trigger(payload: dict[str, Any]) -> dict[str, Any]:
         ]
         return {"triggered": any(f"@{alias}" in compact for alias in aliases)}
     return {"triggered": False}
+
+
+def _quiet_now(start: str, end: str, timezone_name: str) -> bool:
+    start, end = str(start or "").strip(), str(end or "").strip()
+    if not start or not end or start == end:
+        return False
+    try:
+        now = datetime.now(ZoneInfo(timezone_name)).time()
+        start_t = datetime.strptime(start, "%H:%M").time()
+        end_t = datetime.strptime(end, "%H:%M").time()
+    except Exception:
+        return False
+    if start_t <= end_t:
+        return start_t <= now <= end_t
+    return now >= start_t or now <= end_t
+
+
+@app.post("/v1/rules/limits")
+async def rules_limits(payload: dict[str, Any]) -> dict[str, Any]:
+    group_id = int(payload.get("group_id") or 0)
+    now = time.time()
+    if now < _next_reply.get(group_id, 0.0):
+        return {"allowed": False, "reason": "cooldown"}
+    times = _reply_times[group_id]
+    while times and now - times[0] > 3600:
+        times.popleft()
+    configured_cap = max(1, int(payload.get("max_replies_per_hour") or 1))
+    effective_cap = max(1, int(configured_cap * random.uniform(0.65, 1.0)))
+    if len(times) >= effective_cap:
+        return {"allowed": False, "reason": "hourly_cap"}
+    if _quiet_now(
+        str(payload.get("quiet_start") or ""),
+        str(payload.get("quiet_end") or ""),
+        str(payload.get("timezone") or "Asia/Shanghai"),
+    ):
+        return {"allowed": False, "reason": "quiet_hours"}
+    return {"allowed": True, "reason": ""}
+
+
+@app.post("/v1/rules/record_reply")
+async def rules_record_reply(payload: dict[str, Any]) -> dict[str, Any]:
+    group_id = int(payload.get("group_id") or 0)
+    now = time.time()
+    _reply_times[group_id].append(now)
+    cooldown = max(0.0, float(payload.get("cooldown_seconds") or 0.0))
+    _next_reply[group_id] = now + cooldown
+    return {"ok": True, "next_reply_at": _next_reply[group_id]}
 
 
 @app.post("/v1/knowledge/search")

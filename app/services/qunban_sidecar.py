@@ -142,6 +142,41 @@ class QunbanSidecar:
         except Exception:
             return None
 
+    async def limits(
+        self,
+        *,
+        group_id: int,
+        config: dict[str, Any],
+        timezone_name: str,
+    ) -> bool | None:
+        try:
+            data = await self._post(
+                "/v1/rules/limits",
+                {
+                    "group_id": group_id,
+                    "max_replies_per_hour": config.get("max_replies_per_hour"),
+                    "quiet_start": config.get("quiet_start"),
+                    "quiet_end": config.get("quiet_end"),
+                    "timezone": timezone_name,
+                },
+                timeout=3.0,
+            )
+            if data is None:
+                return None
+            return bool(data.get("allowed"))
+        except Exception:
+            return None
+
+    async def record_reply(self, *, group_id: int, cooldown_seconds: float) -> None:
+        try:
+            await self._post(
+                "/v1/rules/record_reply",
+                {"group_id": group_id, "cooldown_seconds": cooldown_seconds},
+                timeout=3.0,
+            )
+        except Exception:
+            pass
+
 
 _sidecar: QunbanSidecar | None = None
 

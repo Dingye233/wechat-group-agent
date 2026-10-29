@@ -1411,3 +1411,41 @@ mentioned_me
 - RuntimeManager
 - 消息入库
 - WebSocket
+
+---
+
+## 42. 冷却/限流状态迁到 sidecar
+
+sidecar 新增：
+
+```text
+POST /v1/rules/limits
+POST /v1/rules/record_reply
+```
+
+状态：
+
+- 每群最近回复时间 deque
+- 每小时上限（随机有效上限）
+- 冷却 next_reply_at
+- 静默时段
+
+主进程 `_passes_limits` 改为 async，优先调用 sidecar；sidecar 不可用回退本地内存状态。
+
+`_send_primary_reply` 发送成功后调用 `record_reply`。
+
+实测：
+
+```text
+before → allowed=true
+record_reply(cooldown=60)
+after → allowed=false, reason=cooldown
+```
+
+仍未迁：
+
+- hourly reply deque 的持久化（sidecar 重启会清空）
+- RuntimeManager
+- 消息入库
+- WebSocket
+- 全局发送间隔 `_global_next_reply`（仍在主进程）

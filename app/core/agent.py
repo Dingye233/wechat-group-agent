@@ -1300,7 +1300,7 @@ class AgentEngine:
                 return
             if config.probability <= 0 or random.random() > config.probability:
                 return
-            if not self._passes_limits(group_id, config, settings):
+            if not await self._passes_limits(group_id, config, settings):
                 return
             if not self.runtime.is_online:
                 return
@@ -1360,7 +1360,7 @@ class AgentEngine:
                 settings = await get_settings(db)
                 if config is None or not config.read_enabled or not config.agent_enabled:
                     return
-                if not self._passes_limits(group_id, config, settings):
+                if not await self._passes_limits(group_id, config, settings):
                     return
                 context, members = await self._build_context(db, group_id, settings)
                 memory_text = await self._load_memory_context(
@@ -1526,7 +1526,7 @@ class AgentEngine:
                     or not config.agent_enabled
                 ):
                     return
-                if not self._passes_limits(group_id, config, settings):
+                if not await self._passes_limits(group_id, config, settings):
                     return
 
                 if settings.get("llm_api_key"):
@@ -1621,7 +1621,7 @@ class AgentEngine:
                         return
                     if not config.read_enabled or not config.agent_enabled:
                         return
-                    if not self._passes_limits(group_id, config, settings):
+                    if not await self._passes_limits(group_id, config, settings):
                         return
                     sent_any = False
                     sticker_count = 0
@@ -1738,12 +1738,25 @@ class AgentEngine:
                 aliases.add(item)
         return list(aliases)
 
-    def _passes_limits(
+    async def _passes_limits(
         self,
         group_id: int,
         config: GroupConfig,
         settings: dict[str, Any],
     ) -> bool:
+        from app.services.qunban_sidecar import get_qunban_sidecar
+
+        sidecar_allowed = await get_qunban_sidecar().limits(
+            group_id=group_id,
+            config={
+                "max_replies_per_hour": int(config.max_replies_per_hour or 1),
+                "quiet_start": config.quiet_start or "",
+                "quiet_end": config.quiet_end or "",
+            },
+            timezone_name=str(settings.get("timezone") or "Asia/Shanghai"),
+        )
+        if sidecar_allowed is not None:
+            return sidecar_allowed
         now = time.time()
         if now < self._next_reply_at.get(group_id, 0.0):
             return False
@@ -2105,7 +2118,7 @@ class AgentEngine:
                 or not config.proactive_enabled
             ):
                 return
-            if not self._passes_limits(group_id, config, settings):
+            if not await self._passes_limits(group_id, config, settings):
                 return
             if not settings.get("llm_api_key"):
                 return
@@ -2135,7 +2148,7 @@ class AgentEngine:
                     or not config.proactive_enabled
                 ):
                     return
-                if not self._passes_limits(group_id, config, settings):
+                if not await self._passes_limits(group_id, config, settings):
                     return
             persona = (config.persona or settings.get("default_persona") or "").strip()
             sticker_catalog = (
@@ -2549,7 +2562,7 @@ class AgentEngine:
                 return False
             if not config.read_enabled or not config.agent_enabled:
                 return False
-            if not self._passes_limits(group.id, config, settings):
+            if not await self._passes_limits(group.id, config, settings):
                 return False
             sent_any = False
             send_started = time.perf_counter()
@@ -2596,6 +2609,12 @@ class AgentEngine:
                     0.0,
                     max(float(settings.get("reply_cooldown_jitter_seconds") or 0), 0.0),
                 )
+            )
+            from app.services.qunban_sidecar import get_qunban_sidecar
+
+            await get_qunban_sidecar().record_reply(
+                group_id=group.id,
+                cooldown_seconds=float(max(int(config.cooldown_seconds or 0), 0)),
             )
         await self._log(
             group.id,
