@@ -767,3 +767,36 @@ data/wechatauto-events.jsonl
 - 任务结束验证会检查插件是否真的出现在 DSH catalog
 
 这是受控的“生成 → 语法/安装校验 → catalog 验证”第一版；还没有自动回滚/晋升策略。
+
+---
+
+## 26. Mock 端到端验收
+
+新增：
+
+```text
+scripts/e2e_mock_chat.py
+```
+
+流程：
+
+```text
+临时 DATA_DIR
+  → MockAdapter 登录
+  → 注入一条 @ 群消息
+  → Router
+  → DSH Chat lane
+  → transport 队列
+  → MockAdapter 发送
+```
+
+不碰真实微信窗口，也不写生产数据库。
+
+实测通过：
+
+```text
+group_id=1 online=True sent=1
+SENT[text]: 在呢老王，鱼生哪有不累的时候，歇会儿吧~
+```
+
+这是第一条真正的“入站 → Router → DSH → 发送”端到端验收。
