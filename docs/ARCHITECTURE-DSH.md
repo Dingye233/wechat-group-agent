@@ -663,3 +663,27 @@ Chat lane 在调用 DSH 的同时，会并行执行 `preflight_group(group_id)`�
 - 日志记录 `窗口预热=是/否`
 
 这样简单消息的发送等待可以和模型推理重叠，而不是串行等待。
+
+---
+
+## 21. 发送失败不再自动重发
+
+发送异常现在默认：
+
+```text
+status=failed
+result.uncertain=true
+result.retryable=true
+```
+
+停止自动重试，避免“第一次其实已经发出去，第二次又发一遍”。
+
+手动重试：
+
+```text
+POST /api/transport/jobs/{id}/retry
+```
+
+只有失败任务可以重试；重试前仍应结合 outbox 验证/人工确认。
+
+这比原来的“失败自动重试 3 次”更保守，但更符合微信群发场景。

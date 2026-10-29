@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 import uuid
 from datetime import datetime
@@ -160,6 +159,35 @@ class WechatautoTransport:
             row = await db.get(TransportJob, int(job_id))
             return self._job_dict(row) if row else None
 
+    async def requeue(self, job_id: int) -> dict[str, Any]:
+        """Manually retry a failed job after the user accepts the risk.
+
+        Automatic retry is intentionally disabled for uncertain sends: the
+        first attempt may have reached WeChat even though the caller saw an
+        exception.  A human-triggered retry first checks the outbox.
+        """
+        async with SessionLocal() as db:
+            row = await db.get(TransportJob, int(job_id))
+            if row is None:
+                raise TransportUnavailable("发送任务不存在")
+            if row.status not in {"failed"}:
+                raise TransportUnavailable("只有失败任务可以重试")
+            row.status = "queued"
+            row.error = ""
+            row.result = {}
+            row.finished_at = None
+            row.started_at = None
+            await db.commit()
+            await db.refresh(row)
+            payload = self._job_dict(row)
+        if not self._running:
+            raise TransportUnavailable("wechatauto transport 未启动")
+        loop = asyncio.get_running_loop()
+        self._futures[int(job_id)] = loop.create_future()
+        self._queue.put_nowait(int(job_id))
+        self._broadcast("queued", payload)
+        return payload
+
     async def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(200, int(limit)))
         async with SessionLocal() as db:
@@ -210,7 +238,6 @@ class WechatautoTransport:
             await db.commit()
             payload = dict(row.payload or {})
             attempts = int(row.attempts or 1)
-            max_attempts = int(row.max_attempts or 3)
             group_id = int(row.group_id or 0)
         self._broadcast("sending", await self._load_job(job_id))
         sticker = None
@@ -247,21 +274,21 @@ class WechatautoTransport:
                 row = await db.get(TransportJob, job_id)
                 if row is not None:
                     row.error = str(exc)[:2000]
-                    if attempts < max_attempts:
-                        row.status = "queued"
-                    else:
-                        row.status = "failed"
-                        row.finished_at = datetime.utcnow()
+                    row.status = "failed"
+                    row.result = {
+                        "uncertain": True,
+                        "retryable": True,
+                        "attempts": attempts,
+                    }
+                    row.finished_at = datetime.utcnow()
                     await db.commit()
-            self._broadcast("failed" if attempts >= max_attempts else "queued", await self._load_job(job_id))
-            if attempts < max_attempts:
-                self._broadcast("queued", await self._load_job(job_id))
-                await asyncio.sleep(min(5.0, 0.4 * attempts + random.random() * 0.3))
-                if self._running:
-                    self._queue.put_nowait(job_id)
-                return
+            self._broadcast("failed", await self._load_job(job_id))
             self._resolve(job_id, False)
-            logger.warning("transport job %s 发送失败: %s", job_id, exc)
+            logger.warning(
+                "transport job %s 发送异常，已停止自动重试（避免重复发送）: %s",
+                job_id,
+                exc,
+            )
 
     def _resolve(self, job_id: int, value: Any) -> None:
         future = self._futures.pop(job_id, None)

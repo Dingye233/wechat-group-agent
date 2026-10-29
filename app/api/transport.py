@@ -31,3 +31,18 @@ async def transport_job(
     if job is None:
         raise HTTPException(status_code=404, detail="发送任务不存在")
     return {"job": job}
+
+
+@router.post("/transport/jobs/{job_id}/retry")
+async def transport_job_retry(
+    job_id: int,
+    runtime: RuntimeManager = Depends(get_runtime),
+) -> dict:
+    transport = getattr(runtime, "transport", None)
+    if transport is None:
+        raise HTTPException(status_code=503, detail="transport 未启动")
+    try:
+        job = await transport.requeue(job_id)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job": job}
