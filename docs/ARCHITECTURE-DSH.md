@@ -1215,3 +1215,39 @@ transport.in_process=false
 ```
 
 本地 `replica` 模式仍保留 Qunban 内队列作为回退。
+
+---
+
+## 38. 表情包队列与私聊自动记忆
+
+### 表情包
+
+服务队列现在支持 `sticker_id`：
+
+```text
+sticker_id
+  → 查群伴 stickers 表
+  → data/stickers/<filename>
+  → ReplicaAdapter.send_sticker
+```
+
+Qunban 不再因为表情包直接回退。
+
+### 私聊自动记忆
+
+私聊出现明确记忆线索时自动写入 private scope：
+
+```text
+记住 / 以后 / 我喜欢 / 我不喜欢 / 我习惯
+我的 / 叫我 / 别叫 / 提醒我 / 我一般
+```
+
+写入：
+
+```text
+contact_wxid
+scope=private
+source=auto_private
+```
+
+不做额外 LLM 调用，避免每条私聊都增加延迟。

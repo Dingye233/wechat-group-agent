@@ -110,14 +110,11 @@ class WechatautoTransport:
         if remote is not None:
             if not self._running:
                 raise TransportUnavailable("wechatauto transport 未启动")
-            if sticker_id:
-                raise TransportUnavailable(
-                    "远程队列暂不支持表情包，走直连发送"
-                )
             return await remote.submit_outbound(
                 {
                     "group_id": int(group_id),
                     "text": str(text or ""),
+                    "sticker_id": sticker_id,
                     "files": [str(Path(item)) for item in files or []],
                     "meta": meta or {},
                     "reuse_chat": bool(reuse_chat),

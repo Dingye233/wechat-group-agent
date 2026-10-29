@@ -1927,6 +1927,33 @@ class RuntimeManager:
             pass
         return "后台任务仍在执行"
 
+    async def _maybe_save_private_memory(self, wxid: str, text: str) -> None:
+        """Persist explicit private-chat memory cues without an extra LLM call."""
+        value = str(text or "").strip()
+        if not (4 <= len(value) <= 400):
+            return
+        if not re.search(
+            r"(记住|以后|今后|我喜欢|我不喜欢|我习惯|我的|叫我|别叫|不要叫|提醒我|我一般)",
+            value,
+        ):
+            return
+        from app.services.memory import save_memory
+
+        try:
+            await save_memory(
+                group_id=None,
+                contact_wxid=wxid,
+                account_key=self.account_key,
+                scope="private",
+                category="preference",
+                title=value[:40],
+                content=value[:400],
+                importance=3,
+                source="auto_private",
+            )
+        except Exception as exc:
+            logger.debug("私聊记忆自动写入失败: %s", exc)
+
     async def _send_admin_side_chat(
         self, contact_id: int, wxid: str, text: str
     ) -> None:
@@ -2008,6 +2035,7 @@ class RuntimeManager:
                 start_task.add_done_callback(self._bg_tasks.discard)
             if reply:
                 await self._send_admin_notice(contact_id, reply)
+                await self._maybe_save_private_memory(wxid, text)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -26,11 +26,13 @@ class ServiceQueue:
         db_path: Path,
         *,
         group_db_path: Path | None = None,
+        sticker_dir: Path | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self.adapter = adapter
         self.db_path = db_path
         self.group_db_path = group_db_path
+        self.sticker_dir = sticker_dir or (db_path.parent / "stickers")
         self.on_event = on_event
         self.queue: asyncio.Queue[int] = asyncio.Queue(maxsize=2000)
         self.worker: asyncio.Task | None = None
@@ -116,6 +118,22 @@ class ServiceQueue:
                 self.on_event(action, job)
             except Exception:
                 pass
+
+    def _sticker_path(self, sticker_id: int) -> Path | None:
+        if not self.group_db_path or not self.group_db_path.is_file():
+            return None
+        try:
+            con = sqlite3.connect(self.group_db_path)
+            row = con.execute(
+                "SELECT filename FROM stickers WHERE id=?", (int(sticker_id),)
+            ).fetchone()
+            con.close()
+            if row and row[0]:
+                path = self.sticker_dir / str(row[0])
+                return path if path.is_file() else None
+        except Exception:
+            return None
+        return None
 
     def _external_id(self, group_id: int, payload: dict[str, Any]) -> str:
         explicit = str((payload.get("meta") or {}).get("external_id") or "")
@@ -276,6 +294,7 @@ class ServiceQueue:
             external_id = self._external_id(int(job["group_id"]), payload)
             text = str(payload.get("text") or "")
             files = [Path(item) for item in payload.get("files") or []]
+            sticker_id = int(payload.get("sticker_id") or 0)
             if text.strip():
                 try:
                     await self.adapter.send_text(
@@ -285,6 +304,11 @@ class ServiceQueue:
                     )
                 except TypeError:
                     await self.adapter.send_text(external_id, text)
+            if sticker_id:
+                sticker_path = self._sticker_path(sticker_id)
+                if sticker_path is None:
+                    raise RuntimeError(f"表情包文件不存在：{sticker_id}")
+                await self.adapter.send_sticker(external_id, sticker_path)
             for path in files:
                 await self.adapter.send_file(external_id, path)
             result = {
