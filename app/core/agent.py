@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import re
+import shutil
 import sys
 import time
 from collections import defaultdict, deque
@@ -2642,6 +2643,10 @@ class AgentEngine:
                 )
             finally:
                 await service.stop()
+                try:
+                    shutil.rmtree(service.profile_dir, ignore_errors=True)
+                except Exception:
+                    pass
             text = str(result.get("text") or "").strip()
             data = parse_json_object(text)
             if not isinstance(data, dict):

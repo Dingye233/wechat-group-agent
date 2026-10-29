@@ -687,3 +687,24 @@ POST /api/transport/jobs/{id}/retry
 只有失败任务可以重试；重试前仍应结合 outbox 验证/人工确认。
 
 这比原来的“失败自动重试 3 次”更保守，但更符合微信群发场景。
+
+---
+
+## 22. 统一诊断接口
+
+新增：
+
+```text
+GET /api/diagnostics
+```
+
+返回：
+
+- runtime 在线状态/适配器
+- transport 是否运行、队列统计、是否仍在主进程
+- primary / chat / task lane 状态
+- B站知识索引数量与路径
+- durable task 状态计数
+- wechatauto 事件缓冲数量（当前仍非持久化）
+
+这个接口用于以后排查“卡在哪一步”，不需要同时查四五个端点。
