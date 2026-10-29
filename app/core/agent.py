@@ -2435,6 +2435,7 @@ class AgentEngine:
         started: float,
         *,
         reuse_first: bool = False,
+        task_id: int | None = None,
     ) -> bool:
         async with SessionLocal() as db:
             segments = await self._build_segments(db, config, data)
@@ -2477,6 +2478,7 @@ class AgentEngine:
                             "action": data.get("action") or "reply",
                             "segment": index + 1,
                             "segment_count": len(segments),
+                            **({"task_id": task_id} if task_id else {}),
                         },
                         reuse_chat=index > 0 or (index == 0 and reuse_first),
                     )
@@ -2677,18 +2679,36 @@ class AgentEngine:
                 data,
                 result,
                 task_send_started,
+                task_id=task_id,
             )
             await task_runs.step(
                 task_id, "send", "done" if sent else "failed"
             )
             if not sent:
                 raise RuntimeError("任务结果发送失败")
-            await task_runs.step(task_id, "verify", "done")
+            from app.services.task_verify import verify_task
+
+            verification = await verify_task(
+                task_id,
+                request=str(record.get("request") or ""),
+                result_text=text,
+            )
+            await task_runs.step(
+                task_id,
+                "verify",
+                "done" if verification.get("ok") else "failed",
+                detail=str(verification.get("summary") or "")[:500],
+            )
+            verified_text = (
+                f"{text[:3800]}\n\n[验证] "
+                f"{'通过' if verification.get('ok') else '未通过'}："
+                f"{verification.get('summary') or ''}"
+            )
             await task_runs.update(
                 task_id,
                 status="done",
-                result=text[:4000],
-                verified=True,
+                result=verified_text[:4200],
+                verified=bool(verification.get("ok")),
             )
             await self._log(
                 group.id,

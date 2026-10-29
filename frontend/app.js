@@ -5100,6 +5100,15 @@ function durableTaskChild(task) {
       labels[status] || status,
     ),
   );
+  if (status === 'done') {
+    summary.appendChild(
+      el(
+        'span',
+        `plugin-badge${task.verified ? ' accent' : ' danger'}`,
+        task.verified ? '已验证' : '未验证',
+      ),
+    );
+  }
   summary.appendChild(
     el('span', 'assistant-tool-task-meta', toolTaskTime(task.created_at)),
   );

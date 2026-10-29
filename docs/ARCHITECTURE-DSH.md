@@ -708,3 +708,25 @@ GET /api/diagnostics
 - wechatauto 事件缓冲数量（当前仍非持久化）
 
 这个接口用于以后排查“卡在哪一步”，不需要同时查四五个端点。
+
+---
+
+## 23. 任务完成验证
+
+任务不再把“发送成功”直接当作“任务完成”。
+
+新增 `app/services/task_verify.py`：
+
+- 查找带 `meta.task_id` 的 transport job 是否为 `sent`
+- 检查结果/请求中出现的 Windows 文件路径是否真实存在
+- 检查结果/请求中的 BV 号是否存在于 `bili_videos`
+- 输出 check 明细和 summary
+
+任务面板显示：
+
+```text
+已完成 + 已验证
+已完成 + 未验证
+```
+
+未验证不会自动重试发送，避免重复消息；需要人工确认或重新执行。
