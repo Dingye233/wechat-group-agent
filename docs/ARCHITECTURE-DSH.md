@@ -1600,3 +1600,32 @@ adapter.calls=[(wxid_test, hi)]
 3 个 Chat session 并发：0.92s / 0.94s / 0.81s
 2 个群同时发任务：两个都 done + verified
 ```
+
+---
+
+## 47. 同群任务汇报顺序
+
+新增 per-group task report lock：
+
+```text
+_task_report_locks[group_id]
+```
+
+规则：
+
+- 任务执行可以并发
+- 最终汇报按 task_id 顺序
+- 后完成的任务不会抢在前序任务之前汇报
+- 后续任务等待时**不持有锁**，避免前序任务无法获取锁而互相死锁
+- 每组独立锁，不同群可并发汇报
+- 前序任务超过 600 秒仍未结束，后续任务超时失败并通知
+
+实测 helper：
+
+```text
+task2 waiting
+task1 acquired
+task2 still waiting
+task1 done/released
+task2 acquired
+```

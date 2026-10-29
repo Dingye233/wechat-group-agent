@@ -127,6 +127,7 @@ class AgentEngine:
         self._primary_task_jobs: set[asyncio.Task] = set()
         self._primary_task_by_id: dict[int, asyncio.Task] = {}
         self._task_sem = asyncio.Semaphore(3)
+        self._task_report_locks: dict[int, asyncio.Lock] = {}
 
     async def handle_message(self, group_id: int, message_id: int) -> None:
         if not self._mark_processed(message_id):
@@ -2775,7 +2776,39 @@ class AgentEngine:
         async with self._task_sem:
             await self._run_primary_task_inner(task_id)
 
+    async def _earlier_tasks_terminal(self, group_id: int, task_id: int) -> bool:
+        rows = await task_runs.list_tasks(100)
+        return not any(
+            int(row.get("group_id") or 0) == int(group_id)
+            and int(row.get("id") or 0) < int(task_id)
+            and row.get("status") in {"queued", "running"}
+            for row in rows
+        )
+
+    async def _acquire_task_report_turn(
+        self, group_id: int, task_id: int, timeout: float = 600.0
+    ) -> asyncio.Lock:
+        """Serialize final reports per group, in task-id order.
+
+        A later task must not hold the lock while waiting for an earlier task,
+        otherwise the earlier task could never acquire it to report and both
+        would deadlock.  Wait without the lock, then re-check after acquiring.
+        """
+        lock = self._task_report_locks.setdefault(int(group_id), asyncio.Lock())
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not await self._earlier_tasks_terminal(group_id, task_id):
+                await asyncio.sleep(0.5)
+                continue
+            await lock.acquire()
+            if await self._earlier_tasks_terminal(group_id, task_id):
+                return lock
+            lock.release()
+            await asyncio.sleep(0.2)
+        raise TimeoutError("等待前序任务汇报超时")
+
     async def _run_primary_task_inner(self, task_id: int) -> None:
+        report_lock: asyncio.Lock | None = None
         record = await task_runs.get(task_id)
         if not record or record.get("status") not in {"running", "queued"}:
             return
@@ -2929,6 +2962,7 @@ class AgentEngine:
             action = str(data.get("action") or "reply").lower()
             if action == "task":
                 raise RuntimeError("DSH 任务没有完成，再次返回 task")
+            report_lock = await self._acquire_task_report_turn(group.id, task_id)
             if action == "none" or (
                 not data.get("messages")
                 and not str(data.get("reply") or "").strip()
@@ -3053,6 +3087,9 @@ class AgentEngine:
                 f"持久任务 #{task_id} 失败：{exc}",
                 level="error",
             )
+        finally:
+            if report_lock is not None:
+                report_lock.release()
 
     async def _generate_dsh_chat(
         self,
