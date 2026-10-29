@@ -32,6 +32,7 @@ PUBLIC_KEYS = {
     "reply_delay_random_seconds",
     "reply_cooldown_jitter_seconds",
     "reply_global_interval_seconds",
+    "send_preflight_wait_seconds",
     "read_poll_interval_seconds",
     "read_media_download_enabled",
     "pinned_group_id",
@@ -107,6 +108,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "reply_delay_random_seconds": 1.5,
     "reply_cooldown_jitter_seconds": 20.0,
     "reply_global_interval_seconds": 1.2,
+    "send_preflight_wait_seconds": 2.0,
     # Database polling is cheap; keep the default responsive. Per-group
     # read_interval_seconds can still override this.
     "read_poll_interval_seconds": 0.3,
@@ -325,6 +327,7 @@ async def update_settings(
         "reply_delay_random_seconds": (0.0, 30.0, float),
         "reply_cooldown_jitter_seconds": (0.0, 300.0, float),
         "reply_global_interval_seconds": (0.0, 300.0, float),
+    "send_preflight_wait_seconds": (0.0, 10.0, float),
         "read_poll_interval_seconds": (0.2, 300.0, float),
         "memory_search_timeout_seconds": (0.3, 8.0, float),
         "memory_summary_max_input_chars": (1000, 30000, int),

@@ -1859,6 +1859,7 @@ class ReplicaAdapter(BaseAdapter):
         recovered_from = 0
         for attempt in range(2):
             self._ensure_attached()
+            attempt_started = time.perf_counter()
             try:
                 # The whole open-chat / OCR / click sequence can take much
                 # longer than the old 30s consent window.  Without this the
@@ -1869,6 +1870,8 @@ class ReplicaAdapter(BaseAdapter):
                     build, timeout=timeout, restore_foreground=True
                 )
                 self._check_response(response, action)
+                sent_ms = int((time.perf_counter() - attempt_started) * 1000)
+                confirm_started = time.perf_counter()
                 if content and not media:
                     if not self._confirm_own_message(
                         raw, baseline, content=content, timeout=3.0
@@ -1876,6 +1879,11 @@ class ReplicaAdapter(BaseAdapter):
                         raise RuntimeError(
                             "发送后未在微信数据库确认到消息，已加入待重发队列"
                         )
+                confirm_ms = int((time.perf_counter() - confirm_started) * 1000)
+                self.log(
+                    f"{action}阶段：提交 {sent_ms}ms / 确认 {confirm_ms}ms"
+                    f" / 尝试 {attempt + 1}"
+                )
                 self._restore_foreground(recovered_from)
                 return
             except AutomationDetached:

@@ -2182,6 +2182,8 @@ class AgentEngine:
         self.runtime.emit_typing(group.id)
         started = time.perf_counter()
         preflight: asyncio.Task | None = None
+        preflight_started = time.perf_counter()
+        preflight_wait_ms = 0
         preflight_fn = getattr(self.runtime, "preflight_group", None)
         if callable(preflight_fn):
             preflight = asyncio.create_task(
@@ -2203,11 +2205,19 @@ class AgentEngine:
         if preflight is not None:
             try:
                 reuse_first = bool(
-                    await asyncio.wait_for(asyncio.shield(preflight), timeout=0.08)
+                    await asyncio.wait_for(
+                        asyncio.shield(preflight),
+                        timeout=float(
+                            settings.get("send_preflight_wait_seconds") or 2.0
+                        ),
+                    )
                 )
             except (asyncio.TimeoutError, Exception):
                 preflight.cancel()
                 reuse_first = False
+            preflight_wait_ms = int(
+                (time.perf_counter() - preflight_started) * 1000
+            )
         text = str(result.get("text") or "").strip()
         if not text:
             await self._log(
@@ -2233,7 +2243,7 @@ class AgentEngine:
             f"Chat lane 回复｜{int((time.perf_counter() - started) * 1000)}ms"
             f"｜上下文≈{capsule.estimate_tokens()} tokens"
             f"｜发送={'是' if sent else '否'}"
-            f"｜窗口预热={'是' if reuse_first else '否'}",
+            f"｜窗口预热={'是' if reuse_first else '否'}（{preflight_wait_ms}ms）",
             level="info",
         )
         return True
