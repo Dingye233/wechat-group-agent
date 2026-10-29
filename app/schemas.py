@@ -147,7 +147,7 @@ class SettingsUpdate(BaseModel):
     wcf_wechat_exe: str | None = None
     replica_wechat_exe: str | None = None
     replica_db_dir: str | None = None
-    auto_login: Literal["", "mock", "replica", "wcf"] | None = None
+    auto_login: Literal["", "mock", "replica", "wcf", "replica-remote"] | None = None
     seed_sample_stickers: bool | None = None
 
     @field_validator(
