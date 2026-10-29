@@ -1907,9 +1907,11 @@ class RuntimeManager:
         """Answer casual admin messages without waiting for the task lane."""
         persona = ""
         temperature: float | None = None
+        settings: dict[str, Any] | None = None
         try:
             async with SessionLocal() as db:
                 contact = await db.get(Contact, contact_id)
+                settings = await get_settings(db)
                 if contact is not None:
                     persona = contact.persona or ""
                     if contact.temperature is not None:
@@ -1925,15 +1927,50 @@ class RuntimeManager:
                     status = "后台任务仍在执行"
             else:
                 status = "当前没有后台任务，我在陪你聊天"
-            service = AssistantService(self.llm, self)
-            reply = await service.quick_chat(
-                text,
-                session_id=f"admin:{wxid}",
-                persona=persona,
-                task_status=status,
-                busy=busy,
-                temperature=temperature,
-            )
+            from app.services.dsh_primary import get_dsh_chat_lane_service
+
+            lane = get_dsh_chat_lane_service()
+            reply = ""
+            if (
+                settings is not None
+                and bool(settings.get("dsh_chat_lane_enabled", True))
+                and lane.running
+            ):
+                try:
+                    result = await lane.prompt(
+                        f"chat-admin-{wxid}",
+                        f"""# 私聊
+当前是管理员私聊。
+人设：{persona or '自然、简短、有温度，像朋友一样聊天'}
+后台状态：{status}
+
+用户：{str(text or '')[:2000]}
+
+直接回复用户，不要调用工具，不要输出 JSON 或分析过程。""",
+                        settings=settings,
+                        timeout=120.0,
+                    )
+                    reply = str(result.get("text") or "").strip()
+                except Exception as exc:
+                    logger.warning("DSH Chat lane 私聊回复失败，回退快速聊天: %s", exc)
+            if not reply:
+                service = AssistantService(self.llm, self)
+                reply = await service.quick_chat(
+                    text,
+                    session_id=f"admin:{wxid}",
+                    persona=persona,
+                    task_status=status,
+                    busy=busy,
+                    temperature=temperature,
+                )
+            if settings is not None and bool(
+                settings.get("dsh_chat_lane_enabled", True)
+            ) and not lane.running:
+                start_task = asyncio.create_task(
+                    lane.start(settings), name="dsh-chat-lane-warmup"
+                )
+                self._bg_tasks.add(start_task)
+                start_task.add_done_callback(self._bg_tasks.discard)
             if reply:
                 await self._send_admin_notice(contact_id, reply)
         except asyncio.CancelledError:

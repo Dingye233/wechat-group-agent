@@ -531,3 +531,26 @@ qunban-chat-lane
 ```
 
 这解决了“所有群聊消息都带全工具”的 token 和首轮问题。
+
+---
+
+## 15. 私聊 Chat lane
+
+管理员私聊的简单闲聊现在优先使用同一个无工具 Chat lane：
+
+```text
+私聊简单消息
+  → Chat lane 已运行？
+      是：chat-admin-<wxid> session
+      否：先 quick_chat 快速回复，同时后台预热 Chat lane
+  → 下一轮起走 DSH Chat lane
+```
+
+这样：
+
+- 首条私聊不会因为 Chat lane 冷启动而变慢
+- 后续私聊和群聊统一到 DSH Chat
+- 失败自动回退 quick_chat
+- 复杂私聊仍进入 AssistantService / DSH Task
+
+当前限制：私聊的工具任务没有独立 Task lane，仍走 headless DSH。

@@ -85,6 +85,10 @@ class DSHPrimaryService:
         self._started_at = 0.0
 
     # ------------------------------------------------------------- status
+    @property
+    def running(self) -> bool:
+        return bool(self._process and self._process.returncode is None)
+
     def _default_system_prompt(self) -> str:
         return (
             "你是群伴的群聊主 Agent，由 DeepSeek Harness 驱动。"
