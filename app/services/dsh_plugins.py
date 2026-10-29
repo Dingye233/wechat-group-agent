@@ -48,6 +48,7 @@ PROFILE = "qunban"
 PROFILE_DIR = HOME_DIR / "profiles" / PROFILE
 PATCH_PATH = PROFILE_DIR / "cordis.patch.yml"
 STUDIO_DIR = DATA_DIR / "studio"
+LIFECYCLE_DIR = STUDIO_DIR / ".lifecycle"
 MANIFEST_PATH = STUDIO_DIR / "index.json"
 CACHE_TTL = 20.0
 
@@ -1205,6 +1206,144 @@ def install_existing(path: str, *, enabled: bool = True) -> dict[str, Any]:
         "path": str(target),
         "enabled": enabled,
     }
+
+
+def _plugin_identity(target: Path) -> tuple[str, str, str]:
+    package = _read_json(target / "package.json", {})
+    name = str(package.get("name") or "")
+    slug = _slug(name.split("/")[-1] or target.name)
+    if not name.startswith("@qunban/"):
+        raise ValueError("插件 package.json 的 name 必须是 @qunban/<slug>")
+    return slug, name, f"studio-{slug}"
+
+
+def _snapshot_plugin(slug: str, name: str, target: Path) -> dict[str, Any]:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    root = LIFECYCLE_DIR / slug / stamp
+    root.mkdir(parents=True, exist_ok=True)
+    profile_target = PROFILE_DIR / "node_modules" / name
+    if profile_target.exists():
+        shutil.copytree(profile_target, root / "profile_plugin")
+    snapshot = {
+        "slug": slug,
+        "name": name,
+        "plugin_id": f"studio-{slug}",
+        "target": str(target),
+        "created_at": _utcnow(),
+        "package": _read_json(PROFILE_DIR / "package.json", {}),
+        "patch": _patch_rows(),
+        "manifest": _read_json(MANIFEST_PATH, {"plugins": []}),
+        "policy": plugin_policy.channels(f"studio-{slug}", name=name),
+        "had_profile_plugin": bool(profile_target.exists()),
+    }
+    _write_json(root / "state.json", snapshot)
+    _write_json(LIFECYCLE_DIR / slug / "latest.json", {"dir": str(root)})
+    return snapshot
+
+
+def _restore_plugin(snapshot: dict[str, Any]) -> None:
+    name = str(snapshot.get("name") or "")
+    profile_target = PROFILE_DIR / "node_modules" / name
+    backup = Path(str(snapshot.get("_backup_dir") or ""))
+    if profile_target.exists():
+        shutil.rmtree(profile_target, ignore_errors=True)
+    if backup and (backup / "profile_plugin").exists():
+        shutil.copytree(backup / "profile_plugin", profile_target)
+    _write_json(PROFILE_DIR / "package.json", snapshot.get("package") or {})
+    _write_patch(list(snapshot.get("patch") or []))
+    _write_json(MANIFEST_PATH, snapshot.get("manifest") or {"plugins": []})
+    policy = snapshot.get("policy") or {}
+    try:
+        plugin_policy.set_channels(
+            str(snapshot.get("plugin_id") or ""),
+            name=name,
+            private=bool(policy.get("private", False)),
+            group=bool(policy.get("group", False)),
+            enabled=bool(policy.get("enabled", False)),
+        )
+    except Exception:
+        pass
+    global _DUMP_CACHE
+    _DUMP_CACHE = None
+
+
+def install_existing_transactional(
+    path: str, *, enabled: bool = True
+) -> dict[str, Any]:
+    """Install a studio plugin with rollback on validation/catalog failure."""
+    target = Path(str(path or "")).expanduser().resolve()
+    studio = STUDIO_DIR.resolve()
+    if studio not in target.parents and target != studio:
+        raise ValueError("插件目录必须位于 data/dsh/studio 下")
+    if not target.is_dir():
+        raise ValueError("插件目录不存在")
+    _validate_plugin(target)
+    slug, name, plugin_id = _plugin_identity(target)
+    snapshot = _snapshot_plugin(slug, name, target)
+    snapshot["_backup_dir"] = str(LIFECYCLE_DIR / slug / str(snapshot["created_at"]).replace(":", ""))
+    # _snapshot_plugin already wrote the timestamp dir; locate it via latest.
+    latest = _read_json(LIFECYCLE_DIR / slug / "latest.json", {})
+    snapshot["_backup_dir"] = str(latest.get("dir") or "")
+    try:
+        result = install_existing(str(target), enabled=enabled)
+        entries = _patch_entries()
+        if not any(
+            str(row.get("id")) == plugin_id or str(row.get("name")) == name
+            for row in entries
+        ):
+            raise RuntimeError("安装后未在 profile patch 中找到插件")
+        _write_json(
+            Path(snapshot["_backup_dir"]) / "result.json",
+            {**result, "promoted": bool(enabled)},
+        )
+        return {
+            **result,
+            "rollback_available": True,
+            "backup_dir": snapshot["_backup_dir"],
+        }
+    except Exception as exc:
+        _restore_plugin(snapshot)
+        raise RuntimeError(f"插件安装失败，已回滚：{exc}") from exc
+
+
+def rollback_plugin(plugin_id: str) -> dict[str, Any]:
+    plugin_id = str(plugin_id or "").strip()
+    slug = plugin_id[len("studio-") :] if plugin_id.startswith("studio-") else plugin_id
+    latest = _read_json(LIFECYCLE_DIR / slug / "latest.json", {})
+    backup_dir = str(latest.get("dir") or "")
+    if not backup_dir:
+        raise ValueError("没有可回滚的插件安装记录")
+    snapshot = _read_json(Path(backup_dir) / "state.json", {})
+    if not snapshot:
+        raise ValueError("回滚快照不存在")
+    snapshot["_backup_dir"] = backup_dir
+    _restore_plugin(snapshot)
+    return {
+        "ok": True,
+        "id": plugin_id,
+        "restored": True,
+        "backup_dir": backup_dir,
+    }
+
+
+def promote_plugin(
+    plugin_id: str, *, private: bool = True, group: bool = True
+) -> dict[str, Any]:
+    plugin_id = str(plugin_id or "").strip()
+    result = set_channels(
+        plugin_id, private=bool(private), group=bool(group), enabled=True
+    )
+    manifest = _read_json(MANIFEST_PATH, {"plugins": []})
+    items = manifest.get("plugins") if isinstance(manifest, dict) else []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and f"studio-{item.get('slug')}" == plugin_id:
+                item["status"] = "promoted"
+                item["promoted_at"] = _utcnow()
+                item["enabled"] = True
+        manifest["plugins"] = items
+        _write_json(MANIFEST_PATH, manifest)
+    return {**result, "promoted": True}
 
 
 def _resolve_plugin(plugin_id: str) -> tuple[dict[str, Any], str, bool, bool]:

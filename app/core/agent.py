@@ -1916,6 +1916,29 @@ class AgentEngine:
             pass
         return "\n".join(lines)
 
+    async def _load_private_memory_context(
+        self,
+        db: AsyncSession,
+        wxid: str,
+        settings: dict[str, Any],
+        query: str = "",
+    ) -> str:
+        """Load only private/global memories for one contact."""
+        from app.services.memory import build_memory_context
+
+        try:
+            text, _ids = await build_memory_context(
+                db,
+                group_id=None,
+                account_key=self.runtime.account_key,
+                contact_wxid=wxid,
+                settings=settings,
+                query=str(query or "")[:200],
+            )
+            return text
+        except Exception:
+            return ""
+
     async def _load_knowledge_context(
         self,
         query: str,

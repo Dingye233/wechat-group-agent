@@ -1029,3 +1029,111 @@ message 表 1 条 echo
 adapter=replica-remote
 service :8010
 ```
+
+---
+
+## 33. 记忆 scope 增强
+
+`agent_memories` 增加：
+
+```text
+contact_wxid
+```
+
+scope：
+
+```text
+group    群记忆（group_id）
+private  私聊记忆（contact_wxid）
+global   全局偏好/规则
+```
+
+私聊链路现在：
+
+```text
+_send_admin_side_chat
+  → _load_private_memory_context
+  → Chat lane prompt / quick_chat
+```
+
+检索规则：
+
+- 私聊：contact 记忆 + global
+- 群聊：group 记忆 + global
+- Chat 记忆上下文过滤 `category=bili`
+- B站知识继续只走 Chroma，不混进普通聊天记忆
+
+API：
+
+```text
+GET  /api/assistant/memories?contact_wxid=...
+POST /api/assistant/memories
+     {"contact_wxid":"...","scope":"private",...}
+```
+
+已验证：
+
+```text
+private memory 创建/检索/删除
+private memory 注入 prompt
+B站 global 记忆不再污染私聊上下文
+```
+
+---
+
+## 34. 插件安装事务 / 回滚 / 晋升
+
+`install_existing` 现在走事务封装：
+
+```text
+validate
+  → snapshot（profile package/patch/manifest/policy/旧插件目录）
+  → install
+  → catalog 校验
+  → 失败自动 restore
+```
+
+新增：
+
+```text
+POST /api/dsh/plugins/{id}/rollback
+POST /api/dsh/plugins/{id}/promote
+```
+
+- rollback 恢复安装前 profile、patch、manifest、policy
+- promote 启用 private/group 并标记 promoted
+- 快照存在 `data/dsh/studio/.lifecycle/<slug>/`
+
+实测：
+
+```text
+install 200
+promote 200
+rollback 200
+catalog_after=False
+```
+
+---
+
+## 35. 插件任务真实生成/安装验证
+
+用真实 DSH Task lane（admin scope，allowlist 包含 powershell + plugin_install）执行：
+
+```text
+创建 @qunban/e2e-task-1793261331
+  package.json + lib/index.js
+  node --check
+  qunban_plugin_install
+```
+
+结果：
+
+```text
+target_exists=True
+catalog studio-e2e-task-1793261331 enabled=True
+promote 200
+rollback 200
+catalog 移除成功
+```
+
+说明“任务生成 → 校验 → 安装 → 晋升 → 回滚”这条链路已经真实跑通一次。

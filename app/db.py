@@ -92,6 +92,21 @@ def _migrate_schema(connection) -> None:  # type: ignore[no-untyped-def]
         connection.exec_driver_sql(
             "ALTER TABLE assistant_messages ADD COLUMN media_path VARCHAR(512) DEFAULT ''"
         )
+    memory_columns = {
+        str(row[1])
+        for row in connection.exec_driver_sql(
+            "PRAGMA table_info(agent_memories)"
+        ).fetchall()
+    }
+    if memory_columns and "contact_wxid" not in memory_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE agent_memories ADD COLUMN contact_wxid VARCHAR(160) DEFAULT ''"
+        )
+    if memory_columns:
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_agent_memories_contact_wxid "
+            "ON agent_memories (contact_wxid)"
+        )
     contact_columns = {
         str(row[1])
         for row in connection.exec_driver_sql(

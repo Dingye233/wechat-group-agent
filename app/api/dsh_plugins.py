@@ -61,7 +61,7 @@ async def dsh_plugins_install(body: dict | None = Body(default=None)) -> dict:
     payload = body or {}
     try:
         return await asyncio.to_thread(
-            dsh_plugins.install_existing,
+            dsh_plugins.install_existing_transactional,
             str(payload.get("path") or ""),
             enabled=bool(payload.get("enabled", True)),
         )
@@ -69,6 +69,32 @@ async def dsh_plugins_install(body: dict | None = Body(default=None)) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/dsh/plugins/{plugin_id}/rollback")
+async def dsh_plugins_rollback(plugin_id: str) -> dict:
+    try:
+        return await asyncio.to_thread(dsh_plugins.rollback_plugin, plugin_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/dsh/plugins/{plugin_id}/promote")
+async def dsh_plugins_promote(
+    plugin_id: str, body: dict | None = Body(default=None)
+) -> dict:
+    payload = body or {}
+    try:
+        return await asyncio.to_thread(
+            dsh_plugins.promote_plugin,
+            plugin_id,
+            private=bool(payload.get("private", True)),
+            group=bool(payload.get("group", True)),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/dsh/plugins/tool-channels")

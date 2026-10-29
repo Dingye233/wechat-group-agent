@@ -72,6 +72,7 @@ def memory_dict(memory: AgentMemory) -> dict[str, Any]:
     return {
         "id": memory.id,
         "group_id": memory.group_id,
+        "contact_wxid": getattr(memory, "contact_wxid", ""),
         "scope": memory.scope,
         "category": memory.category,
         "title": memory.title,
@@ -91,6 +92,7 @@ async def save_memory(
     *,
     group_id: int | None,
     account_key: str = "",
+    contact_wxid: str = "",
     scope: str = "group",
     category: str = "general",
     title: str = "",
@@ -108,6 +110,7 @@ async def save_memory(
             await db.execute(
                 select(AgentMemory).where(
                     AgentMemory.group_id == group_id,
+                    AgentMemory.contact_wxid == str(contact_wxid or ""),
                     AgentMemory.content == content,
                     AgentMemory.active.is_(True),
                 )
@@ -123,6 +126,7 @@ async def save_memory(
         memory = AgentMemory(
             group_id=group_id,
             account_key=account_key,
+            contact_wxid=str(contact_wxid or "") if group_id is None else "",
             scope=scope if group_id is None else "group",
             category=str(category or "general")[:32],
             title=title,
@@ -142,11 +146,15 @@ async def search_memories(
     query: str = "",
     group_id: int | None = None,
     account_key: str = "",
+    contact_wxid: str = "",
     limit: int = 20,
     include_global: bool = True,
+    include_knowledge: bool = True,
 ) -> list[dict[str, Any]]:
     async with SessionLocal() as db:
         statement = select(AgentMemory).where(AgentMemory.active.is_(True))
+        if not include_knowledge:
+            statement = statement.where(AgentMemory.category != "bili")
         if account_key:
             statement = statement.where(
                 (AgentMemory.account_key == account_key)
@@ -160,6 +168,16 @@ async def search_memories(
                 )
             else:
                 statement = statement.where(AgentMemory.group_id == group_id)
+        elif contact_wxid:
+            if include_global:
+                statement = statement.where(
+                    (AgentMemory.contact_wxid == str(contact_wxid))
+                    | (AgentMemory.scope == "global")
+                )
+            else:
+                statement = statement.where(
+                    AgentMemory.contact_wxid == str(contact_wxid)
+                )
         memories = list(
             (
                 await db.execute(
@@ -188,17 +206,33 @@ async def search_memories(
 async def build_memory_context(
     db,
     *,
-    group_id: int,
+    group_id: int | None,
     account_key: str,
+    contact_wxid: str = "",
     settings: dict[str, Any],
     query: str = "",
+    include_knowledge: bool = False,
 ) -> tuple[str, list[int]]:
     limit = max(1, int(settings.get("memory_context_items") or 8))
     max_chars = max(200, int(settings.get("memory_context_max_chars") or 1800))
-    statement = select(AgentMemory).where(
-        AgentMemory.active.is_(True),
-        (AgentMemory.group_id == group_id) | (AgentMemory.scope == "global"),
-    )
+    if group_id is not None:
+        statement = select(AgentMemory).where(
+            AgentMemory.active.is_(True),
+            (AgentMemory.group_id == group_id) | (AgentMemory.scope == "global"),
+        )
+    elif contact_wxid:
+        statement = select(AgentMemory).where(
+            AgentMemory.active.is_(True),
+            (AgentMemory.contact_wxid == str(contact_wxid))
+            | (AgentMemory.scope == "global"),
+        )
+    else:
+        statement = select(AgentMemory).where(
+            AgentMemory.active.is_(True),
+            AgentMemory.scope == "global",
+        )
+    if not include_knowledge:
+        statement = statement.where(AgentMemory.category != "bili")
     if account_key:
         statement = statement.where(
             (AgentMemory.account_key == account_key) | (AgentMemory.account_key == "")

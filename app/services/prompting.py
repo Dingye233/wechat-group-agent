@@ -502,11 +502,14 @@ def build_side_chat_prompt(
     persona_text: str,
     busy: bool,
     status_text: str,
+    memory_text: str = "",
 ) -> Prompt:
     builder = PromptBuilder("assistant.side_chat")
     builder.static(SIDE_CHAT_RULES)
     if str(persona_text or "").strip():
         builder.context(section("人设", persona_text))
+    if str(memory_text or "").strip():
+        builder.context(section("私聊记忆", memory_text))
     builder.dynamic(
         section(
             "后台状态",

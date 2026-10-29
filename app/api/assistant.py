@@ -502,6 +502,7 @@ async def assistant_forget_memories(
 async def assistant_memories(
     q: str = Query(default=""),
     group_id: int | None = Query(default=None),
+    contact_wxid: str = Query(default=""),
     limit: int = Query(default=100, ge=1, le=500),
     runtime: RuntimeManager = Depends(get_runtime),
 ) -> dict:
@@ -510,6 +511,7 @@ async def assistant_memories(
         "memories": await search_memories(
             query=q,
             group_id=group_id,
+            contact_wxid=contact_wxid,
             account_key=account_key,
             limit=limit,
         )
@@ -525,7 +527,17 @@ async def assistant_save_memory(
         memory = await save_memory(
             group_id=int(payload["group_id"]) if payload.get("group_id") else None,
             account_key=str((runtime.account or {}).get("wxid") or ""),
-            scope=str(payload.get("scope") or ("group" if payload.get("group_id") else "global")),
+            contact_wxid=str(payload.get("contact_wxid") or ""),
+            scope=str(
+                payload.get("scope")
+                or (
+                    "group"
+                    if payload.get("group_id")
+                    else "private"
+                    if payload.get("contact_wxid")
+                    else "global"
+                )
+            ),
             category=str(payload.get("category") or "general"),
             title=str(payload.get("title") or ""),
             content=str(payload.get("content") or ""),

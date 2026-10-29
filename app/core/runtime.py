@@ -1934,10 +1934,15 @@ class RuntimeManager:
         persona = ""
         temperature: float | None = None
         settings: dict[str, Any] | None = None
+        memory_text = ""
         try:
             async with SessionLocal() as db:
                 contact = await db.get(Contact, contact_id)
                 settings = await get_settings(db)
+                if settings is not None:
+                    memory_text = await self.agent._load_private_memory_context(
+                        db, wxid, settings, text
+                    )
                 if contact is not None:
                     persona = contact.persona or ""
                     if contact.temperature is not None:
@@ -1970,6 +1975,9 @@ class RuntimeManager:
 人设：{persona or '自然、简短、有温度，像朋友一样聊天'}
 后台状态：{status}
 
+# 私聊记忆
+{(memory_text or '无')[:1200]}
+
 用户：{str(text or '')[:2000]}
 
 直接回复用户，不要调用工具，不要输出 JSON 或分析过程。""",
@@ -1988,6 +1996,7 @@ class RuntimeManager:
                     task_status=status,
                     busy=busy,
                     temperature=temperature,
+                    memory=memory_text,
                 )
             if settings is not None and bool(
                 settings.get("dsh_chat_lane_enabled", True)

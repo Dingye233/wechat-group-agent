@@ -396,6 +396,7 @@ class AgentMemory(Base):
         ForeignKey("groups.id", ondelete="CASCADE"), nullable=True, index=True
     )
     account_key: Mapped[str] = mapped_column(String(160), default="", index=True)
+    contact_wxid: Mapped[str] = mapped_column(String(160), default="", index=True)
     scope: Mapped[str] = mapped_column(String(24), default="group")
     category: Mapped[str] = mapped_column(String(32), default="general")
     title: Mapped[str] = mapped_column(String(160), default="")

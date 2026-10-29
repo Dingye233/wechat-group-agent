@@ -1050,6 +1050,7 @@ class AssistantService:
         task_status: str = "",
         busy: bool = True,
         temperature: float | None = None,
+        memory: str = "",
     ) -> str:
         """Reply to casual chat while a long task owns the main session.
 
@@ -1083,6 +1084,7 @@ class AssistantService:
             persona_text=persona_text,
             busy=busy,
             status_text=status_text,
+            memory_text=memory,
         )
         system_prompt = prompt.system
         user_prompt = (
