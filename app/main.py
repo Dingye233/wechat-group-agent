@@ -25,6 +25,7 @@ from app.api import (
     opencode,
     outbox,
     replica_tools,
+    router as agent_router_api,
     settings as settings_api,
     status,
     stickers,
@@ -177,6 +178,7 @@ app.include_router(dsh.router, prefix="/api", tags=["dsh"])
 app.include_router(dsh_plugins.router, prefix="/api", tags=["dsh"])
 app.include_router(transport.router, prefix="/api", tags=["transport"])
 app.include_router(wechatauto.router, prefix="/api", tags=["wechatauto"])
+app.include_router(agent_router_api.router, prefix="/api", tags=["router"])
 app.include_router(tasks.router, prefix="/api", tags=["tasks"])
 app.include_router(groups.router, prefix="/api", tags=["groups"])
 app.include_router(chat_tasks.router, prefix="/api", tags=["groups"])

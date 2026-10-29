@@ -1302,6 +1302,19 @@ class AgentEngine:
             if not self.runtime.is_online:
                 return
 
+            from app.services import agent_router
+
+            route = agent_router.classify_group(
+                str(message.content or ""),
+                has_tools=bool(settings.get("llm_api_key")),
+            )
+            await self._log(
+                group_id,
+                "router",
+                f"建议 lane={route.lane}｜置信度={route.confidence:.2f}｜{route.reason}",
+                level="info",
+            )
+
             lock = self._locks.setdefault(group_id, asyncio.Lock())
 
         # Merge a burst from the same sender only.  Different members must not

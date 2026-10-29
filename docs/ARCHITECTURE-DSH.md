@@ -468,3 +468,27 @@ GET  /api/transport/jobs
 - `wait`
 
 目前仍是 Qunban 进程内实现；下一阶段把同一个契约搬到独立 wechatauto 服务。
+
+---
+
+## 13. 已开始落地：轻量 Router
+
+新增确定性 Router：
+
+- [`app/services/agent_router.py`](../app/services/agent_router.py)
+- `POST /api/router/classify`
+
+输出：
+
+```json
+{"route":{"lane":"chat|task|ignore","confidence":0.82,"reason":"..."},"scope":"group"}
+```
+
+规则只做分流，不生成回复：
+
+- 命中任务/工具动作词 → task
+- 命中闲聊词或短消息 → chat
+- 无工具 → 只能 chat
+- 空消息 → ignore
+
+当前它先作为观测和后续 lane 分流的依据，还没有替换主链路：群聊仍由 DSH 决定，私聊简单消息仍走 `quick_chat`。下一步才会把 Router 结果接到 Chat lane / Task lane。
