@@ -2555,6 +2555,8 @@ class AgentEngine:
                 memory_text = await self._load_memory_context(
                     db, group.id, settings, message
                 )
+            from app.services.task_tools import tools_for_task
+
             prompt = f"""# 后台任务
 任务编号：#{task_id}
 原始请求：{record.get('request') or str(message.content or '')}
@@ -2568,6 +2570,9 @@ class AgentEngine:
 # 长期记忆
 {(memory_text or '无')[:1600]}
 
+# 本任务可用工具
+{', '.join(tools_for_task(str(record.get('request') or message.content or ''))) or '（仅基础工具）'}
+
 # 输出协议
 {{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
 或
@@ -2575,9 +2580,24 @@ class AgentEngine:
 
 不要调用 wechat_send_message；最终发送由群伴完成。
 """
-            from app.services.dsh_primary import get_dsh_task_lane_service
+            from app.services.dsh_primary import (
+                DSHPrimaryService,
+                TASK_LANE_PROMPT,
+            )
 
-            service = get_dsh_task_lane_service()
+            allowed_tools = tools_for_task(
+                str(record.get("request") or message.content or "")
+            )
+            service = DSHPrimaryService(
+                profile=f"qunban-task-{task_id}",
+                profile_scope="group_primary",
+                toolset="task",
+                env_scope="group",
+                channel="group",
+                use_native=True,
+                system_prompt=TASK_LANE_PROMPT,
+                extra_env={"QUNBAN_ALLOW_TOOLS": ",".join(allowed_tools)},
+            )
 
             async def on_update(event: dict[str, Any]) -> None:
                 if event.get("phase") == "tool" and event.get("tool"):
@@ -2588,13 +2608,17 @@ class AgentEngine:
                         level="info",
                     )
 
-            result = await service.prompt(
-                f"task-{task_id}",
-                prompt,
-                settings=settings,
-                timeout=600.0,
-                on_update=on_update,
-            )
+            await service.start(settings)
+            try:
+                result = await service.prompt(
+                    f"task-{task_id}",
+                    prompt,
+                    settings=settings,
+                    timeout=600.0,
+                    on_update=on_update,
+                )
+            finally:
+                await service.stop()
             text = str(result.get("text") or "").strip()
             data = parse_json_object(text)
             if not isinstance(data, dict):

@@ -62,6 +62,7 @@ class DSHPrimaryService:
         channel: str = "group",
         use_native: bool = True,
         system_prompt: str = "",
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.profile = profile
         self.profile_dir = HOME_DIR / "profiles" / profile
@@ -71,6 +72,7 @@ class DSHPrimaryService:
         self.channel = channel
         self.use_native = use_native
         self.system_prompt = system_prompt or self._default_system_prompt()
+        self.extra_env = dict(extra_env or {})
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
@@ -241,6 +243,7 @@ class DSHPrimaryService:
                 "QUNBAN_DSH_RUNTIME_ROOT": str(RUNTIME_DIR / version),
             }
         )
+        env.update({str(key): str(value) for key, value in self.extra_env.items()})
         return env
 
     async def start(self, settings: dict[str, Any]) -> None:

@@ -573,12 +573,24 @@ const DENY_TOOLS = String(process.env.QUNBAN_DENY_TOOLS || '')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean)
+const ALLOW_TOOLS = String(process.env.QUNBAN_ALLOW_TOOLS || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean)
+
+function allowsTool(name) {
+  if (!ALLOW_TOOLS.length) return true
+  return ALLOW_TOOLS.some((pattern) =>
+    pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern,
+  )
+}
 
 export function apply(ctx) {
   if (DENY_TOOLS.length && typeof ctx.tools?.restrict === 'function') {
     ctx.tools.restrict({ deny: DENY_TOOLS })
   }
   for (const item of [...tools, ...capabilityTools]) {
+    if (!allowsTool(item.name)) continue
     if (
       (TOOLSET === 'primary' || TOOLSET === 'task') &&
       item.name === 'wechat_send_message'

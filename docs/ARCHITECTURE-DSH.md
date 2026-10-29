@@ -620,3 +620,33 @@ POST /api/tasks/{id}/cancel
 - 排队/执行中的任务可以取消
 - 任务面板直接提供按钮
 - 取消会取消对应的后台 DSH task job，并标记 `cancelled`
+
+---
+
+## 19. 按任务加载工具（第一版）
+
+每个 durable task 现在会：
+
+1. 根据任务请求生成工具 allowlist
+2. 创建独立的 `qunban-task-<id>` profile
+3. 用 `QUNBAN_ALLOW_TOOLS` 启动 Task lane
+4. 执行完立即停止该 ACP 进程
+
+规则示例：
+
+- 基础：`wechat_status/list_groups/read_group`、`qunban_memory_search/save`
+- B站：增加 `qunban_bili_search/knowledge`
+- 查询/接口：增加 `qunban_call_interface`
+- 表格：增加 `qunban_create_excel`
+- 技能/MCP：增加对应工具和动态前缀
+
+优点：
+
+- 每次任务只加载需要的工具
+- 不再让后台任务继承整个群聊工具集
+- 任务结束进程即退出，不会污染长期 session
+
+当前限制：
+
+- allowlist 还是关键词规则，不是模型自己规划的精确工具集
+- 插件安装类任务不在群聊 Task lane 的权限内
