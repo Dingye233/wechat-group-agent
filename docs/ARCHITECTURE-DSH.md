@@ -800,3 +800,54 @@ SENT[text]: 在呢老王，鱼生哪有不累的时候，歇会儿吧~
 ```
 
 这是第一条真正的“入站 → Router → DSH → 发送”端到端验收。
+
+---
+
+## 27. wechatauto 独立服务（可运行）
+
+新增：
+
+```text
+scripts/wechatauto_service.py
+app/adapters/remote.py
+```
+
+服务进程：
+
+```text
+python scripts/wechatauto_service.py --backend replica --port 8010
+```
+
+Qunban 侧适配器：
+
+```text
+replica-remote
+  WECHATAUTO_SERVICE_URL=http://127.0.0.1:8010
+```
+
+服务职责：
+
+- 独占 ReplicaAdapter
+- 读取事件 / 群 / 成员
+- send_text / send_sticker
+- 配置 readable_groups / read_schedule / poll_interval
+- `/v1/events` 增量事件流
+- `/v1/status`
+
+Qunban 的 RemoteAdapter：
+
+- 轮询 `/v1/events` 并还原成 AdapterEvent
+- 群/成员还原成 GroupInfo/MemberInfo
+- 发送走 `/v1/send_text` / `/v1/send_sticker`
+- 不再持有本地 ReplicaAdapter
+
+已用 mock 服务验证：
+
+```text
+service backend=mock
+remote groups=3
+remote events status/account/groups/message
+remote send_text ok
+```
+
+当前生产仍默认使用本地 `replica`；切换前需要停止 Qunban 本地适配器，并只启动一个 wechatauto 服务。

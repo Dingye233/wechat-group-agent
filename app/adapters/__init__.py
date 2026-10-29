@@ -5,6 +5,7 @@ from typing import Any
 from app.adapters.base import BaseAdapter, EmitFn
 from app.adapters.mock import MockAdapter
 from app.adapters.replica import ReplicaAdapter
+from app.adapters.remote import RemoteAdapter
 from app.adapters.wcf import WeChatFerryAdapter
 
 # The old 3.9 UI-automation adapter is intentionally no longer registered.
@@ -14,6 +15,7 @@ from app.adapters.wcf import WeChatFerryAdapter
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     MockAdapter.adapter_id: MockAdapter,
     ReplicaAdapter.adapter_id: ReplicaAdapter,
+    RemoteAdapter.adapter_id: RemoteAdapter,
     WeChatFerryAdapter.adapter_id: WeChatFerryAdapter,
 }
 

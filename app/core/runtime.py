@@ -431,7 +431,7 @@ class RuntimeManager:
             async with SessionLocal() as db:
                 data = await get_settings(db)
             auto = str(data.get("auto_login") or "").strip()
-            if auto in {"mock", "uia", "wcf", "replica"}:
+            if auto in {"mock", "uia", "wcf", "replica", "replica-remote"}:
                 await self.login(auto)
         except Exception as exc:
             logger.warning("自动登录失败: %s", exc)
