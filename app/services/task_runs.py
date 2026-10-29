@@ -8,8 +8,11 @@ create before it says "I will do that".
 from __future__ import annotations
 
 from datetime import datetime
+import copy
+import os
 from typing import Any, Callable
 
+import httpx
 from sqlalchemy import delete, select
 
 from app.db import SessionLocal
@@ -31,6 +34,22 @@ def _emit(task: dict[str, Any]) -> None:
         _EVENT_SINK(task)
     except Exception:
         pass
+
+
+def _sidecar_url() -> str:
+    return str(os.environ.get("QUNBAN_SIDECAR_URL") or "").rstrip("/")
+
+
+async def _remote(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    base = _sidecar_url()
+    if not base:
+        return None
+    async with httpx.AsyncClient(base_url=base, timeout=10.0) as client:
+        response = await client.request(method, path, json=payload)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
 
 
 def _dict(row: AgentTaskRun) -> dict[str, Any]:
@@ -75,6 +94,27 @@ async def create(
     request: str,
     steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if _sidecar_url():
+        try:
+            data = await _remote(
+                "POST",
+                "/v1/tasks",
+                {
+                    "kind": kind,
+                    "source": source,
+                    "group_id": group_id,
+                    "message_id": message_id,
+                    "session_id": session_id,
+                    "request": request,
+                    "steps": steps or initial_steps(),
+                },
+            )
+            task = dict((data or {}).get("task") or {})
+            if task:
+                _emit(task)
+                return task
+        except Exception:
+            pass
     async with SessionLocal() as db:
         row = AgentTaskRun(
             kind=str(kind or "group_task")[:32],
@@ -104,6 +144,27 @@ async def update(
     verified: bool | None = None,
     attempts: int | None = None,
 ) -> dict[str, Any] | None:
+    if _sidecar_url():
+        payload = {
+            key: value
+            for key, value in {
+                "status": status,
+                "result": result,
+                "error": error,
+                "steps": steps,
+                "verified": verified,
+                "attempts": attempts,
+            }.items()
+            if value is not None
+        }
+        try:
+            data = await _remote("PATCH", f"/v1/tasks/{int(task_id)}", payload)
+            task = (data or {}).get("task")
+            if task:
+                _emit(task)
+                return task
+        except Exception:
+            pass
     async with SessionLocal() as db:
         row = await db.get(AgentTaskRun, int(task_id))
         if row is None:
@@ -138,11 +199,24 @@ async def step(
     *,
     detail: str = "",
 ) -> dict[str, Any] | None:
+    if _sidecar_url():
+        try:
+            data = await _remote(
+                "POST",
+                f"/v1/tasks/{int(task_id)}/step",
+                {"name": name, "status": status, "detail": detail},
+            )
+            task = (data or {}).get("task")
+            if task:
+                _emit(task)
+                return task
+        except Exception:
+            pass
     async with SessionLocal() as db:
         row = await db.get(AgentTaskRun, int(task_id))
         if row is None:
             return None
-        steps = list(row.steps or [])
+        steps = copy.deepcopy(list(row.steps or []))
         found = False
         for item in steps:
             if isinstance(item, dict) and item.get("name") == name:
@@ -169,12 +243,24 @@ async def step(
 
 
 async def get(task_id: int) -> dict[str, Any] | None:
+    if _sidecar_url():
+        try:
+            data = await _remote("GET", f"/v1/tasks/{int(task_id)}")
+            return (data or {}).get("task")
+        except Exception:
+            pass
     async with SessionLocal() as db:
         row = await db.get(AgentTaskRun, int(task_id))
         return _dict(row) if row else None
 
 
 async def list_tasks(limit: int = 50) -> list[dict[str, Any]]:
+    if _sidecar_url():
+        try:
+            data = await _remote("GET", f"/v1/tasks?limit={int(limit)}")
+            return list((data or {}).get("tasks") or [])
+        except Exception:
+            pass
     async with SessionLocal() as db:
         rows = (
             await db.execute(
@@ -187,6 +273,12 @@ async def list_tasks(limit: int = 50) -> list[dict[str, Any]]:
 
 
 async def clear() -> None:
+    if _sidecar_url():
+        try:
+            await _remote("DELETE", "/v1/tasks")
+            return
+        except Exception:
+            pass
     async with SessionLocal() as db:
         await db.execute(delete(AgentTaskRun))
         await db.commit()

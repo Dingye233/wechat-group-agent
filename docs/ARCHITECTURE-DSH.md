@@ -1305,3 +1305,54 @@ start-background.ps1
 ```
 
 当前边界：sidecar 只接管**记忆/知识/context 读取**；规则、任务、RuntimeManager、WebSocket 仍在主 Qunban 进程。
+
+---
+
+## 40. Sidecar 接管 task registry
+
+主 Qunban 的 `task_runs` 现在在 `QUNBAN_SIDECAR_URL` 存在时走 sidecar：
+
+```text
+POST   /v1/tasks
+GET    /v1/tasks
+GET    /v1/tasks/{id}
+PATCH  /v1/tasks/{id}
+POST   /v1/tasks/{id}/step
+DELETE /v1/tasks
+```
+
+行为：
+
+- 主进程任务面板/API 查询 sidecar
+- Agent 任务步骤写入 sidecar
+- sidecar 写 SQLite，主进程保留 fallback
+- task event sink 在主进程收到响应后广播
+- task step 使用 deepcopy，修复 JSON 原地修改不落库
+
+实测：
+
+```text
+main create → 200
+main get → 200
+main list → 200
+step execute=done 已落库
+```
+
+当前 sidecar 负责：
+
+```text
+memory
+knowledge
+context reads
+task registry
+```
+
+仍留在主进程：
+
+```text
+RuntimeManager
+规则/状态
+群/消息
+WebSocket
+DSH lane 生命周期
+```
