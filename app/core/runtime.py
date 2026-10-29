@@ -431,7 +431,22 @@ class RuntimeManager:
             async with SessionLocal() as db:
                 data = await get_settings(db)
             auto = str(data.get("auto_login") or "").strip()
-            if auto in {"mock", "uia", "wcf", "replica", "replica-remote"}:
+            if auto == "replica-remote":
+                # The transport service may still be starting.  Retry a few
+                # times instead of leaving the whole Agent permanently in
+                # error state.
+                last_error: Exception | None = None
+                for _attempt in range(8):
+                    try:
+                        await self.login(auto)
+                        return
+                    except Exception as exc:
+                        last_error = exc
+                        await asyncio.sleep(1.5)
+                if last_error is not None:
+                    logger.warning("远程传输服务自动登录失败: %s", last_error)
+                return
+            if auto in {"mock", "uia", "wcf", "replica"}:
                 await self.login(auto)
         except Exception as exc:
             logger.warning("自动登录失败: %s", exc)

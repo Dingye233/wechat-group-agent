@@ -55,7 +55,8 @@ $autoLogin = ""
 try {
     $dbPath = Join-Path $PSScriptRoot "data\agent.db"
     if (Test-Path $dbPath) {
-        $autoLogin = & $python -c "import sqlite3,json; c=sqlite3.connect(r'$dbPath'); r=c.execute(\"select value from settings where key='auto_login'\").fetchone(); print(json.loads(r[0]) if r else '')" 2>$null
+        $autoLogin = & $python (Join-Path $PSScriptRoot "scripts\get_auto_login.py") $dbPath 2>$null
+        $autoLogin = "$autoLogin".Trim()
     }
 } catch {
     $autoLogin = ""

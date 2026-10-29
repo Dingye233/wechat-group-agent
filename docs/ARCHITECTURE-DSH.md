@@ -931,3 +931,37 @@ POST /v1/download_media
 ```
 
 Qunban 的媒体回填对 `replica-remote` 重新启用。
+
+---
+
+## 30. 冷启动恢复
+
+已验证从双停状态启动：
+
+```text
+停止 Qunban
+停止 8010 service
+start-background.ps1 -NoBrowser -NoTray
+```
+
+结果：
+
+```text
+service: online
+Qunban: online
+adapter: replica-remote
+```
+
+修复点：
+
+- `scripts/get_auto_login.py` 可靠读取 auto_login
+- `start-background.ps1` 在 remote 模式下先拉起 8010
+- `maybe_auto_login` 对 replica-remote 重试 8 次，避免服务稍慢导致永久 error
+- RemoteAdapter 支持服务重启后的 sequence 重置和快照恢复
+
+生产现在具备：
+
+```text
+传输服务重启 → Qunban 自动恢复
+双方冷启动 → 按顺序拉起
+```
