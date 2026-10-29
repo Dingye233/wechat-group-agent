@@ -597,6 +597,13 @@ class RuntimeManager:
                 self.online_since = self.online_since or time.time()
                 self.last_error = ""
                 self.qr_bytes = None
+                if not was_online:
+                    task = asyncio.create_task(
+                        self.agent.recover_primary_tasks(),
+                        name="recover-primary-tasks",
+                    )
+                    self._bg_tasks.add(task)
+                    task.add_done_callback(self._bg_tasks.discard)
             elif state == "qr":
                 self.state = "qr"
                 self.last_error = ""

@@ -399,3 +399,41 @@ Agent / Runtime
 3. 把读取监听也迁到该服务的 `message.created` 事件
 4. 接入持久任务状态机和完成验证
 5. 再拆 DSH Chat / Task lane 与 Router
+
+---
+
+## 11. 已开始落地：持久任务
+
+针对凌晨交互里“Agent 答应了但任务丢了”“标 done 但没有真正删除”的问题，新增：
+
+- `agent_task_runs` 表
+- [`app/services/task_runs.py`](../app/services/task_runs.py)
+- [`app/api/tasks.py`](../app/api/tasks.py)
+
+任务有：
+
+```text
+queued / running / done / failed / cancelled
+```
+
+以及显式步骤：
+
+```text
+ack → execute → send → verify
+```
+
+群聊 DSH 返回 `action=task` 时，不再只发一句确认：
+
+1. 创建持久任务
+2. 发送 ack
+3. 后台用独立 DSH session 继续执行
+4. 把最终结果发回群
+5. 标记步骤和任务状态
+6. 服务启动/上线后恢复未完成任务
+
+当前限制：
+
+- `verify` 目前只验证最终发送成功，还没有任务类型级的外部事实校验
+- 任务 API 还没有完整的前端管理页
+- 任务插件生成/晋升还未接入
+- 任务级 session 还没有和 Chat lane 的 session 策略统一

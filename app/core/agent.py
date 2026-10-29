@@ -31,6 +31,7 @@ from app.services.prompting import (
 from app.services.serializers import agent_log_dict
 from app.services.settings import get_settings
 from app.services.stickers import resolve_sticker, sticker_prompt_catalog
+from app.services import task_runs
 
 if TYPE_CHECKING:
     from app.core.runtime import RuntimeManager
@@ -121,6 +122,7 @@ class AgentEngine:
         self._processed: deque[int] = deque(maxlen=3000)
         self._processed_set: set[int] = set()
         self._task_jobs: set[asyncio.Task] = set()
+        self._primary_task_jobs: set[asyncio.Task] = set()
 
     async def handle_message(self, group_id: int, message_id: int) -> None:
         if not self._mark_processed(message_id):
@@ -706,12 +708,13 @@ class AgentEngine:
                 self._start_chat_task(row.id)
 
     async def close(self) -> None:
-        jobs = list(self._task_jobs)
+        jobs = [*self._task_jobs, *self._primary_task_jobs]
         for job in jobs:
             job.cancel()
         if jobs:
             await asyncio.gather(*jobs, return_exceptions=True)
         self._task_jobs.clear()
+        self._primary_task_jobs.clear()
 
     async def _run_chat_task(self, task_id: int) -> None:
         async with SessionLocal() as db:
@@ -2144,7 +2147,24 @@ class AgentEngine:
             data["reply"] = str(
                 data.get("ack") or "收到，我先按这个方向处理，稍后把结果发群里。"
             )
+        task_record = None
+        if action == "task":
+            task_record = await task_runs.create(
+                kind="group_task",
+                source="dsh_primary",
+                group_id=group.id,
+                message_id=message.id,
+                session_id=f"group-{group.id}",
+                request=str(message.content or ""),
+                steps=task_runs.initial_steps(ack=True),
+            )
         if not data.get("messages") and not data.get("reply"):
+            if task_record is not None:
+                await task_runs.update(
+                    int(task_record["id"]),
+                    status="failed",
+                    error="DSH 返回空动作",
+                )
             if preflight is not None:
                 preflight.cancel()
             await self._log(
@@ -2154,7 +2174,7 @@ class AgentEngine:
                 level="warn",
             )
             return True
-        await self._send_primary_reply(
+        sent = await self._send_primary_reply(
             message,
             group,
             config,
@@ -2164,6 +2184,21 @@ class AgentEngine:
             started,
             reuse_first=reuse_first,
         )
+        if task_record is not None:
+            if sent:
+                await task_runs.update(
+                    int(task_record["id"]),
+                    status="running",
+                    steps=task_runs.initial_steps(ack=True),
+                )
+                await task_runs.step(int(task_record["id"]), "ack", "done")
+                self._start_primary_task(int(task_record["id"]))
+            else:
+                await task_runs.update(
+                    int(task_record["id"]),
+                    status="failed",
+                    error="任务确认消息发送失败",
+                )
         return True
 
     def _primary_prompt(
@@ -2227,12 +2262,12 @@ class AgentEngine:
         started: float,
         *,
         reuse_first: bool = False,
-    ) -> None:
+    ) -> bool:
         async with SessionLocal() as db:
             segments = await self._build_segments(db, config, data)
         if not segments:
             await self._log(group.id, "dsh_primary", "DSH 没有可发送的回复", level="warn")
-            return
+            return False
         if config.mention_on_reply:
             mention = f"@{message.sender_name}"
             for segment in segments:
@@ -2247,11 +2282,11 @@ class AgentEngine:
             if wait > 0:
                 await asyncio.sleep(wait)
             if not self.runtime.is_online or self.runtime.detached:
-                return
+                return False
             if not config.read_enabled or not config.agent_enabled:
-                return
+                return False
             if not self._passes_limits(group.id, config, settings):
-                return
+                return False
             sent_any = False
             send_started = time.perf_counter()
             for index, segment in enumerate(segments):
@@ -2279,10 +2314,10 @@ class AgentEngine:
                         f"DSH primary 发送失败：{exc}",
                         level="error",
                     )
-                    return
+                    return False
                 sent_any = bool(sent_any or sent)
             if not sent_any:
-                return
+                return False
             now = time.time()
             self._last_reply[group.id] = now
             self._reply_times[group.id].append(now)
@@ -2306,6 +2341,157 @@ class AgentEngine:
             f"｜复用会话={'是' if reuse_first else '否'}",
             level="info",
         )
+        return True
+
+    # ------------------------------------------------------- durable task lane
+    def _start_primary_task(self, task_id: int) -> None:
+        job = asyncio.create_task(
+            self._run_primary_task(task_id),
+            name=f"dsh-primary-task-{task_id}",
+        )
+        self._primary_task_jobs.add(job)
+        job.add_done_callback(self._primary_task_jobs.discard)
+
+    async def recover_primary_tasks(self) -> None:
+        """Resume queued/running primary tasks after a service restart."""
+        try:
+            rows = await task_runs.list_tasks(100)
+        except Exception:
+            return
+        for row in rows:
+            if (
+                row.get("source") == "dsh_primary"
+                and row.get("status") in {"queued", "running"}
+            ):
+                self._start_primary_task(int(row["id"]))
+
+    async def _run_primary_task(self, task_id: int) -> None:
+        record = await task_runs.get(task_id)
+        if not record or record.get("status") not in {"running", "queued"}:
+            return
+        await task_runs.update(task_id, status="running", attempts=1)
+        await task_runs.step(task_id, "execute", "running")
+        try:
+            async with SessionLocal() as db:
+                group = await db.get(Group, int(record.get("group_id") or 0))
+                config = await db.get(GroupConfig, int(record.get("group_id") or 0))
+                message = (
+                    await db.get(Message, int(record.get("message_id") or 0))
+                    if record.get("message_id")
+                    else None
+                )
+                settings = await get_settings(db)
+                if group is None or config is None or message is None:
+                    raise RuntimeError("任务目标或原始消息已不存在")
+                if not config.read_enabled or not config.agent_enabled:
+                    raise RuntimeError("群聊 Agent 已关闭")
+                context, _members = await self._build_context(
+                    db, group.id, settings
+                )
+                memory_text = await self._load_memory_context(
+                    db, group.id, settings, message
+                )
+            prompt = f"""# 后台任务
+任务编号：#{task_id}
+原始请求：{record.get('request') or str(message.content or '')}
+
+你刚才已经把这条消息标记为 task，并给群友发了确认。现在继续执行任务，
+完成后输出最终的群聊回复 JSON；不要再返回 task，也不要重复确认话术。
+
+# 最近群聊
+{chr(10).join(context[-12:]) or '（无）'}
+
+# 长期记忆
+{(memory_text or '无')[:1600]}
+
+# 输出协议
+{{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
+或
+{{"action":"none"}}
+
+不要调用 wechat_send_message；最终发送由群伴完成。
+"""
+            from app.services.dsh_primary import get_dsh_primary_service
+
+            service = get_dsh_primary_service()
+
+            async def on_update(event: dict[str, Any]) -> None:
+                if event.get("phase") == "tool" and event.get("tool"):
+                    await self._log(
+                        group.id,
+                        "dsh_task_tool",
+                        f"DSH 任务工具：{str(event.get('tool'))[:160]}",
+                        level="info",
+                    )
+
+            result = await service.prompt(
+                f"task-{task_id}",
+                prompt,
+                settings=settings,
+                timeout=600.0,
+                on_update=on_update,
+            )
+            text = str(result.get("text") or "").strip()
+            data = parse_json_object(text)
+            if not isinstance(data, dict):
+                data = {"action": "reply", "reply": text}
+            action = str(data.get("action") or "reply").lower()
+            if action == "task":
+                raise RuntimeError("DSH 任务没有完成，再次返回 task")
+            if action == "none" or (
+                not data.get("messages") and not data.get("reply")
+            ):
+                await task_runs.step(task_id, "execute", "done")
+                await task_runs.step(task_id, "send", "skipped")
+                await task_runs.step(task_id, "verify", "done")
+                await task_runs.update(
+                    task_id,
+                    status="done",
+                    result="任务完成，无需发送",
+                    verified=False,
+                )
+                return
+            await task_runs.step(task_id, "execute", "done")
+            task_send_started = time.perf_counter()
+            sent = await self._send_primary_reply(
+                message,
+                group,
+                config,
+                settings,
+                data,
+                result,
+                task_send_started,
+            )
+            await task_runs.step(
+                task_id, "send", "done" if sent else "failed"
+            )
+            if not sent:
+                raise RuntimeError("任务结果发送失败")
+            await task_runs.step(task_id, "verify", "done")
+            await task_runs.update(
+                task_id,
+                status="done",
+                result=text[:4000],
+                verified=True,
+            )
+            await self._log(
+                group.id,
+                "dsh_primary_task",
+                f"持久任务 #{task_id} 完成并已发送",
+                level="info",
+            )
+        except asyncio.CancelledError:
+            await task_runs.update(task_id, status="failed", error="任务已取消")
+            raise
+        except Exception as exc:
+            await task_runs.step(task_id, "execute", "failed", detail=str(exc))
+            await task_runs.update(task_id, status="failed", error=str(exc))
+            await self._log(
+                int(record.get("group_id") or 0),
+                "dsh_primary_task",
+                f"持久任务 #{task_id} 失败：{exc}",
+                level="error",
+            )
 
     async def _generate_dsh_chat(
         self,

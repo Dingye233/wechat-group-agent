@@ -28,6 +28,7 @@ from app.api import (
     settings as settings_api,
     status,
     stickers,
+    tasks,
     transport,
     ws,
 )
@@ -174,6 +175,7 @@ app.include_router(llm.router, prefix="/api", tags=["llm"])
 app.include_router(dsh.router, prefix="/api", tags=["dsh"])
 app.include_router(dsh_plugins.router, prefix="/api", tags=["dsh"])
 app.include_router(transport.router, prefix="/api", tags=["transport"])
+app.include_router(tasks.router, prefix="/api", tags=["tasks"])
 app.include_router(groups.router, prefix="/api", tags=["groups"])
 app.include_router(chat_tasks.router, prefix="/api", tags=["groups"])
 app.include_router(outbox.router, prefix="/api", tags=["outbox"])

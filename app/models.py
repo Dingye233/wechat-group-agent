@@ -353,6 +353,38 @@ class TransportJob(Base):
     )
 
 
+class AgentTaskRun(Base):
+    """A durable Agent task with explicit steps and completion state."""
+
+    __tablename__ = "agent_task_runs"
+    __table_args__ = (
+        Index("ix_agent_task_runs_status_created", "status", "created_at"),
+        Index("ix_agent_task_runs_group_id", "group_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), default="group_task")
+    source: Mapped[str] = mapped_column(String(32), default="dsh_primary")
+    group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    session_id: Mapped[str] = mapped_column(String(96), default="")
+    request: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    steps: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    result: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class AgentMemory(Base):
     __tablename__ = "agent_memories"
     __table_args__ = (
