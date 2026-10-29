@@ -21,24 +21,37 @@
   .hud-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .tag{background:#0a1621cc;border:1px solid #24473a;border-radius:10px;padding:3px 9px;font-size:13px}
   .tag b{color:var(--gold)}
-  #skills{position:fixed;right:14px;bottom:14px;display:flex;gap:8px;pointer-events:none}
-  .skill{width:64px;height:64px;border-radius:14px;border:1px solid #2b4a3c;background:#0a1621d9;
-    display:grid;place-items:center;font-size:12px;text-align:center;position:relative;overflow:hidden}
-  .skill b{font-size:19px;color:var(--gold);display:block;line-height:1.1}
-  .skill .cd{position:absolute;inset:0;background:#000a;display:grid;place-items:center;font-size:16px;color:#9fd}
-  /* mobile controls */
-  #touch{position:fixed;inset:0;pointer-events:none;display:none}
+  /* ---------- 技能（随屏幕缩放） ---------- */
+  #skills{position:fixed;right:calc(clamp(10px,2vmin,22px));bottom:calc(clamp(10px,2vmin,22px));
+    display:flex;gap:clamp(6px,1.1vmin,12px);pointer-events:none}
+  .skill{width:clamp(46px,7.4vmin,72px);height:clamp(46px,7.4vmin,72px);
+    border-radius:clamp(10px,1.6vmin,18px);border:1px solid #2a5844;
+    background:radial-gradient(circle at 50% 120%,#16382b,#08131bd9 70%);
+    display:grid;place-items:center;text-align:center;position:relative;overflow:hidden;
+    box-shadow:0 6px 18px #0007, inset 0 1px 0 #ffffff14}
+  .skill b{font-size:clamp(12px,2vmin,18px);color:var(--gold);display:block;line-height:1.05}
+  .skill small{font-size:clamp(8px,1.2vmin,11px);color:#a9c6ba;display:block}
+  .skill .cd{position:absolute;inset:0;background:#000b;display:grid;place-items:center;
+    font-size:clamp(12px,2vmin,18px);color:#bfe6d5}
+  /* ---------- 触屏摇杆与按钮 ---------- */
+  #touch{position:fixed;inset:0;pointer-events:none;display:none;z-index:12}
   #touch.on{display:block}
-  #stick{position:fixed;left:22px;bottom:26px;width:132px;height:132px;border-radius:50%;
-    border:1px solid #2b4a3c;background:#0a1621a6;pointer-events:auto}
-  #knob{position:absolute;left:41px;top:41px;width:50px;height:50px;border-radius:50%;
-    background:radial-gradient(circle at 35% 30%,#8ff0c3,#2a6b4f);box-shadow:0 0 12px #6ee7b766}
-  #btns{position:fixed;right:16px;bottom:150px;display:grid;grid-template-columns:repeat(3,66px);gap:10px;pointer-events:auto}
-  .vbtn{width:66px;height:66px;border-radius:50%;border:1px solid #356b53;background:#0d1f18cc;color:#e9f2ee;
-    font-size:15px;display:grid;place-items:center;font-family:inherit}
-  .vbtn:active{background:#1c4535}
-  .vbtn.attack{background:#3a1f18cc;border-color:#8a4433}
-  .vbtn.jump{background:#12303acc;border-color:#3d7c8c}
+  #stick{position:fixed;left:calc(clamp(12px,2.2vmin,30px));bottom:calc(clamp(12px,2.2vmin,30px));
+    width:clamp(92px,16vmin,148px);height:clamp(92px,16vmin,148px);border-radius:50%;
+    border:1px solid #2b5a46;background:radial-gradient(circle at 50% 50%,#0e241bcc,#07111999 70%);
+    pointer-events:auto;touch-action:none;box-shadow:inset 0 0 30px #000a}
+  #knob{position:absolute;left:50%;top:50%;width:42%;height:42%;margin:-21% 0 0 -21%;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#b8ffe2,#2f8a63 70%);box-shadow:0 0 16px #7ef0c066}
+  #btns{position:fixed;right:calc(clamp(10px,2vmin,26px));bottom:calc(clamp(76px,15vmin,140px));
+    display:grid;grid-template-columns:repeat(3,clamp(46px,8vmin,74px));gap:clamp(6px,1.2vmin,12px);
+    pointer-events:auto;touch-action:none}
+  .vbtn{width:100%;aspect-ratio:1;border-radius:50%;border:1px solid #2f6a52;
+    background:radial-gradient(circle at 50% 120%,#123528,#08131bdd 70%);color:#dff5e9;
+    font-family:inherit;font-size:clamp(11px,1.8vmin,16px);display:grid;place-items:center;
+    box-shadow:0 5px 16px #0006, inset 0 1px 0 #ffffff18;touch-action:none}
+  .vbtn.pressed{transform:scale(.94);filter:brightness(1.35)}
+  .vbtn.attack{background:radial-gradient(circle at 50% 120%,#4a2018,#180c0add 70%);border-color:#96503c}
+  .vbtn.jump{background:radial-gradient(circle at 50% 120%,#123a46,#081420dd 70%);border-color:#3f8598}
   /* screens */
   .screen{position:fixed;inset:0;display:grid;place-items:center;background:
       radial-gradient(900px 500px at 50% 20%,#12283fcc,transparent 70%),#040a10f2;z-index:20}
@@ -194,9 +207,27 @@
 
   document.querySelectorAll('.vbtn').forEach((btn) => {
     const k = btn.dataset.k;
-    const down = (e) => { e.preventDefault(); if (k in press) press[k] = true; };
-    btn.addEventListener('touchstart', down, { passive: false });
-    btn.addEventListener('mousedown', down);
+    const down = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn._pressed) return;
+      btn._pressed = true;
+      btn.classList.add('pressed');
+      if (k in press) press[k] = true;
+      try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+    };
+    const up = (e) => {
+      if (e) e.preventDefault();
+      btn._pressed = false;
+      btn.classList.remove('pressed');
+    };
+    btn.addEventListener('pointerdown', down);
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointercancel', up);
+    btn.addEventListener('pointerleave', up);
+    btn.addEventListener('touchstart', (e) => { e.preventDefault(); down(e); }, { passive: false });
+    btn.addEventListener('touchend', (e) => { e.preventDefault(); up(e); }, { passive: false });
+    btn.addEventListener('contextmenu', (e) => e.preventDefault());
   });
 
   // ---------------------------------------------------------------- 数据
@@ -229,7 +260,11 @@
     equip: { weapon: null, robe: null, charm: null },
   };
 
-  let enemies = [], projectiles = [], drops = [], particles = [], texts = [], platforms = [];
+  let enemies = [], projectiles = [], drops = [], particles = [], texts = [], platforms = [], slashes = [];
+  const petals = Array.from({ length: 24 }, () => ({
+    x: Math.random() * LOGICAL_W, y: Math.random() * LOGICAL_H,
+    r: 1.6 + Math.random() * 1.8, sp: 10 + Math.random() * 22, ph: Math.random() * 9,
+  }));
 
   function statBonus() {
     let atk = 12, def = 0, hp = 0, mp = 0;
@@ -502,7 +537,26 @@
         player.vy = 0;
         player.onGround = true;
         player.jumps = 0;
+        if (p.kind === 'ground') player.lastSafe = { x: player.x, y: player.y };
       }
+    }
+
+    // 掉进坑里：扣血并回到最近的安全落点，绝不无限下坠
+    if (player.y > LOGICAL_H + 70) {
+      if (player.fallTimer === undefined) player.fallTimer = 0;
+      player.fallTimer += dt;
+      if (player.fallTimer > 0.3) {
+        player.fallTimer = 0;
+        hurtPlayer(Math.round(player.maxHp * 0.16));
+        if (G.state === 'play') {
+          const safe = player.lastSafe || { x: 200, y: LOGICAL_H - 96 - player.h };
+          player.x = safe.x; player.y = safe.y - 30; player.vx = 0; player.vy = 0;
+          addText('坠崖！', player.x, player.y - 20, '#7fc4ff', 18);
+          burst(player.x + 20, player.y + 30, '#7fc4ff', 16);
+        }
+      }
+    } else {
+      player.fallTimer = 0;
     }
 
     // 攻击
@@ -696,6 +750,29 @@
       ctx.fill();
     }
 
+    // 云带
+    for (let i = 0; i < 5; i++) {
+      const cy = 300 + i * 62;
+      const cx = ((i * 420 - G.cameraX * (0.12 + i * 0.02)) % (LOGICAL_W + 700) + LOGICAL_W + 700) % (LOGICAL_W + 700) - 350;
+      const cg = ctx.createLinearGradient(cx, cy, cx + 420, cy + 40);
+      cg.addColorStop(0, 'rgba(150,210,235,0)');
+      cg.addColorStop(0.5, 'rgba(150,210,235,0.1)');
+      cg.addColorStop(1, 'rgba(150,210,235,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath(); ctx.ellipse(cx + 210, cy, 220, 22, 0, 0, 7); ctx.fill();
+    }
+
+    // 花瓣
+    for (const p of petals) {
+      p.y += p.sp * G_LAST_DT;
+      p.x += Math.sin(G.time * 0.6 + p.ph) * 12 * G_LAST_DT;
+      if (p.y > LOGICAL_H) { p.y = -8; p.x = Math.random() * LOGICAL_W; }
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = '#ffb7c9';
+      ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r, p.r * 0.6, G.time + p.ph, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
     // 竹影
     ctx.save();
     ctx.globalAlpha = 0.35;
@@ -738,6 +815,11 @@
         ctx.fillRect(x, p.y, p.w, p.h);
         ctx.fillStyle = '#3d6a52';
         ctx.fillRect(x, p.y, p.w, 6);
+        ctx.strokeStyle = '#67c093'; ctx.lineWidth = 2;
+        for (let i = 8; i < p.w; i += 26) {
+          const hh = 6 + ((i * 7) % 9);
+          ctx.beginPath(); ctx.moveTo(x + i, p.y); ctx.quadraticCurveTo(x + i + 3, p.y - hh, x + i + 7, p.y - hh - 2); ctx.stroke();
+        }
         ctx.fillStyle = '#173627';
         for (let i = 0; i < p.w; i += 46) ctx.fillRect(x + i, p.y + 10, 24, 4);
       } else {
@@ -923,6 +1005,17 @@
     drawParticles();
     ctx.restore();
 
+    // 暗角 + 受击红闪
+    const vg = ctx.createRadialGradient(LOGICAL_W / 2, LOGICAL_H / 2, LOGICAL_H * 0.35,
+      LOGICAL_W / 2, LOGICAL_H / 2, LOGICAL_H * 0.95);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.52)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+    if (player.hitFlash > 0) {
+      ctx.fillStyle = 'rgba(255,110,90,' + (player.hitFlash * 1.4) + ')';
+      ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+    }
+
     // 关卡提示
     ctx.save();
     ctx.globalAlpha = 0.9;
@@ -1035,11 +1128,13 @@
   });
 
   // ---------------------------------------------------------------- 主循环
+  let G_LAST_DT = 0.016;
   let last = performance.now();
   let hudTimer = 0;
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
+    G_LAST_DT = dt;
     if (G.running) {
       update(dt);
       render();
