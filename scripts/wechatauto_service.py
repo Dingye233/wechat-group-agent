@@ -255,6 +255,20 @@ def create_app(backend: str, token: str = "") -> FastAPI:
         await state.adapter.refresh()
         return {"ok": True}
 
+    @app.post("/v1/preflight", dependencies=[Depends(_auth)])
+    async def preflight(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        try:
+            result = await state.adapter.preflight(
+                str(payload.get("room_id") or "")
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"{type(exc).__name__}: {exc}".strip(),
+            ) from exc
+        return {"result": dict(result or {})}
+
     @app.post("/v1/config", dependencies=[Depends(_auth)])
     async def config(payload: dict[str, Any]) -> dict[str, Any]:
         assert state is not None and state.adapter is not None

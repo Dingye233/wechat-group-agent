@@ -2073,6 +2073,16 @@ class ReplicaAdapter(BaseAdapter):
         except Exception:
             with self._lock:
                 self._wx = None
+        if hwnd:
+            try:
+                import win32con
+                import win32gui
+
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+                time.sleep(0.2)
+            except Exception:
+                pass
         # A narrow WeChat window keeps the current chat open and hides the
         # search box used by ChatWith.  Maximize before any lookup; if the
         # window still cannot provide the wide layout, abort instead of
@@ -2110,6 +2120,14 @@ class ReplicaAdapter(BaseAdapter):
             try:
                 # Re-assert the UIA accessibility gate after a WeChat restart.
                 gui._get_uia(refresh=True)
+            except Exception:
+                pass
+            try:
+                if not gui.back_to_chat_tab():
+                    self.log(
+                        "发送前未能把微信带回聊天页，继续尝试打开目标会话",
+                        level="warn",
+                    )
             except Exception:
                 pass
         if not wx.ChatWith(display_name, exact=True):

@@ -305,6 +305,16 @@ class RemoteAdapter(BaseAdapter):
     async def refresh(self) -> None:
         await self._http().post("/v1/refresh")
 
+    async def preflight(self, room_id: str) -> dict[str, Any]:
+        response = await self._http().post(
+            "/v1/preflight", json={"room_id": room_id}, timeout=100.0
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return dict(response.json().get("result") or {})
+
     async def _config(self, payload: dict[str, Any]) -> None:
         await self._http().post("/v1/config", json=payload)
 
