@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui35">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui35">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui36">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui36">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -541,6 +541,12 @@
                       <option value="legacy">Legacy 编排（应急）</option>
                     </select>
                   </label>
+                  <label class="field-label" style="min-width:170px">任务提示词
+                    <select id="dsh-task-prompt-mode">
+                      <option value="custom">群伴自定义</option>
+                      <option value="native">DSH 原生</option>
+                    </select>
+                  </label>
                   <button class="btn btn-ghost" id="dsh-check">检查更新</button>
                   <button class="btn btn-primary" id="dsh-install">安装 / 更新</button>
                   <button class="btn btn-ghost" id="dsh-stop">停止运行</button>
@@ -1052,6 +1058,6 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui35" defer></script>
+  <script src="/app.js?v=20261029-ui36" defer></script>
 </body>
 </html>

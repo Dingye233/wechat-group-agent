@@ -62,6 +62,7 @@ class DSHPrimaryService:
         channel: str = "group",
         use_native: bool = True,
         system_prompt: str = "",
+        native_prompt: bool = False,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self.profile = profile
@@ -71,7 +72,12 @@ class DSHPrimaryService:
         self.env_scope = env_scope
         self.channel = channel
         self.use_native = use_native
-        self.system_prompt = system_prompt or self._default_system_prompt()
+        self.native_prompt = native_prompt
+        self.system_prompt = (
+            system_prompt
+            if system_prompt
+            else ("" if native_prompt else self._default_system_prompt())
+        )
         self.extra_env = dict(extra_env or {})
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None

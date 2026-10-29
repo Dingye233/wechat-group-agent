@@ -61,6 +61,7 @@ PUBLIC_KEYS = {
     "dsh_chat_lane_enabled",
     "dsh_router_enabled",
     "dsh_router_threshold",
+    "task_prompt_mode",
     "tray_close_action",
     "takeover_hotkey",
     "auto_retry_failed_sends",
@@ -154,6 +155,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "dsh_chat_lane_enabled": True,
     "dsh_router_enabled": True,
     "dsh_router_threshold": 0.6,
+    "task_prompt_mode": "custom",
     "opencode_enabled": False,
     # tray = closing the background window hides to the notification area;
     # exit = closing stops the service.
@@ -385,6 +387,14 @@ async def update_settings(
         and payload["dsh_router_enabled"] is not None
     ):
         updates["dsh_router_enabled"] = bool(payload["dsh_router_enabled"])
+    if (
+        "task_prompt_mode" in payload
+        and payload["task_prompt_mode"] is not None
+    ):
+        mode = str(payload["task_prompt_mode"]).strip().lower()
+        if mode not in {"custom", "native"}:
+            raise ValueError("task_prompt_mode 只能是 custom 或 native")
+        updates["task_prompt_mode"] = mode
     if (
         "auto_retry_failed_sends" in payload
         and payload["auto_retry_failed_sends"] is not None

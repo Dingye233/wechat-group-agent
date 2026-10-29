@@ -2946,6 +2946,27 @@ class AgentEngine:
                 TASK_LANE_PROMPT,
             )
 
+            native_task_prompt = (
+                str(settings.get("task_prompt_mode") or "custom") == "native"
+            )
+            task_persona = str(
+                config.persona or settings.get("default_persona") or ""
+            ).strip()
+            if native_task_prompt:
+                task_system_prompt = (
+                    f"你是群伴的 Task Agent。\n群聊人设：{task_persona}"
+                    if task_persona
+                    else ""
+                )
+            else:
+                task_system_prompt = TASK_LANE_PROMPT
+            await self._log(
+                group.id,
+                "dsh_task_prompt",
+                "任务提示词模式："
+                + ("DSH 原生" if native_task_prompt else "群伴自定义"),
+                level="info",
+            )
             service = DSHPrimaryService(
                 profile=f"qunban-task-{task_id}",
                 profile_scope="group_primary",
@@ -2953,7 +2974,8 @@ class AgentEngine:
                 env_scope="admin" if (plugin_task or allow_script) else "group",
                 channel="group",
                 use_native=True,
-                system_prompt=TASK_LANE_PROMPT,
+                system_prompt=task_system_prompt,
+                native_prompt=native_task_prompt,
                 extra_env={"QUNBAN_ALLOW_TOOLS": ",".join(allowed_tools)},
             )
 

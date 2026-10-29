@@ -3848,6 +3848,8 @@ async function loadDSH() {
     if (channel) channel.value = state.settings?.dsh_channel || data.channel || 'stable';
     const groupChat = $('#dsh-group-chat-engine');
     if (groupChat) groupChat.value = state.settings?.group_channel_mode || data.group_channel_mode || 'dsh_primary';
+    const taskPrompt = $('#dsh-task-prompt-mode');
+    if (taskPrompt) taskPrompt.value = state.settings?.task_prompt_mode || 'custom';
     if (statusLine) {
       const version = st.version || runtime.version || '';
       const parts = [];
@@ -6057,6 +6059,23 @@ function bindAssistantActions() {
       );
     } catch (error) {
       toast(error.message, 'error');
+    }
+  });
+  $('#dsh-task-prompt-mode')?.addEventListener('change', async (event) => {
+    try {
+      const data = await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ task_prompt_mode: event.target.value }),
+      });
+      state.settings = data.settings || state.settings;
+      toast(
+        event.target.value === 'native'
+          ? '任务已切到 DSH 原生提示词，人设保留'
+          : '任务已切回群伴自定义提示词',
+      );
+    } catch (error) {
+      toast(error.message, 'error');
+      event.target.value = state.settings?.task_prompt_mode || 'custom';
     }
   });
   $('#dsh-check')?.addEventListener('click', async () => {

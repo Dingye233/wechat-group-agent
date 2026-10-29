@@ -1693,3 +1693,45 @@ Steam 这类没有现成插件的任务：
 ```
 
 管理员任务允许 `qunban_powershell` + `qunban_plugin_install`；非管理员仍只能用只读/公开工具。
+
+---
+
+## 50. 任务提示词开关：群伴自定义 / DSH 原生
+
+DSH 原生提示词由 `@deepseek-ai/dsh-system-prompt` 组装；群伴之前把
+`TASK_LANE_PROMPT` 通过 profile 的 `system-prompt.personaPrefix` 注入，所以它是
+**追加到 DSH 原生提示词前面**，不是替换。
+
+新增设置：
+
+```text
+task_prompt_mode = custom | native
+```
+
+- `custom`：继续用群伴 `TASK_LANE_PROMPT`
+- `native`：Task lane 不再注入群伴任务提示词，只保留群聊人设 prefix；
+  由 DSH 原生 system prompt 负责任务/工具行为
+- 人设提示词不受影响，仍来自群配置/default_persona
+- Chat lane、primary、路由提示词不受这个开关影响
+
+前端：
+
+```text
+DeepSeek Harness → 任务提示词
+  群伴自定义 / DSH 原生
+```
+
+实现：
+
+```python
+system_prompt = "" if native else TASK_LANE_PROMPT
+DSHPrimaryService(native_prompt=native, system_prompt=...)
+```
+
+native 模式返回自然语言时，任务 runner 会回退为：
+
+```json
+{"action":"reply","reply":"<text>"}
+```
+
+因此不强制模型输出群伴自定义 JSON 协议。
