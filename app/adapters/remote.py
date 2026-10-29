@@ -236,6 +236,36 @@ class RemoteAdapter(BaseAdapter):
         except RuntimeError:
             pass
 
+    def reattach(self) -> None:
+        """Clear the UI takeover guard inside the service process."""
+        async def push() -> None:
+            try:
+                await self._http().post("/v1/reattach", timeout=20.0)
+            except Exception:
+                pass
+
+        try:
+            asyncio.get_running_loop().create_task(push())
+        except RuntimeError:
+            pass
+
+    def allow_ui_action(self, seconds: float = 8.0) -> None:
+        """Extend service-side UI permission before desktop automation."""
+        value = max(1.0, float(seconds))
+
+        async def push() -> None:
+            try:
+                await self._http().post(
+                    "/v1/allow_ui", json={"seconds": value}, timeout=20.0
+                )
+            except Exception:
+                pass
+
+        try:
+            asyncio.get_running_loop().create_task(push())
+        except RuntimeError:
+            pass
+
     async def send_text(self, room_id: str, text: str, *, reuse_chat: bool = False) -> None:
         response = await self._http().post(
             "/v1/send_text",

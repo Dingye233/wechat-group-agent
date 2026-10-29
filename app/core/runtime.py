@@ -505,6 +505,14 @@ class RuntimeManager:
                 self.adapter = None
                 self.broadcast("status", self.status_dict())
                 raise
+            try:
+                from app.services import desktop
+
+                allow = getattr(self.adapter, "allow_ui_action", None)
+                if callable(allow):
+                    desktop.configure_allow_ui(allow)
+            except Exception:
+                pass
             return self.status_dict()
 
     def _make_emit(self, generation: int):

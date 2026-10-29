@@ -1805,3 +1805,36 @@ replica-remote
 ```
 
 否则远程模式重启后无法自动登录，联系人/私聊都会变成空。
+
+---
+
+## 53. 屏幕控制与 ReplicaGuard 冲突
+
+现象：
+
+```text
+打开网页 / 截屏 / 扫码登录
+→ 任务后续发送失败
+→ error=检测到鼠标被用户移动
+```
+
+根因：
+
+- `screen-control` / `desktop.py` 使用 pyautogui 直接移动鼠标
+- 这些移动没有登记到 service 的 ReplicaGuard
+- service 把它误判为“用户接管”，触发 detached
+- 之后的私聊/群聊发送全部被拒绝
+
+修复：
+
+- service 新增 `/v1/allow_ui`
+- `RemoteAdapter.allow_ui_action` 把屏幕操作授权传给 service
+- Qunban `/api/opencode/tool` 在 `run_skill`、`run_mcp`、screen/mouse/keyboard 工具前调用授权
+- `desktop.py` 注册 allow_ui 回调，直接调用 pyautogui 时也延长授权
+- service 新增 `/v1/reattach`，RemoteAdapter.reattach 真正清除 service guard
+
+仍存在的限制：
+
+- screen-control 仍是 OCR/坐标驱动，不是视觉模型 grounding
+- screen_control_mcp 的 8010 端口与 wechatauto 冲突，且不是标准 MCP
+- 私聊任务仍不是 durable task，没有任务进度/恢复/最终报告保证

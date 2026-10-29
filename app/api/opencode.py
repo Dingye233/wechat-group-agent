@@ -387,6 +387,26 @@ async def opencode_tool(
         scope = "admin"
     if not name:
         raise HTTPException(status_code=400, detail="工具名不能为空")
+    if name in {
+        "run_skill",
+        "run_mcp",
+        "screen_capture",
+        "screen_ocr",
+        "screen_find_text",
+        "mouse_move",
+        "mouse_click",
+        "mouse_drag",
+        "mouse_scroll",
+        "keyboard_type",
+        "keyboard_press",
+        "keyboard_hotkey",
+    } or name.startswith(("mouse_", "keyboard_")):
+        allow = getattr(runtime.adapter, "allow_ui_action", None)
+        if callable(allow):
+            try:
+                allow(180.0)
+            except Exception:
+                pass
     if name.startswith(("keyboard_", "mouse_")) and not payload.get("allow_desktop"):
         return {
             "ok": False,

@@ -292,6 +292,22 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             setter({str(item) for item in payload.get("wxids") or [] if str(item)})
         return {"ok": True, "count": len(payload.get("wxids") or [])}
 
+    @app.post("/v1/reattach", dependencies=[Depends(_auth)])
+    async def reattach() -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        fn = getattr(state.adapter, "reattach", None)
+        if callable(fn):
+            fn()
+        return {"ok": True}
+
+    @app.post("/v1/allow_ui", dependencies=[Depends(_auth)])
+    async def allow_ui(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        fn = getattr(state.adapter, "allow_ui_action", None)
+        if callable(fn):
+            fn(float(payload.get("seconds") or 120.0))
+        return {"ok": True}
+
     @app.post("/v1/send_text", dependencies=[Depends(_auth)])
     async def send_text(payload: dict[str, Any]) -> dict[str, Any]:
         assert state is not None and state.adapter is not None

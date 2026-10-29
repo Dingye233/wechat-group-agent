@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import ImageGrab
 
 SCREEN_DIR = Path("data") / "media" / "assistant"
+_ALLOW_UI: Callable[[float], None] | None = None
+
+
+def configure_allow_ui(callback: Callable[[float], None] | None) -> None:
+    """Register the adapter/UI takeover consent hook for desktop actions."""
+    global _ALLOW_UI
+    _ALLOW_UI = callback
+
+
+def _allow_ui(seconds: float = 120.0) -> None:
+    if _ALLOW_UI is None:
+        return
+    try:
+        _ALLOW_UI(float(seconds))
+    except Exception:
+        pass
 
 
 def _region(value: Any) -> tuple[int, int, int, int] | None:
@@ -94,6 +110,7 @@ def find_text_on_screen(text: str, region: Any = None) -> dict[str, Any]:
 
 
 def _pyautogui():
+    _allow_ui(120.0)
     import pyautogui
 
     pyautogui.FAILSAFE = True
@@ -203,6 +220,7 @@ def keyboard_hotkey(keys: list[str] | str) -> dict[str, Any]:
 
 def execute(name: str, args: dict[str, Any] | None = None) -> Any:
     args = args or {}
+    _allow_ui(120.0)
     if name == "screen_capture":
         return capture_screen(args.get("region"))
     if name == "screen_ocr":
