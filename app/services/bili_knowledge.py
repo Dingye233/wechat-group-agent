@@ -170,7 +170,11 @@ def stats() -> dict[str, Any]:
         count = int(collection.count())
     except Exception:
         count = 0
-    return {"count": count, "collection": "bili_videos"}
+    return {
+        "count": count,
+        "collection": "bili_videos",
+        "path": str(process_settings.data_dir / "knowledge" / "chroma"),
+    }
 
 
 async def add_video_async(**kwargs: Any) -> dict[str, Any]:
