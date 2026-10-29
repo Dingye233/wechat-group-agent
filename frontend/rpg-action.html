@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#050b12">
+<title>问道 · 斩妖行</title>
+<style>
+  :root{ --gold:#e8c06a; --jade:#6ee7b7; --blood:#ef5a4c; --mp:#6aa9e8; --ink:#050b12; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--ink);color:#e9f2ee;
+    font:14px/1.5 "Noto Serif SC","Songti SC",Georgia,"Microsoft YaHei",serif;user-select:none}
+  #stage{position:fixed;inset:0;display:grid;place-items:center}
+  canvas{display:block;image-rendering:auto;background:#08111a}
+  /* HUD */
+  #hud{position:fixed;inset:0;pointer-events:none;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+  .bar{width:min(320px,42vw);height:14px;border:1px solid #2b4a3c;border-radius:99px;background:#04090dcc;overflow:hidden}
+  .bar>i{display:block;height:100%;width:100%;transition:width .12s}
+  .bar.hp>i{background:linear-gradient(90deg,#c2392b,#ef7a63)}
+  .bar.mp>i{background:linear-gradient(90deg,#2f6fae,#7fc4ff)}
+  .hud-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .tag{background:#0a1621cc;border:1px solid #24473a;border-radius:10px;padding:3px 9px;font-size:13px}
+  .tag b{color:var(--gold)}
+  #skills{position:fixed;right:14px;bottom:14px;display:flex;gap:8px;pointer-events:none}
+  .skill{width:64px;height:64px;border-radius:14px;border:1px solid #2b4a3c;background:#0a1621d9;
+    display:grid;place-items:center;font-size:12px;text-align:center;position:relative;overflow:hidden}
+  .skill b{font-size:19px;color:var(--gold);display:block;line-height:1.1}
+  .skill .cd{position:absolute;inset:0;background:#000a;display:grid;place-items:center;font-size:16px;color:#9fd}
+  /* mobile controls */
+  #touch{position:fixed;inset:0;pointer-events:none;display:none}
+  #touch.on{display:block}
+  #stick{position:fixed;left:22px;bottom:26px;width:132px;height:132px;border-radius:50%;
+    border:1px solid #2b4a3c;background:#0a1621a6;pointer-events:auto}
+  #knob{position:absolute;left:41px;top:41px;width:50px;height:50px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#8ff0c3,#2a6b4f);box-shadow:0 0 12px #6ee7b766}
+  #btns{position:fixed;right:16px;bottom:150px;display:grid;grid-template-columns:repeat(3,66px);gap:10px;pointer-events:auto}
+  .vbtn{width:66px;height:66px;border-radius:50%;border:1px solid #356b53;background:#0d1f18cc;color:#e9f2ee;
+    font-size:15px;display:grid;place-items:center;font-family:inherit}
+  .vbtn:active{background:#1c4535}
+  .vbtn.attack{background:#3a1f18cc;border-color:#8a4433}
+  .vbtn.jump{background:#12303acc;border-color:#3d7c8c}
+  /* screens */
+  .screen{position:fixed;inset:0;display:grid;place-items:center;background:
+      radial-gradient(900px 500px at 50% 20%,#12283fcc,transparent 70%),#040a10f2;z-index:20}
+  .panel{width:min(560px,92vw);background:#0a1621e6;border:1px solid #24473a;border-radius:18px;padding:22px;text-align:center}
+  .panel h1{font-size:30px;letter-spacing:8px;color:var(--gold);margin:0 0 6px}
+  .panel p{color:#9db3ab;margin:6px 0}
+  input{width:100%;padding:11px 13px;border-radius:11px;border:1px solid #2b4a3c;background:#071119;color:#e9f2ee;
+    font-size:16px;text-align:center;font-family:inherit}
+  .btn{appearance:none;border:1px solid #2b5644;background:linear-gradient(180deg,#1a3a2c,#12271e);color:#e9f2ee;
+    padding:11px 18px;border-radius:12px;font-size:15px;font-family:inherit;cursor:pointer}
+  .btn.primary{background:linear-gradient(180deg,#2a6b4f,#1a4733);border-color:#3d8a66}
+  .btn.gold{background:linear-gradient(180deg,#7a5c20,#4d3a12);border-color:#a58333;color:#ffe9b0}
+  .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+  .hidden{display:none!important}
+  #rotate{position:fixed;inset:0;display:none;place-items:center;background:#04090df2;z-index:30;text-align:center;color:#9fd}
+  @media (max-width:900px) and (orientation:portrait){ #rotate{display:grid} }
+  .keys{color:#7d968e;font-size:12.5px;line-height:1.9}
+  kbd{background:#12241d;border:1px solid #2b4a3c;border-radius:5px;padding:1px 6px;font-family:inherit;color:#cfeee0}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="cv"></canvas></div>
+
+<div id="hud">
+  <div class="hud-row">
+    <span class="tag" id="hud-name">无名散修</span>
+    <span class="tag">境界 <b id="hud-realm">练气</b></span>
+    <span class="tag">关卡 <b id="hud-stage">1-1</b></span>
+    <span class="tag">灵石 <b id="hud-gold">0</b></span>
+    <span class="tag">最高波 <b id="hud-best">0</b></span>
+  </div>
+  <div class="bar hp"><i id="hpBar"></i></div>
+  <div class="bar mp"><i id="mpBar"></i></div>
+</div>
+
+<div id="skills">
+  <div class="skill" id="sk-q"><b>U</b>剑气斩<div class="cd hidden"></div></div>
+  <div class="skill" id="sk-e"><b>I</b>雷符<div class="cd hidden"></div></div>
+  <div class="skill" id="sk-r"><b>O</b>回春<div class="cd hidden"></div></div>
+</div>
+
+<div id="touch">
+  <div id="stick"><div id="knob"></div></div>
+  <div id="btns">
+    <button class="vbtn attack" data-k="attack">攻</button>
+    <button class="vbtn jump" data-k="jump">跳</button>
+    <button class="vbtn" data-k="dash">闪</button>
+    <button class="vbtn" data-k="skillQ">斩</button>
+    <button class="vbtn" data-k="skillE">符</button>
+    <button class="vbtn" data-k="skillR">愈</button>
+  </div>
+</div>
+
+<div class="screen" id="start">
+  <div class="panel">
+    <h1>斩 妖 行</h1>
+    <p>东方修仙 · 横版动作闯关</p>
+    <div style="margin:14px 0"><input id="nameInput" maxlength="16" placeholder="输入道号"></div>
+    <div class="row">
+      <button class="btn primary" id="btnStart">开始闯关</button>
+      <button class="btn" id="btnEndless">无尽模式</button>
+    </div>
+    <p class="keys" style="margin-top:16px">
+      电脑：<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动 · <kbd>J</kbd> 攻击 · <kbd>K</kbd> 跳 ·
+      <kbd>L</kbd> 闪避 · <kbd>U</kbd> 剑气斩 · <kbd>I</kbd> 雷符 · <kbd>O</kbd> 回春<br>
+      手机：左手摇杆移动，右手按钮攻击/跳跃/技能（建议横屏）
+    </p>
+  </div>
+</div>
+
+<div class="screen hidden" id="over">
+  <div class="panel">
+    <h1 id="overTitle">道消身殒</h1>
+    <p id="overText"></p>
+    <div class="row">
+      <button class="btn primary" id="btnRetry">再来一次</button>
+      <button class="btn" id="btnHome">回到山门</button>
+    </div>
+  </div>
+</div>
+
+<div id="rotate"><div><h2>请横屏</h2><p>横过来玩更爽 👉📱</p></div></div>
+
+<script>
+(() => {
+  'use strict';
+  const LOGICAL_W = 1280, LOGICAL_H = 720;
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------------------------------------------------------- 缩放
+  function fit() {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const scale = Math.min(vw / LOGICAL_W, vh / LOGICAL_H);
+    cv.width = LOGICAL_W;
+    cv.height = LOGICAL_H;
+    cv.style.width = Math.floor(LOGICAL_W * scale) + 'px';
+    cv.style.height = Math.floor(LOGICAL_H * scale) + 'px';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  // ---------------------------------------------------------------- 输入
+  const keys = Object.create(null);
+  const input = { left: 0, right: 0, jump: false, attack: false, dash: false, skillQ: false, skillE: false, skillR: false };
+  const press = { jump: false, attack: false, dash: false, skillQ: false, skillE: false, skillR: false };
+
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if (['w', 'a', 's', 'd', 'j', 'k', 'l', 'u', 'i', 'o', ' '].includes(k)) e.preventDefault();
+    if (k === 'k' || k === 'w' || k === ' ') press.jump = true;
+    if (k === 'j') press.attack = true;
+    if (k === 'l') press.dash = true;
+    if (k === 'u') press.skillQ = true;
+    if (k === 'i') press.skillE = true;
+    if (k === 'o') press.skillR = true;
+  });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // 触屏：摇杆 + 按钮
+  const stick = $('stick'), knob = $('knob');
+  let stickId = null, stickCx = 0, stickCy = 0;
+  const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  if (isTouch) $('touch').classList.add('on');
+
+  function stickStart(e) {
+    const t = e.changedTouches ? e.changedTouches[0] : e;
+    stickId = t.identifier ?? 'mouse';
+    const r = stick.getBoundingClientRect();
+    stickCx = r.left + r.width / 2; stickCy = r.top + r.height / 2;
+    stickMove(e);
+  }
+  function stickMove(e) {
+    if (stickId === null) return;
+    const list = e.changedTouches ? [...e.changedTouches] : [e];
+    const t = list.find((x) => (x.identifier ?? 'mouse') === stickId);
+    if (!t) return;
+    let dx = t.clientX - stickCx, dy = t.clientY - stickCy;
+    const max = 46, len = Math.hypot(dx, dy) || 1;
+    if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+    knob.style.transform = `translate(${dx}px,${dy}px)`;
+    const nx = dx / max;
+    input.left = nx < -0.25 ? 1 : 0;
+    input.right = nx > 0.25 ? 1 : 0;
+  }
+  function stickEnd() { stickId = null; knob.style.transform = ''; input.left = 0; input.right = 0; }
+  stick.addEventListener('touchstart', stickStart, { passive: true });
+  stick.addEventListener('touchmove', stickMove, { passive: true });
+  stick.addEventListener('touchend', stickEnd);
+  stick.addEventListener('touchcancel', stickEnd);
+
+  document.querySelectorAll('.vbtn').forEach((btn) => {
+    const k = btn.dataset.k;
+    const down = (e) => { e.preventDefault(); if (k in press) press[k] = true; };
+    btn.addEventListener('touchstart', down, { passive: false });
+    btn.addEventListener('mousedown', down);
+  });
+
+  // ---------------------------------------------------------------- 数据
+  const REALMS = ['练气', '筑基', '金丹', '元婴', '化神', '炼虚', '合体', '大乘', '渡劫'];
+  const SLOTS = { weapon: '法剑', robe: '道袍', charm: '灵符' };
+  const TIERS = [
+    { name: '凡品', color: '#c8d3cf', mul: 1.0 },
+    { name: '灵品', color: '#7ce0a0', mul: 1.5 },
+    { name: '宝品', color: '#7fb6ff', mul: 2.2 },
+    { name: '仙品', color: '#d59bff', mul: 3.1 },
+    { name: '神品', color: '#ffd479', mul: 4.4 },
+  ];
+  const ITEM_POOL = {
+    weapon: ['青锋剑', '斩妖刃', '太虚剑', '血影刀', '断岳剑'],
+    robe: ['素纱袍', '玄光甲', '青云衣', '赤霞袍', '流云衲'],
+    charm: ['聚灵符', '雷纹符', '回春符', '疾风符', '护心符'],
+  };
+
+  const G = {
+    running: false, endless: false, stage: 1, wave: 1, waveTotal: 3,
+    time: 0, cameraX: 0, shake: 0, gold: 0, bestWave: 0, name: '无名散修',
+    worldW: 4200, spawnTimer: 0, enemiesLeft: 0, state: 'menu',
+  };
+
+  const player = {
+    x: 200, y: 0, vx: 0, vy: 0, w: 46, h: 74, face: 1,
+    hp: 100, maxHp: 100, mp: 100, maxMp: 100, onGround: false, jumps: 0,
+    atkTimer: 0, atkCombo: 0, atkCd: 0, invuln: 0, dashCd: 0, dashTimer: 0,
+    animT: 0, hitFlash: 0, skills: { q: 0, e: 0, r: 0 },
+    equip: { weapon: null, robe: null, charm: null },
+  };
+
+  let enemies = [], projectiles = [], drops = [], particles = [], texts = [], platforms = [];
+
+  function statBonus() {
+    let atk = 12, def = 0, hp = 0, mp = 0;
+    for (const slot of Object.keys(player.equip)) {
+      const it = player.equip[slot];
+      if (!it) continue;
+      atk += it.atk || 0; def += it.def || 0; hp += it.hp || 0; mp += it.mp || 0;
+    }
+    return { atk, def, hp, mp };
+  }
+  function refreshMax() {
+    const b = statBonus();
+    player.maxHp = 100 + b.hp;
+    player.maxMp = 100 + b.mp;
+    player.hp = Math.min(player.hp, player.maxHp);
+    player.mp = Math.min(player.mp, player.maxMp);
+  }
+
+  function realmName() {
+    const b = statBonus();
+    const idx = Math.min(REALMS.length - 1, Math.floor((b.atk - 12) / 12));
+    return REALMS[idx];
+  }
+
+  // ---------------------------------------------------------------- 关卡生成
+  function buildLevel(stage) {
+    platforms = [];
+    const groundY = LOGICAL_H - 96;
+    // 地面分段（留几道裂缝做跳台）
+    let x = -200;
+    const segs = [];
+    while (x < G.worldW + 400) {
+      const w = 420 + Math.random() * 360;
+      segs.push([x, x + w]);
+      x += w + 90 + Math.random() * 90;
+    }
+    for (const [a, b] of segs) platforms.push({ x: a, y: groundY, w: b - a, h: 96, kind: 'ground' });
+    // 空中平台
+    const n = 5 + stage * 2;
+    for (let i = 0; i < n; i++) {
+      const px = 260 + i * ((G.worldW - 600) / n) + Math.random() * 120;
+      const py = groundY - 150 - Math.random() * 170;
+      platforms.push({ x: px, y: py, w: 150 + Math.random() * 110, h: 22, kind: 'plat' });
+    }
+    drops = []; projectiles = []; particles = []; texts = []; enemies = [];
+    player.x = 160; player.y = groundY - player.h; player.vx = 0; player.vy = 0;
+    player.hp = player.maxHp; player.mp = player.maxMp;
+  }
+
+  // ---------------------------------------------------------------- 敌人
+  function spawnEnemy(kind, x) {
+    const stageScale = 1 + (G.stage - 1) * 0.35;
+    const base = {
+      walker: { hp: 46, atk: 9, w: 52, h: 58, speed: 92, color: '#3f6f5a' },
+      flyer: { hp: 34, atk: 8, w: 44, h: 44, speed: 128, color: '#5a4a7a' },
+      brute: { hp: 120, atk: 15, w: 74, h: 84, speed: 58, color: '#6a5340' },
+      boss: { hp: 460, atk: 22, w: 120, h: 140, speed: 78, color: '#6a2b3d' },
+    }[kind];
+    const e = {
+      kind, x, y: 0, vx: 0, vy: 0, face: -1,
+      hp: Math.round(base.hp * stageScale), maxHp: Math.round(base.hp * stageScale),
+      atk: Math.round(base.atk * stageScale), w: base.w, h: base.h, speed: base.speed,
+      color: base.color, t: Math.random() * 9, hurt: 0, attackCd: 0, onGround: false,
+      alive: true, phase: 0, dashCd: 2,
+    };
+    const groundY = LOGICAL_H - 96;
+    if (kind === 'flyer') { e.y = groundY - 260 - Math.random() * 120; }
+    else { e.y = groundY - e.h; }
+    enemies.push(e);
+  }
+
+  function waveComposition(wave) {
+    const stage = G.stage;
+    const list = [];
+    const count = 2 + Math.min(6, Math.floor(wave / 2) + stage);
+    for (let i = 0; i < count; i++) {
+      const r = Math.random();
+      if (stage >= 2 && r < 0.22) list.push('brute');
+      else if (r < 0.45) list.push('flyer');
+      else list.push('walker');
+    }
+    return list;
+  }
+
+  function startWave() {
+    const boss = !G.endless && G.wave === G.waveTotal;
+    if (boss) {
+      spawnEnemy('boss', player.x + 620);
+      addText('妖将现身！', player.x + 620, LOGICAL_H - 320, '#ff9b8a', 26);
+    } else {
+      for (const kind of waveComposition(G.wave)) {
+        spawnEnemy(kind, player.x + 420 + Math.random() * 520);
+      }
+    }
+    G.enemiesLeft = enemies.filter((e) => e.alive).length;
+  }
+
+  // ---------------------------------------------------------------- 装备
+  function makeItem(slot) {
+    const tierRoll = Math.random();
+    let tier = 0;
+    if (tierRoll > 0.985) tier = 4; else if (tierRoll > 0.94) tier = 3;
+    else if (tierRoll > 0.82) tier = 2; else if (tierRoll > 0.55) tier = 1;
+    const t = TIERS[tier];
+    const pool = ITEM_POOL[slot];
+    const name = pool[Math.floor(Math.random() * pool.length)];
+    const lvl = 1 + Math.floor((G.stage - 1) * 0.7 + G.bestWave * 0.05);
+    const scale = t.mul * lvl;
+    const it = { slot, tier, name: `${t.name}·${name}`, color: t.color };
+    if (slot === 'weapon') it.atk = Math.round(6 * scale);
+    if (slot === 'robe') { it.def = Math.round(3 * scale); it.hp = Math.round(14 * scale); }
+    if (slot === 'charm') { it.mp = Math.round(16 * scale); it.atk = Math.round(2 * scale); }
+    it.score = (it.atk || 0) * 2 + (it.def || 0) * 2 + (it.hp || 0) * 0.4 + (it.mp || 0) * 0.3;
+    return it;
+  }
+
+  function tryPickup(item) {
+    const cur = player.equip[item.slot];
+    if (!cur || item.score > cur.score) {
+      player.equip[item.slot] = item;
+      refreshMax();
+      addText(`换上 ${item.name}`, player.x, player.y - 20, item.color, 18);
+      return true;
+    }
+    const gold = 8 + Math.round(item.score * 0.6);
+    G.gold += gold;
+    addText(`+${gold} 灵石`, player.x, player.y - 20, '#ffd479', 15);
+    return false;
+  }
+
+  // ---------------------------------------------------------------- 战斗
+  function damageEnemy(e, dmg, knock) {
+    e.hp -= dmg;
+    e.hurt = 0.12;
+    e.vx += knock * 0.6;
+    addText(String(Math.round(dmg)), e.x + e.w / 2, e.y - 10, '#ffe9b0', 16);
+    burst(e.x + e.w / 2, e.y + e.h / 2, e.color, 8);
+    if (e.hp <= 0) {
+      e.alive = false;
+      burst(e.x + e.w / 2, e.y + e.h / 2, '#ffd479', e.kind === 'boss' ? 46 : 18);
+      G.gold += e.kind === 'boss' ? 120 : 6;
+      if (e.kind === 'boss') {
+        for (let i = 0; i < 2; i++) drops.push(dropItem(e.x + 20 + i * 60, e.y));
+        G.shake = 16;
+      } else if (Math.random() < (e.kind === 'brute' ? 0.35 : 0.16)) {
+        drops.push(dropItem(e.x, e.y));
+      }
+    }
+  }
+
+  function dropItem(x, y) {
+    const slots = Object.keys(SLOTS);
+    const slot = slots[Math.floor(Math.random() * slots.length)];
+    const item = makeItem(slot);
+    return { x, y, vy: -260, vx: (Math.random() - 0.5) * 80, item, t: 0 };
+  }
+
+  function hurtPlayer(dmg) {
+    if (player.invuln > 0 || G.state !== 'play') return;
+    const b = statBonus();
+    const real = Math.max(1, Math.round(dmg - b.def * 0.5));
+    player.hp -= real;
+    player.invuln = 0.9;
+    player.hitFlash = 0.25;
+    G.shake = 8;
+    addText(`-${real}`, player.x + player.w / 2, player.y - 6, '#ff8b7a', 17);
+    burst(player.x + player.w / 2, player.y + player.h / 2, '#ef5a4c', 10);
+    if (player.hp <= 0) { player.hp = 0; gameOver(); }
+  }
+
+  function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 260;
+      particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 80, life: 0.4 + Math.random() * 0.5, color });
+    }
+  }
+  function addText(text, x, y, color, size) {
+    texts.push({ text, x, y, color, size: size || 16, life: 0.9, vy: -46 });
+  }
+
+  // ---------------------------------------------------------------- 技能
+  const SKILLS = {
+    q: { cd: 3.2, cost: 18, name: '剑气斩' },
+    e: { cd: 7.5, cost: 30, name: '雷符' },
+    r: { cd: 14, cost: 26, name: '回春' },
+  };
+  function castSkill(which) {
+    const s = SKILLS[which];
+    if (player.skills[which] > 0 || player.mp < s.cost || G.state !== 'play') return;
+    player.skills[which] = s.cd;
+    player.mp -= s.cost;
+    const b = statBonus();
+    if (which === 'q') {
+      projectiles.push({ x: player.x + player.w / 2, y: player.y + 26, vx: player.face * 760, vy: 0, dmg: b.atk * 1.9, life: 1.1, color: '#8ff0c3', w: 46, h: 16, kind: 'q' });
+      addText('剑气斩', player.x, player.y - 24, '#8ff0c3', 16);
+    } else if (which === 'e') {
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        if (Math.abs(e.x - player.x) < 320) damageEnemy(e, b.atk * 2.6, Math.sign(e.x - player.x) || 1);
+      }
+      burst(player.x + player.w / 2, player.y + 20, '#7fc4ff', 26);
+      G.shake = 10;
+      addText('雷符引天雷', player.x, player.y - 24, '#7fc4ff', 16);
+    } else if (which === 'r') {
+      const heal = Math.round(player.maxHp * 0.32);
+      player.hp = Math.min(player.maxHp, player.hp + heal);
+      addText(`+${heal}`, player.x + 20, player.y - 24, '#7ce0a0', 18);
+      burst(player.x + player.w / 2, player.y + player.h / 2, '#7ce0a0', 16);
+    }
+  }
+
+  // ---------------------------------------------------------------- 更新
+  function rectsHit(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function update(dt) {
+    G.time += dt;
+    if (G.state !== 'play') { updateDrops(dt); updateParticles(dt); return; }
+
+    // 输入合成
+    const left = keys['a'] || keys['arrowleft'] ? 1 : input.left;
+    const right = keys['d'] || keys['arrowright'] ? 1 : input.right;
+
+    // 移动
+    const speed = 330;
+    if (player.dashTimer > 0) {
+      player.vx = player.face * 720;
+      player.dashTimer -= dt;
+    } else {
+      player.vx = (right - left) * speed;
+      if (right) player.face = 1;
+      if (left) player.face = -1;
+    }
+    if (player.dashCd > 0) player.dashCd -= dt;
+
+    // 跳跃（二段）
+    if (press.jump) {
+      press.jump = false;
+      if (player.onGround || player.jumps < 1) {
+        if (!player.onGround) player.jumps += 1;
+        player.vy = -880;
+        player.onGround = false;
+        burst(player.x + player.w / 2, player.y + player.h, '#9fb6ac', 5);
+      }
+    }
+    // 闪避
+    if (press.dash) {
+      press.dash = false;
+      if (player.dashCd <= 0) {
+        player.dashCd = 1.1; player.dashTimer = 0.16; player.invuln = Math.max(player.invuln, 0.2);
+      }
+    }
+
+    // 重力
+    player.vy += 2400 * dt;
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+    player.x = Math.max(0, Math.min(G.worldW - player.w, player.x));
+
+    // 碰撞
+    player.onGround = false;
+    for (const p of platforms) {
+      const box = { x: p.x, y: p.y, w: p.w, h: p.h };
+      const me = { x: player.x, y: player.y, w: player.w, h: player.h };
+      if (!rectsHit(me, box)) continue;
+      const prevBottom = player.y + player.h - player.vy * dt;
+      if (player.vy >= 0 && prevBottom <= p.y + 12) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+        player.jumps = 0;
+      }
+    }
+
+    // 攻击
+    if (player.atkCd > 0) player.atkCd -= dt;
+    if (player.atkTimer > 0) player.atkTimer -= dt;
+    if (press.attack) {
+      press.attack = false;
+      if (player.atkCd <= 0) {
+        player.atkTimer = 0.2;
+        player.atkCd = 0.3;
+        player.atkCombo = (player.atkCombo + 1) % 3;
+        const b = statBonus();
+        const range = 92 + player.atkCombo * 12;
+        const hit = {
+          x: player.face > 0 ? player.x + player.w - 8 : player.x - range + 8,
+          y: player.y + 10, w: range, h: player.h - 14,
+        };
+        let landed = false;
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (rectsHit(hit, { x: e.x, y: e.y, w: e.w, h: e.h })) {
+            damageEnemy(e, b.atk * (1 + player.atkCombo * 0.18), player.face);
+            landed = true;
+          }
+        }
+        if (landed) G.shake = Math.max(G.shake, 4);
+      }
+    }
+
+    // 技能键
+    for (const [flag, which] of [['skillQ', 'q'], ['skillE', 'e'], ['skillR', 'r']]) {
+      if (press[flag]) { press[flag] = false; castSkill(which); }
+    }
+    for (const k of Object.keys(player.skills)) {
+      if (player.skills[k] > 0) player.skills[k] = Math.max(0, player.skills[k] - dt);
+    }
+
+    // 蓝量回复 / 无敌时间
+    player.mp = Math.min(player.maxMp, player.mp + dt * 7);
+    if (player.invuln > 0) player.invuln -= dt;
+    if (player.hitFlash > 0) player.hitFlash -= dt;
+    player.animT += dt * (Math.abs(player.vx) > 20 ? 8 : 3);
+
+    // 敌人
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      e.t += dt;
+      if (e.hurt > 0) e.hurt -= dt;
+      const dx = (player.x + player.w / 2) - (e.x + e.w / 2);
+      const adx = Math.abs(dx);
+      if (e.kind === 'flyer') {
+        e.x += Math.sign(dx) * e.speed * dt * (adx > 90 ? 1 : 0.2);
+        e.y += Math.sin(e.t * 2.4) * 46 * dt;
+        if (adx < 340) e.y += (player.y - e.y) * 0.9 * dt;
+      } else if (e.kind === 'boss') {
+        e.attackCd -= dt;
+        e.dashCd -= dt;
+        if (adx > 130) e.x += Math.sign(dx) * e.speed * dt;
+        if (e.dashCd <= 0 && adx < 620 && adx > 140) {
+          e.vx = Math.sign(dx) * 620; e.dashCd = 3.2 + Math.random();
+          addText('妖将冲锋', e.x, e.y - 16, '#ff9b8a', 16);
+        }
+        e.x += e.vx * dt;
+        e.vx *= 0.94;
+        if (e.attackCd <= 0) {
+          e.attackCd = 2.4;
+          for (let i = -1; i <= 1; i++) {
+            projectiles.push({ x: e.x + e.w / 2, y: e.y + 40, vx: i * 190, vy: 120, dmg: e.atk, life: 2.2, color: '#ff8b7a', w: 20, h: 20, kind: 'enemy' });
+          }
+        }
+      } else {
+        if (adx > 40) e.x += Math.sign(dx) * e.speed * dt;
+        if (e.kind === 'brute') {
+          e.attackCd -= dt;
+          if (e.attackCd <= 0 && adx < 110) { e.attackCd = 2.2; G.shake = 8; }
+        }
+      }
+      e.x = Math.max(0, Math.min(G.worldW - e.w, e.x));
+      // 碰触伤害
+      if (rectsHit({ x: e.x, y: e.y, w: e.w, h: e.h }, { x: player.x, y: player.y, w: player.w, h: player.h })) {
+        hurtPlayer(e.atk);
+      }
+    }
+
+    // 弹幕
+    for (const p of projectiles) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.kind === 'q') {
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (rectsHit({ x: p.x, y: p.y, w: p.w, h: p.h }, { x: e.x, y: e.y, w: e.w, h: e.h })) {
+            damageEnemy(e, p.dmg, Math.sign(p.vx));
+            p.life = 0;
+            break;
+          }
+        }
+      } else {
+        if (rectsHit({ x: p.x, y: p.y, w: p.w, h: p.h }, { x: player.x, y: player.y, w: player.w, h: player.h })) {
+          hurtPlayer(p.dmg); p.life = 0;
+        }
+      }
+    }
+    projectiles = projectiles.filter((p) => p.life > 0 && p.x > -100 && p.x < G.worldW + 100);
+
+    enemies = enemies.filter((e) => e.alive || e.hurt > 0);
+    updateDrops(dt);
+    updateParticles(dt);
+
+    // 波次推进
+    if (enemies.filter((e) => e.alive).length === 0) {
+      G.spawnTimer += dt;
+      if (G.spawnTimer > 1.4) {
+        G.spawnTimer = 0;
+        if (G.endless) {
+          G.wave += 1; G.bestWave = Math.max(G.bestWave, G.wave);
+          addText(`第 ${G.wave} 波`, player.x + 200, 200, '#8ff0c3', 24);
+          startWave();
+        } else if (G.wave < G.waveTotal) {
+          G.wave += 1;
+          addText(`第 ${G.wave} 波`, player.x + 200, 200, '#8ff0c3', 22);
+          startWave();
+        } else {
+          stageClear();
+        }
+      }
+    }
+
+    // 相机
+    G.cameraX = Math.max(0, Math.min(G.worldW - LOGICAL_W, player.x - LOGICAL_W * 0.38));
+    if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 40);
+  }
+
+  function updateDrops(dt) {
+    for (const d of drops) {
+      d.t += dt;
+      d.vy += 2000 * dt;
+      d.x += d.vx * dt; d.y += d.vy * dt;
+      const groundY = LOGICAL_H - 96;
+      if (d.y > groundY - 24) { d.y = groundY - 24; d.vy *= -0.35; d.vx *= 0.6; if (Math.abs(d.vy) < 40) d.vy = 0; }
+      if (rectsHit({ x: d.x - 16, y: d.y - 16, w: 32, h: 32 }, { x: player.x, y: player.y, w: player.w, h: player.h })) {
+        tryPickup(d.item); d.dead = true;
+      }
+    }
+    drops = drops.filter((d) => !d.dead);
+  }
+  function updateParticles(dt) {
+    for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; p.life -= dt; }
+    particles = particles.filter((p) => p.life > 0);
+    for (const t of texts) { t.y += t.vy * dt; t.life -= dt; }
+    texts = texts.filter((t) => t.life > 0);
+  }
+
+  // ---------------------------------------------------------------- 绘制
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, 0, 0, LOGICAL_H);
+    g.addColorStop(0, '#0b1b2e');
+    g.addColorStop(0.55, '#12304a');
+    g.addColorStop(1, '#07131c');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+    // 月
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    const moon = ctx.createRadialGradient(1020, 130, 6, 1020, 130, 90);
+    moon.addColorStop(0, '#f6f1d8');
+    moon.addColorStop(0.35, '#e8dcae');
+    moon.addColorStop(1, 'rgba(232,220,174,0)');
+    ctx.fillStyle = moon;
+    ctx.beginPath(); ctx.arc(1020, 130, 90, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // 三层山（视差）
+    const layers = [
+      { speed: 0.12, color: '#0f2438', base: 420, amp: 150, seedOff: 0 },
+      { speed: 0.26, color: '#14314a', base: 500, amp: 190, seedOff: 2.1 },
+      { speed: 0.45, color: '#1b4360', base: 580, amp: 150, seedOff: 4.3 },
+    ];
+    for (const L of layers) {
+      ctx.fillStyle = L.color;
+      ctx.beginPath();
+      ctx.moveTo(-100, LOGICAL_H);
+      for (let x = -100; x <= LOGICAL_W + 100; x += 40) {
+        const wx = x + G.cameraX * L.speed;
+        const y = L.base - Math.abs(Math.sin(wx * 0.0016 + L.seedOff)) * L.amp
+          - Math.sin(wx * 0.006 + L.seedOff) * 22;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(LOGICAL_W + 100, LOGICAL_H);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 竹影
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = '#2f6b53';
+    for (let i = 0; i < 9; i++) {
+      const bx = ((i * 260 - G.cameraX * 0.6) % (LOGICAL_W + 400) + LOGICAL_W + 400) % (LOGICAL_W + 400) - 200;
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(bx, LOGICAL_H); ctx.lineTo(bx + 10, LOGICAL_H - 300); ctx.stroke();
+      ctx.lineWidth = 3;
+      for (let k = 1; k < 6; k++) {
+        const yy = LOGICAL_H - k * 52;
+        ctx.beginPath(); ctx.moveTo(bx + k, yy); ctx.lineTo(bx + k + 34 * (k % 2 ? 1 : -1), yy - 24); ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    // 浮尘光点
+    ctx.save();
+    for (let i = 0; i < 40; i++) {
+      const t = G.time * 12 + i * 137;
+      const x = ((t + i * 61) % (LOGICAL_W + 60)) - 30;
+      const y = ((t * 0.6 + i * 97) % (LOGICAL_H - 80)) + 30;
+      ctx.globalAlpha = 0.25 + 0.25 * Math.sin(G.time * 2 + i);
+      ctx.fillStyle = '#9fe6c6';
+      ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawPlatforms() {
+    for (const p of platforms) {
+      const x = p.x - G.cameraX;
+      if (x + p.w < -50 || x > LOGICAL_W + 50) continue;
+      if (p.kind === 'ground') {
+        const g = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+        g.addColorStop(0, '#2b4a3a');
+        g.addColorStop(0.25, '#1d3329');
+        g.addColorStop(1, '#0b1512');
+        ctx.fillStyle = g;
+        ctx.fillRect(x, p.y, p.w, p.h);
+        ctx.fillStyle = '#3d6a52';
+        ctx.fillRect(x, p.y, p.w, 6);
+        ctx.fillStyle = '#173627';
+        for (let i = 0; i < p.w; i += 46) ctx.fillRect(x + i, p.y + 10, 24, 4);
+      } else {
+        ctx.fillStyle = '#1b3a2c';
+        ctx.fillRect(x, p.y, p.w, p.h);
+        ctx.fillStyle = '#37795d';
+        ctx.fillRect(x, p.y, p.w, 5);
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#8ff0c3';
+        ctx.fillRect(x, p.y + p.h, p.w, 3);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function drawPlayer() {
+    const x = player.x - G.cameraX + player.w / 2;
+    const y = player.y + player.h;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(player.face, 1);
+    const bob = Math.sin(player.animT) * 2;
+    // 影子
+    ctx.globalAlpha = 0.25; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(0, 2, 26, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    // 道袍
+    const robe = ctx.createLinearGradient(0, -70, 0, 0);
+    robe.addColorStop(0, player.hitFlash > 0 ? '#ffb3a8' : '#dfe9f5');
+    robe.addColorStop(1, player.hitFlash > 0 ? '#c4553f' : '#7ba7c9');
+    ctx.fillStyle = robe;
+    ctx.beginPath();
+    ctx.moveTo(-16, -6); ctx.lineTo(-11, -50 + bob); ctx.lineTo(11, -50 + bob); ctx.lineTo(16, -6);
+    ctx.closePath(); ctx.fill();
+    // 腰带
+    ctx.fillStyle = '#e8c06a'; ctx.fillRect(-13, -30 + bob, 26, 5);
+    // 头
+    ctx.fillStyle = '#f2e6d2';
+    ctx.beginPath(); ctx.arc(0, -60 + bob, 12, 0, Math.PI * 2); ctx.fill();
+    // 发髻
+    ctx.fillStyle = '#1a2430';
+    ctx.beginPath(); ctx.arc(0, -70 + bob, 8, Math.PI, 0); ctx.fill();
+    ctx.beginPath(); ctx.arc(-2, -78 + bob, 5, 0, Math.PI * 2); ctx.fill();
+    // 眼睛
+    ctx.fillStyle = '#22303c';
+    ctx.fillRect(4, -62 + bob, 3, 3);
+    // 剑
+    const swing = player.atkTimer > 0 ? (0.9 - player.atkTimer / 0.2 * 1.6) : -0.5;
+    ctx.save();
+    ctx.translate(12, -44 + bob);
+    ctx.rotate(swing);
+    ctx.strokeStyle = '#e8f4ff'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(46, -6); ctx.stroke();
+    ctx.strokeStyle = '#e8c06a'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(-4, -4); ctx.lineTo(4, 4); ctx.stroke();
+    ctx.restore();
+    // 攻击弧光
+    if (player.atkTimer > 0) {
+      ctx.strokeStyle = 'rgba(143,240,195,0.85)';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(14, -44, 52, -1.1, 0.7); ctx.stroke();
+    }
+    if (player.invuln > 0 && Math.floor(G.time * 20) % 2 === 0) {
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#8ff0c3';
+      ctx.beginPath(); ctx.arc(0, -40, 40, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawEnemy(e) {
+    const x = e.x - G.cameraX, y = e.y;
+    ctx.save();
+    ctx.translate(x + e.w / 2, y + e.h);
+    const flash = e.hurt > 0;
+    // 影子
+    ctx.globalAlpha = 0.22; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(0, 2, e.w * 0.45, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    const body = flash ? '#ffd0c4' : e.color;
+    ctx.fillStyle = body;
+    if (e.kind === 'flyer' || e.kind === 'boss') {
+      // 飘浮妖：翅膀
+      const wing = Math.sin(e.t * 8) * 12;
+      ctx.beginPath();
+      ctx.moveTo(-e.w * 0.4, -e.h * 0.7);
+      ctx.quadraticCurveTo(-e.w * 0.95, -e.h * 0.9 + wing, -e.w * 0.5, -e.h * 0.25);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(e.w * 0.4, -e.h * 0.7);
+      ctx.quadraticCurveTo(e.w * 0.95, -e.h * 0.9 - wing, e.w * 0.5, -e.h * 0.25);
+      ctx.fill();
+    }
+    // 身体
+    ctx.beginPath();
+    ctx.ellipse(0, -e.h * 0.45, e.w * 0.42, e.h * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 眼睛
+    ctx.fillStyle = e.kind === 'boss' ? '#ffd479' : '#ff6b6b';
+    const ey = -e.h * 0.55;
+    ctx.beginPath(); ctx.arc(-e.w * 0.13, ey, e.kind === 'boss' ? 7 : 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(e.w * 0.13, ey, e.kind === 'boss' ? 7 : 4, 0, Math.PI * 2); ctx.fill();
+    // 角
+    if (e.kind === 'boss' || e.kind === 'brute') {
+      ctx.strokeStyle = '#f3e6c8'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(-e.w * 0.2, -e.h * 0.85); ctx.lineTo(-e.w * 0.32, -e.h * 1.05); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(e.w * 0.2, -e.h * 0.85); ctx.lineTo(e.w * 0.32, -e.h * 1.05); ctx.stroke();
+    }
+    // 血条
+    if (e.hp < e.maxHp) {
+      const bw = e.w * 0.9;
+      ctx.fillStyle = '#000a'; ctx.fillRect(-bw / 2, -e.h - 14, bw, 6);
+      ctx.fillStyle = e.kind === 'boss' ? '#ff8b7a' : '#7ce0a0';
+      ctx.fillRect(-bw / 2, -e.h - 14, bw * Math.max(0, e.hp / e.maxHp), 6);
+    }
+    ctx.restore();
+  }
+
+  function drawProjectiles() {
+    for (const p of projectiles) {
+      const x = p.x - G.cameraX;
+      ctx.save();
+      if (p.kind === 'q') {
+        const g = ctx.createLinearGradient(x, p.y, x + p.vx * 0.05, p.y);
+        g.addColorStop(0, '#eafff6'); g.addColorStop(1, '#39d3a0');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(x, p.y + 8); ctx.lineTo(x + (p.vx > 0 ? -p.w : p.w), p.y + 8);
+        ctx.lineTo(x + (p.vx > 0 ? -p.w * 0.7 : p.w * 0.7), p.y - 8); ctx.closePath(); ctx.fill();
+      } else {
+        ctx.fillStyle = '#ff8b7a';
+        ctx.beginPath(); ctx.arc(x, p.y, 9, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 0.4; ctx.beginPath(); ctx.arc(x, p.y, 15, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawDrops() {
+    for (const d of drops) {
+      const x = d.x - G.cameraX, y = d.y;
+      const pulse = 1 + Math.sin(d.t * 6) * 0.12;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(pulse, pulse);
+      ctx.fillStyle = d.item.color;
+      ctx.shadowColor = d.item.color; ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.moveTo(0, -14); ctx.lineTo(11, 0); ctx.lineTo(0, 14); ctx.lineTo(-11, 0); ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2));
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - G.cameraX, p.y, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+    for (const t of texts) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, t.life * 1.6));
+      ctx.fillStyle = t.color;
+      ctx.font = `bold ${t.size}px "Noto Serif SC",Georgia,serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(t.text, t.x - G.cameraX, t.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
+
+  function render() {
+    ctx.save();
+    if (G.shake > 0) {
+      ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+    }
+    drawBackground();
+    drawPlatforms();
+    drawDrops();
+    for (const e of enemies) if (e.alive) drawEnemy(e);
+    drawProjectiles();
+    drawPlayer();
+    drawParticles();
+    ctx.restore();
+
+    // 关卡提示
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#8ff0c3';
+    ctx.font = 'bold 18px "Noto Serif SC",Georgia,serif';
+    ctx.fillText(G.endless ? `无尽 · 第 ${G.wave} 波` : `第 ${G.stage} 关 · 第 ${G.wave}/${G.waveTotal} 波`, 24, 132);
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------- HUD
+  function updateHud() {
+    $('hpBar').style.width = Math.max(0, (player.hp / player.maxHp) * 100) + '%';
+    $('mpBar').style.width = Math.max(0, (player.mp / player.maxMp) * 100) + '%';
+    $('hud-name').textContent = G.name;
+    $('hud-realm').textContent = realmName();
+    $('hud-stage').textContent = G.endless ? '无尽' : `${G.stage}-${G.wave}`;
+    $('hud-gold').textContent = G.gold;
+    $('hud-best').textContent = G.bestWave;
+    for (const [id, key] of [['sk-q', 'q'], ['sk-e', 'e'], ['sk-r', 'r']]) {
+      const el = document.querySelector(`#${id} .cd`);
+      if (player.skills[key] > 0.05) {
+        el.classList.remove('hidden');
+        el.textContent = player.skills[key].toFixed(1);
+      } else el.classList.add('hidden');
+    }
+  }
+
+  // ---------------------------------------------------------------- 存档
+  let saveTimer = 0;
+  async function saveProgress() {
+    try {
+      await fetch('/api/rpg/action/save', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: G.name, stage: G.stage, best_wave: G.bestWave, gold: G.gold,
+          equip: player.equip,
+        }),
+      });
+    } catch {}
+  }
+  async function loadProgress(name) {
+    try {
+      const res = await fetch(`/api/rpg/action/save?name=${encodeURIComponent(name)}`);
+      const data = await res.json();
+      const s = data.save || {};
+      G.stage = s.stage || 1;
+      G.bestWave = s.best_wave || 0;
+      G.gold = s.gold || 0;
+      if (s.equip && typeof s.equip === 'object') {
+        for (const slot of Object.keys(player.equip)) {
+          const it = s.equip[slot];
+          if (it && it.slot === slot) player.equip[slot] = it;
+        }
+      }
+      refreshMax();
+    } catch {}
+  }
+
+  // ---------------------------------------------------------------- 流程
+  function startGame(endless) {
+    G.name = ($('nameInput').value || '无名散修').trim().slice(0, 16) || '无名散修';
+    localStorage.setItem('rpg.action.name', G.name);
+    G.endless = !!endless;
+    G.stage = endless ? 1 : G.stage;
+    G.wave = 1;
+    G.waveTotal = 3;
+    G.bestWave = endless ? 0 : G.bestWave;
+    G.state = 'play';
+    $('start').classList.add('hidden');
+    $('over').classList.add('hidden');
+    buildLevel(G.stage);
+    refreshMax();
+    startWave();
+    G.running = true;
+  }
+
+  function stageClear() {
+    G.state = 'clear';
+    G.stage += 1;
+    G.wave = 1;
+    G.bestWave = Math.max(G.bestWave, G.waveTotal);
+    saveProgress();
+    showOver(`第 ${G.stage - 1} 关已破！`, `境界 ${realmName()} · 灵石 ${G.gold} · 下一关：第 ${G.stage} 关`, '继续闯关');
+  }
+
+  function gameOver() {
+    G.state = 'dead';
+    saveProgress();
+    showOver('道消身殒', `止步于第 ${G.stage} 关 第 ${G.wave} 波 · 灵石 ${G.gold}`, '再来一次');
+  }
+
+  function showOver(title, text, btn) {
+    $('overTitle').textContent = title;
+    $('overText').textContent = text;
+    $('btnRetry').textContent = btn;
+    $('over').classList.remove('hidden');
+  }
+
+  $('btnStart').addEventListener('click', () => { G.state = 'play'; startGame(false); });
+  $('btnEndless').addEventListener('click', () => { G.state = 'play'; startGame(true); });
+  $('btnRetry').addEventListener('click', () => {
+    $('over').classList.add('hidden');
+    if (G.state === 'clear') { G.state = 'play'; buildLevel(G.stage); refreshMax(); startWave(); }
+    else startGame(G.endless);
+  });
+  $('btnHome').addEventListener('click', () => {
+    $('over').classList.add('hidden');
+    $('start').classList.remove('hidden');
+    G.state = 'menu';
+  });
+
+  // ---------------------------------------------------------------- 主循环
+  let last = performance.now();
+  let hudTimer = 0;
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (G.running) {
+      update(dt);
+      render();
+      hudTimer += dt;
+      if (hudTimer > 0.08) { hudTimer = 0; updateHud(); }
+      saveTimer += dt;
+      if (saveTimer > 20) { saveTimer = 0; saveProgress(); }
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // 预载存档 & 名字
+  const savedName = localStorage.getItem('rpg.action.name');
+  if (savedName) $('nameInput').value = savedName;
+  loadProgress(savedName || '无名散修').then(() => updateHud());
+  window.__rpgAction = { G, player, enemies: () => enemies, startGame };
+})();
+</script>
+</body>
+</html>

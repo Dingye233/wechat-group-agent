@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.services import rpg_game
 
@@ -288,11 +288,79 @@ async def rpg_admin_broadcast(payload: dict = Body(...)) -> dict:
 
 page_router = APIRouter(tags=["rpg"])
 
+ACTION_PAGE = Path(__file__).resolve().parents[2] / "frontend" / "rpg-action.html"
+
 
 def page_html() -> HTMLResponse:
     if not PAGE.is_file():
         return HTMLResponse("<h1>修仙界尚未开辟</h1>", status_code=404)
     return HTMLResponse(PAGE.read_text(encoding="utf-8"))
+
+
+def action_html() -> HTMLResponse:
+    if not ACTION_PAGE.is_file():
+        return HTMLResponse("<h1>动作模式尚未开辟</h1>", status_code=404)
+    return HTMLResponse(ACTION_PAGE.read_text(encoding="utf-8"))
+
+
+@page_router.get("/rpg/action", response_class=HTMLResponse)
+async def rpg_action_page() -> HTMLResponse:
+    return action_html()
+
+
+PLAY_PAGE = Path(__file__).resolve().parents[2] / "frontend" / "rpg-play.html"
+MANIFEST = Path(__file__).resolve().parents[2] / "frontend" / "manifest.json"
+SW_JS = Path(__file__).resolve().parents[2] / "frontend" / "sw.js"
+ICON_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+
+@page_router.get("/rpg/play", response_class=HTMLResponse)
+async def rpg_play_page() -> HTMLResponse:
+    if not PLAY_PAGE.is_file():
+        return RedirectResponse("/rpg", status_code=307)
+    return HTMLResponse(PLAY_PAGE.read_text(encoding="utf-8"))
+
+
+@page_router.get("/rpg/manifest.json")
+async def rpg_manifest() -> FileResponse:
+    if not MANIFEST.is_file():
+        raise HTTPException(status_code=404, detail="manifest 缺失")
+    return FileResponse(str(MANIFEST), media_type="application/manifest+json")
+
+
+@page_router.get("/rpg/sw.js")
+async def rpg_sw() -> FileResponse:
+    if not SW_JS.is_file():
+        raise HTTPException(status_code=404, detail="service worker 缺失")
+    return FileResponse(str(SW_JS), media_type="application/javascript",
+                        headers={"Service-Worker-Allowed": "/"})
+
+
+@page_router.get("/rpg/icon-{size}.png")
+async def rpg_icon(size: str) -> FileResponse:
+    path = ICON_DIR / f"icon-{size}.png"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="图标缺失")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@router.get("/rpg/action/save")
+async def rpg_action_load(name: str = Query(...)) -> dict:
+    return {"ok": True, "save": rpg_game.load_action(name)}
+
+
+@router.post("/rpg/action/save")
+async def rpg_action_save(payload: dict = Body(...)) -> dict:
+    try:
+        save = rpg_game.save_action(str(payload.get("name") or ""), payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "save": save}
+
+
+@router.get("/rpg/action/leaderboard")
+async def rpg_action_leaderboard(limit: int = Query(default=10, ge=1, le=50)) -> dict:
+    return {"ok": True, "players": rpg_game.action_leaderboard(limit)}
 
 
 @page_router.get("/rpg", response_class=HTMLResponse)

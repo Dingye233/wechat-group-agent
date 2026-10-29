@@ -68,6 +68,14 @@ def init_db() -> None:
                 text TEXT NOT NULL,
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS action_saves (
+                name TEXT PRIMARY KEY,
+                stage INTEGER NOT NULL DEFAULT 1,
+                best_wave INTEGER NOT NULL DEFAULT 0,
+                gold INTEGER NOT NULL DEFAULT 0,
+                equip_json TEXT NOT NULL DEFAULT '{}',
+                updated_at REAL NOT NULL
+            );
             """
         )
         db.commit()
@@ -649,5 +657,72 @@ def admin_overview() -> dict[str, Any]:
                 {"code": c, "leader": p["leader"], "members": list(p["members"])}
                 for c, p in _parties.items()
             ],
+            "action_players": _action_count(),
             "latest_events": [dict(e) for e in latest],
         }
+
+
+# --------------------------------------------------------------------------
+# 动作闯关模式：存档
+# --------------------------------------------------------------------------
+
+def _action_count() -> int:
+    try:
+        db = _db()
+        return int(db.execute("SELECT COUNT(*) AS n FROM action_saves").fetchone()["n"] or 0)
+    except Exception:
+        return 0
+
+
+def load_action(name: str) -> dict[str, Any]:
+    with _lock:
+        init_db()
+        row = _db().execute("SELECT * FROM action_saves WHERE name=?", ((name or "").strip()[:16],)).fetchone()
+        if row is None:
+            return {"name": name, "stage": 1, "best_wave": 0, "gold": 0, "equip": {}, "new": True}
+        try:
+            equip = json.loads(row["equip_json"] or "{}")
+        except Exception:
+            equip = {}
+        return {
+            "name": row["name"],
+            "stage": int(row["stage"]),
+            "best_wave": int(row["best_wave"]),
+            "gold": int(row["gold"]),
+            "equip": equip if isinstance(equip, dict) else {},
+            "updated_at": row["updated_at"],
+        }
+
+
+def save_action(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    with _lock:
+        init_db()
+        clean = (name or "").strip()[:16]
+        if not clean:
+            raise ValueError("道号不能为空")
+        current = load_action(clean)
+        stage = max(1, min(99, int(payload.get("stage") or current["stage"])))
+        best_wave = max(current["best_wave"], int(payload.get("best_wave") or 0))
+        gold = max(0, int(payload.get("gold") if payload.get("gold") is not None else current["gold"]))
+        equip = payload.get("equip")
+        if not isinstance(equip, dict):
+            equip = current["equip"]
+        db = _db()
+        db.execute(
+            "INSERT INTO action_saves (name, stage, best_wave, gold, equip_json, updated_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET stage=excluded.stage, best_wave=excluded.best_wave, "
+            "gold=excluded.gold, equip_json=excluded.equip_json, updated_at=excluded.updated_at",
+            (clean, stage, best_wave, gold, json.dumps(equip, ensure_ascii=False), time.time()),
+        )
+        db.commit()
+        return load_action(clean)
+
+
+def action_leaderboard(limit: int = 10) -> list[dict[str, Any]]:
+    with _lock:
+        init_db()
+        rows = _db().execute(
+            "SELECT name, stage, best_wave, gold FROM action_saves ORDER BY best_wave DESC, stage DESC LIMIT ?",
+            (max(1, min(50, limit)),),
+        ).fetchall()
+        return [{"rank": i + 1, **dict(r)} for i, r in enumerate(rows)]

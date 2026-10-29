@@ -95,7 +95,7 @@
 
 <div class="wrap">
   <main>
-    <section class="card">
+    <section class="card" id="card-status">
       <div class="title">☯ <span id="whoami">道友</span> <small id="realmTag">练气</small></div>
       <div class="row" style="margin:10px 0 6px">
         <span class="muted">修为</span><div class="bar" style="flex:1"><i id="expBar"></i></div>
@@ -113,7 +113,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="card-actions">
       <div class="actions">
         <button class="btn" data-act="cultivate">🧘 打坐修炼</button>
         <button class="btn gold" data-act="breakthrough">⚡ 突破境界</button>
@@ -122,7 +122,7 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="card-party">
       <div class="title" style="font-size:16px">⛩ 组队副本</div>
       <div class="row" style="margin-top:10px">
         <button class="btn" id="partyCreate">创建队伍</button>
@@ -135,7 +135,7 @@
       <div class="online" id="partyMembers" style="margin-top:8px"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="card-log">
       <div class="title" style="font-size:16px">📜 见闻录</div>
       <div class="log" id="log"></div>
     </section>
@@ -408,16 +408,40 @@
     } catch (err) { toast(err.message); }
   });
 
+  const isMobile = () => window.matchMedia('(max-width: 860px)').matches;
+
+  function applyTab(tab) {
+    const cards = {
+      status: $('card-status'),
+      actions: $('card-actions'),
+      party: $('card-party'),
+      log: $('card-log'),
+    };
+    const sidePeople = $('side-people');
+    const sideChat = $('side-chat');
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+    if (!isMobile()) {
+      Object.values(cards).forEach((el) => { if (el) el.style.display = ''; });
+      sidePeople?.classList.remove('active');
+      sideChat?.classList.remove('active');
+      return;
+    }
+    const show = { status: tab === 'play', actions: tab === 'play', party: tab === 'play', log: tab === 'log' };
+    Object.entries(cards).forEach(([key, el]) => { if (el) el.style.display = show[key] ? '' : 'none'; });
+    sidePeople?.classList.toggle('active', tab === 'people');
+    sideChat?.classList.toggle('active', tab === 'chat');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (tab === 'chat') { const c = $('chat'); if (c) c.scrollTop = c.scrollHeight; }
+  }
+
   document.querySelectorAll('#tabs button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b === btn));
-      const tab = btn.dataset.tab;
-      document.querySelectorAll('.side').forEach((el) => el.classList.remove('active'));
-      if (tab === 'people') $('side-people').classList.add('active');
-      if (tab === 'chat') $('side-chat').classList.add('active');
-      if (tab === 'log') { document.querySelector('main').scrollIntoView({behavior: 'smooth'}); }
-    });
+    btn.addEventListener('click', () => applyTab(btn.dataset.tab));
   });
+  window.addEventListener('resize', () => {
+    const active = document.querySelector('#tabs button.on');
+    applyTab(active ? active.dataset.tab : 'play');
+  });
+  applyTab('play');
 
   const saved = localStorage.getItem('rpg.name');
   if (saved) $('nameInput').value = saved;

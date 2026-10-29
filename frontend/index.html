@@ -797,19 +797,19 @@
             <div>
               <p class="eyebrow">IMMORTAL REALM</p>
               <h1 class="page-title">修仙界</h1>
-              <p class="page-sub">东方修仙多人 RPG · 打坐、突破、秘境、组队副本、论道。手机/电脑自适应，局域网可玩。</p>
+              <p class="page-sub">东方修仙：横版动作闯关 + 文字修行（打坐/突破/组队/论道）。手机横屏可玩，可装到桌面当 App。</p>
             </div>
             <div class="page-actions">
               <div id="rpg-seg" style="display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-right:8px">
                 <button type="button" data-rpg-view="game" class="rpg-seg-btn" style="padding:8px 14px;background:var(--accent,#2a6b4f);color:#fff;border:0;cursor:pointer">游戏</button>
                 <button type="button" data-rpg-view="admin" class="rpg-seg-btn" style="padding:8px 14px;background:transparent;color:inherit;border:0;cursor:pointer">后台管理</button>
               </div>
-              <a class="btn btn-ghost" id="rpg-open-lan" href="/rpg" target="_blank" rel="noreferrer">新窗口打开</a>
+              <a class="btn btn-ghost" id="rpg-open-lan" href="/rpg/play" target="_blank" rel="noreferrer">新窗口打开</a>
             </div>
           </div>
 
           <div class="rpg-frame-wrap" id="rpg-view-game">
-            <iframe id="rpg-frame" title="修仙界" data-src="/rpg" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#08110c"></iframe>
+            <iframe id="rpg-frame" title="修仙界" data-src="/rpg/play" style="width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--line);border-radius:16px;background:#08110c"></iframe>
           </div>
 
           <div id="rpg-view-admin" hidden>
@@ -874,6 +874,10 @@
           viewGame.hidden = active !== 'game';
           viewAdmin.hidden = active !== 'admin';
           if (active === 'admin') loadAdmin();
+          if (active === 'game') {
+            const frame = document.getElementById('rpg-frame');
+            if (frame && !frame.getAttribute('src')) frame.setAttribute('src', frame.dataset.src || '/rpg/play');
+          }
         }
         seg.addEventListener('click', (e) => {
           const btn = e.target.closest('button[data-rpg-view]');
