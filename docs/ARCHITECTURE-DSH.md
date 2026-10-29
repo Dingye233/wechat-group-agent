@@ -1735,3 +1735,44 @@ native 模式返回自然语言时，任务 runner 会回退为：
 ```
 
 因此不强制模型输出群伴自定义 JSON 协议。
+
+---
+
+## 51. 私聊恢复：联系人/管理员监听桥接
+
+拆分到 remote adapter 后，`RemoteAdapter` 没有：
+
+- `list_contacts`
+- `set_admin_contacts`
+- `get_contact_messages`
+
+导致：
+
+```text
+/api/contacts → []
+service 不知道管理员私聊要监听
+私聊事件进不来
+```
+
+新增服务端：
+
+```text
+GET  /v1/contacts
+GET  /v1/contacts/{wxid}/messages
+POST /v1/admin_contacts
+```
+
+`RemoteAdapter` 补齐对应方法，并把管理员 wxid 推给 service；service 重新注册 DM listener。
+
+同时给 DirectMessage 落库加 `_message_write_lock`：
+
+- 发送后的乐观行与微信回读 echo 共用锁
+- 先到的一方更新/消费另一方
+- 私聊不再出现 self + agent 双行
+
+验证：
+
+```text
+/api/contacts → 442
+outbound target_wxid jobs 45-48 → sent
+```

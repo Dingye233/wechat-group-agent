@@ -254,6 +254,38 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             else {}
         }
 
+    @app.get("/v1/contacts", dependencies=[Depends(_auth)])
+    async def contacts() -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        loader = getattr(state.adapter, "list_contacts", None)
+        if not callable(loader):
+            return {"contacts": []}
+        try:
+            rows = await loader()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"contacts": list(rows or [])}
+
+    @app.get("/v1/contacts/{wxid}/messages", dependencies=[Depends(_auth)])
+    async def contact_messages(wxid: str, limit: int = 100) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        loader = getattr(state.adapter, "get_contact_messages", None)
+        if not callable(loader):
+            return {"messages": []}
+        try:
+            rows = await loader(wxid, max(1, min(300, int(limit))))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"messages": list(rows or [])}
+
+    @app.post("/v1/admin_contacts", dependencies=[Depends(_auth)])
+    async def admin_contacts(payload: dict[str, Any]) -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        setter = getattr(state.adapter, "set_admin_contacts", None)
+        if callable(setter):
+            setter({str(item) for item in payload.get("wxids") or [] if str(item)})
+        return {"ok": True, "count": len(payload.get("wxids") or [])}
+
     @app.post("/v1/send_text", dependencies=[Depends(_auth)])
     async def send_text(payload: dict[str, Any]) -> dict[str, Any]:
         assert state is not None and state.adapter is not None

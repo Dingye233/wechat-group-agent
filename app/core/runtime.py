@@ -1529,6 +1529,10 @@ class RuntimeManager:
         return payload
 
     async def _handle_direct_message(self, data: Any) -> None:
+        async with self._message_write_lock:
+            await self._handle_direct_message_locked(data)
+
+    async def _handle_direct_message_locked(self, data: Any) -> None:
         if not isinstance(data, dict):
             return
         wxid = str(data.get("contact_wxid") or "").strip()
@@ -2285,6 +2289,69 @@ class RuntimeManager:
             allow(120.0)
         await self.adapter.send_image(wxid, path)
 
+    async def _persist_direct_outgoing(
+        self,
+        contact_id: int,
+        *,
+        text: str,
+        is_agent: bool,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._message_write_lock:
+            async with SessionLocal() as db:
+                contact = await db.get(Contact, contact_id)
+                recent = (
+                    await db.execute(
+                        select(DirectMessage)
+                        .where(
+                            DirectMessage.contact_id == contact_id,
+                            DirectMessage.is_self.is_(True),
+                            DirectMessage.external_id.is_not(None),
+                            DirectMessage.created_at >= now - timedelta(seconds=120),
+                        )
+                        .order_by(DirectMessage.id.desc())
+                        .limit(20)
+                    )
+                ).scalars().all()
+                for row in recent:
+                    if (row.content or "").strip() == str(text).strip():
+                        row.meta = {
+                            **(row.meta or {}),
+                            "_direct_pending": False,
+                            "_direct_confirmed": row.external_id or "",
+                            "source": "admin-agent" if is_agent else "dashboard",
+                        }
+                        if contact is not None:
+                            contact.last_message_at = now
+                        await db.commit()
+                        await db.refresh(row)
+                        payload = direct_message_dict(row)
+                        self.broadcast("direct.message", payload)
+                        return payload
+                row = DirectMessage(
+                    external_id=None,
+                    contact_id=contact_id,
+                    account_key=self.account_key,
+                    sender_wxid=self.account_key,
+                    sender_name=self.bot_name,
+                    is_self=True,
+                    kind="text",
+                    content=text,
+                    meta={
+                        "source": "admin-agent" if is_agent else "dashboard",
+                        "_direct_pending": True,
+                    },
+                    created_at=now,
+                )
+                db.add(row)
+                if contact is not None:
+                    contact.last_message_at = now
+                await db.commit()
+                await db.refresh(row)
+                payload = direct_message_dict(row)
+            self.broadcast("direct.message", payload)
+            return payload
+
     async def send_contact_message(
         self,
         contact_id: int,
@@ -2327,32 +2394,11 @@ class RuntimeManager:
             await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
         else:
             await self.adapter.send_text(wxid, text)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        async with SessionLocal() as db:
-            contact = await db.get(Contact, contact_id)
-            row = DirectMessage(
-                external_id=None,
-                contact_id=contact_id,
-                account_key=self.account_key,
-                sender_wxid=self.account_key,
-                sender_name=self.bot_name,
-                is_self=True,
-                kind="text",
-                content=text,
-                meta={
-                    "source": "admin-agent" if is_agent else "dashboard",
-                    "_direct_pending": True,
-                },
-                created_at=now,
-            )
-            db.add(row)
-            if contact is not None:
-                contact.last_message_at = now
-            await db.commit()
-            await db.refresh(row)
-            payload = direct_message_dict(row)
-        self.broadcast("direct.message", payload)
-        return payload
+        return await self._persist_direct_outgoing(
+            contact_id,
+            text=text,
+            is_agent=is_agent,
+        )
 
     def _schedule_proactive(self, group_id: int, minutes: int = 90) -> None:
         previous = self._proactive_tasks.pop(group_id, None)

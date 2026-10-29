@@ -11,6 +11,7 @@ import asyncio
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -198,6 +199,42 @@ class RemoteAdapter(BaseAdapter):
                     )
                 self.emit("log", message=f"wechatauto 事件流断开：{exc}", level="warn")
                 await asyncio.sleep(1.5)
+
+    async def list_contacts(self) -> list[dict[str, Any]]:
+        response = await self._http().get("/v1/contacts")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return list(response.json().get("contacts") or [])
+
+    async def get_contact_messages(
+        self, wxid: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        response = await self._http().get(
+            f"/v1/contacts/{quote(str(wxid), safe='')}/messages",
+            params={"limit": max(1, min(300, int(limit)))},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                str(response.json().get("detail") or response.text)[:1000]
+            )
+        return list(response.json().get("messages") or [])
+
+    def set_admin_contacts(self, wxids: set[str]) -> None:
+        """Push admin DM listen targets to the service without blocking sync."""
+        values = [str(item) for item in (wxids or set()) if str(item)]
+
+        async def push() -> None:
+            try:
+                await self._http().post("/v1/admin_contacts", json={"wxids": values})
+            except Exception:
+                pass
+
+        try:
+            asyncio.get_running_loop().create_task(push())
+        except RuntimeError:
+            pass
 
     async def send_text(self, room_id: str, text: str, *, reuse_chat: bool = False) -> None:
         response = await self._http().post(
