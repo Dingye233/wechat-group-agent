@@ -730,3 +730,23 @@ GET /api/diagnostics
 ```
 
 未验证不会自动重试发送，避免重复消息；需要人工确认或重新执行。
+
+---
+
+## 24. wechatauto 事件持久化
+
+事件不再只存在内存 ring buffer。
+
+写入：
+
+```text
+data/wechatauto-events.jsonl
+```
+
+- 追加写，5MB 轮转
+- 进程启动时恢复最近 500 条
+- `GET /api/wechatauto/events` 仍返回最近事件
+- `/api/diagnostics` 显示 `durable=true` 和文件路径
+- `clear()` 同时清空内存和文件
+
+这为独立 wechatauto 服务的 event stream / replay 提供了第一个持久化落点。

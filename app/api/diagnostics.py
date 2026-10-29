@@ -50,6 +50,7 @@ async def diagnostics(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
         "tasks": {"counts": counts, "recent": tasks[:10]},
         "events": {
             "buffered": len(wechatauto_events.recent(500)),
-            "durable": False,
+            "durable": True,
+            "path": wechatauto_events.event_path(),
         },
     }
