@@ -340,7 +340,13 @@ def _ensure_profile(name: str, scope: str) -> Path:
             if not isinstance(policy, dict) or plugin_id in imported_ids:
                 continue
             rows.append(
-                {"id": str(plugin_id), "disabled": not bool(policy.get("private", True))}
+                {
+                    "id": str(plugin_id),
+                    "disabled": not (
+                        bool(policy.get("enabled", True))
+                        and bool(policy.get("private", True))
+                    ),
+                }
             )
         toggles = _read_json(profile / "plugin-toggles.json", {})
         if isinstance(toggles, dict):

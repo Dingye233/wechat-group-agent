@@ -3988,8 +3988,9 @@ function pluginChannelNode(row, channel, labelText, disabled = false) {
   };
   const locked = Boolean(row.locked && row.locked[channel]);
   input.checked = Boolean(channels[channel]);
-  input.disabled = disabled || locked;
+  input.disabled = disabled || row.enabled === false || locked;
   if (locked) input.title = '该通道被安全策略锁定';
+  if (row.enabled === false) input.title = '插件已停用；先打开左侧总开关';
   input.setAttribute('aria-label', `${row.name || row.id} ${labelText}开关`);
   input.addEventListener('change', () => {
     const next = { ...channels, [channel]: input.checked };
@@ -4012,6 +4013,32 @@ function pluginChannelNode(row, channel, labelText, disabled = false) {
   return label;
 }
 
+function pluginEnableNode(row, disabled = false) {
+  const label = el('label', 'plugin-switch plugin-enable');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = row.enabled !== false;
+  input.disabled = disabled;
+  input.setAttribute('aria-label', `${row.name || row.id} 启用开关`);
+  input.addEventListener('change', () => {
+    if (!input.checked && row.core) {
+      const critical = Boolean(row.critical) || row.id === 'qunban-native';
+      const message = critical
+        ? `「${row.name || row.id}」是群伴/DSH 的关键插件。停用后相关工具或会话可能不可用。\n\n确认停用吗？`
+        : `「${row.name || row.id}」是 DSH 核心插件。停用可能导致对应会话、模型或工具链不可用。\n\n确认停用吗？`;
+      if (!window.confirm(message)) {
+        input.checked = true;
+        return;
+      }
+    }
+    setPluginEnabled(row.id, input.checked, row);
+  });
+  label.appendChild(input);
+  label.appendChild(el('span', 'plugin-switch-track'));
+  label.appendChild(el('span', 'plugin-switch-text', input.checked ? '启用' : '停用'));
+  return label;
+}
+
 function pluginChannelSwitches(row, disabled = false) {
   const wrap = el('div', 'plugin-channels');
   wrap.appendChild(pluginChannelNode(row, 'private', '私聊', disabled));
@@ -4024,6 +4051,7 @@ function pluginToolChannelNode(pluginRow, tool, channel, labelText) {
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.checked = Boolean(tool.channels?.[channel]);
+  input.disabled = pluginRow.enabled === false;
   input.setAttribute(
     'aria-label',
     `${pluginRow.name || pluginRow.id} / ${tool.name} ${labelText}开关`,
@@ -4073,27 +4101,35 @@ function pluginCard(row, options = {}) {
     private: !row.disabled,
     group: !row.disabled,
   };
+  const enabled = row.enabled !== false;
   const bothOff = !channels.private && !channels.group;
-  const card = el('article', `plugin-row${bothOff ? ' is-disabled' : ''}`);
+  const unavailable = row.installed === false || row.source === 'optional';
+  const card = el(
+    'article',
+    `plugin-row${!enabled || bothOff ? ' is-disabled' : ''}`,
+  );
   const iconWrap = el('div', 'plugin-row-icon');
   iconWrap.innerHTML = icon('plug', 18);
   card.appendChild(iconWrap);
   const body = el('div', 'plugin-row-body');
   const title = el('div', 'plugin-row-title');
   title.appendChild(el('strong', null, row.id || 'plugin'));
-  title.appendChild(
-    el(
-      'span',
-      `plugin-badge${bothOff ? ' muted' : ' accent'}`,
-      bothOff
-        ? row.installed === false || row.source === 'optional'
-          ? '未安装'
-          : '已停用'
+  const badgeText = unavailable
+    ? '未安装'
+    : !enabled
+      ? '已停用'
+      : bothOff
+        ? '无通道'
         : channels.private && channels.group
           ? '全通道'
           : channels.private
             ? '仅私聊'
-            : '仅群聊',
+            : '仅群聊';
+  title.appendChild(
+    el(
+      'span',
+      `plugin-badge${!enabled || bothOff ? ' muted' : ' accent'}`,
+      badgeText,
     ),
   );
   body.appendChild(title);
@@ -4105,7 +4141,8 @@ function pluginCard(row, options = {}) {
   const meta = el('div', 'plugin-meta');
   meta.appendChild(el('span', 'plugin-cat', row.category || '其他'));
   if (row.version) meta.appendChild(el('span', 'plugin-version', `v${row.version}`));
-  if (row.installed === false || row.source === 'optional') {
+  if (unavailable) {
+    meta.appendChild(pluginEnableNode({ ...row, enabled: false }, true));
     meta.appendChild(
       pluginChannelSwitches(
         { ...row, channels: { private: false, group: false } },
@@ -4114,6 +4151,7 @@ function pluginCard(row, options = {}) {
     );
     meta.appendChild(el('span', 'plugin-readonly', '未安装'));
   } else {
+    meta.appendChild(pluginEnableNode(row));
     meta.appendChild(pluginChannelSwitches(row));
   }
   card.appendChild(meta);
@@ -4166,7 +4204,10 @@ function renderInstalledPlugins() {
       ),
     );
     main.appendChild(info);
-    main.appendChild(pluginChannelSwitches(row));
+    const actions = el('div', 'plugin-mini-actions');
+    actions.appendChild(pluginEnableNode(row));
+    actions.appendChild(pluginChannelSwitches(row));
+    main.appendChild(actions);
     item.appendChild(main);
     const functions = pluginFunctions(row);
     if (functions) item.appendChild(functions);
@@ -4186,6 +4227,24 @@ async function setPluginToolChannels(id, tool, channels) {
       }),
     });
     toast(`功能「${tool}」通道已保存；重启对应 DSH 链路后完全生效`);
+    await loadPlugins();
+  } catch (error) {
+    toast(error.message, 'error');
+    await loadPlugins();
+  }
+}
+
+async function setPluginEnabled(id, enabled, row = {}) {
+  try {
+    await api('/dsh/plugins/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ id, enabled: Boolean(enabled) }),
+    });
+    toast(
+      enabled
+        ? `插件已启用${row.core ? '；核心插件改动需重启对应 DSH 链路' : '；重启对应 DSH 链路后完全生效'}`
+        : '插件已停用；重启对应 DSH 链路后完全生效',
+    );
     await loadPlugins();
   } catch (error) {
     toast(error.message, 'error');

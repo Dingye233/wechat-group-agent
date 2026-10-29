@@ -19,38 +19,12 @@ PROFILE_DIR = HOME_DIR / "profiles" / "qunban"
 POLICY_PATH = PROFILE_DIR / "plugin-policies.json"
 CHANNELS = ("private", "group")
 
-# Native DSH capabilities that bypass Qunban's WeChat gateway or are unsafe in
-# a chat lane.  They stay visible in the plugin page but their channel switch is
-# locked off.  Everything else is opt-in per channel.
-PRIVATE_LOCKED = {
-    "tool-pwsh",
-    "tool-bash",
-    "tool-terminal",
-    "tool-workflow",
-    "tool-subagent",
-    "tool-subagent-control",
-    "tool-subagent-list-agents",
-    "tool-subagent-fork",
-}
-GROUP_LOCKED = {
-    "tool-fs",
-    "tool-fs-search",
-    "tool-web",
-    "tool-jobs",
-    "tool-todo",
-    "tool-goal",
-    "tool-working-directory",
-    "tool-skill",
-    "skill",
-    "skill-filesystem",
-    "ptc-runtime",
-    "workflow-ptc",
-    "subagent",
-    "subagent-spawn-in-process",
-    "subagent-fork-in-process",
-    "mcp-resources",
-    *PRIVATE_LOCKED,
-}
+# Channel gating is user-controlled.  The previous hard-coded shell/fs locks
+# are intentionally removed so every plugin can be enabled or disabled from the
+# plugin page; the DSH core prompts and Qunban gateway still provide their own
+# safeguards.
+PRIVATE_LOCKED: set[str] = set()
+GROUP_LOCKED: set[str] = set()
 
 
 def _read() -> dict[str, Any]:
@@ -95,6 +69,7 @@ def ensure(
     row = data.get(plugin_id)
     if not isinstance(row, dict):
         row = {
+            "enabled": bool(private or group),
             "private": bool(private),
             "group": bool(group),
             "tools": tools if isinstance(tools, dict) else {},
@@ -105,28 +80,23 @@ def ensure(
 
 
 def ensure_builtin(plugin_id: str, *, enabled: bool, name: str = "") -> dict[str, Any]:
-    private = bool(enabled) and plugin_id not in PRIVATE_LOCKED
-    group = bool(enabled) and plugin_id not in GROUP_LOCKED
-    row = ensure(plugin_id, name=name, private=private, group=group)
-    changed = False
-    if plugin_id in PRIVATE_LOCKED and row.get("private"):
-        row["private"] = False
-        changed = True
-    if plugin_id in GROUP_LOCKED and row.get("group"):
-        row["group"] = False
-        changed = True
-    if changed:
-        data = _read()
-        data[plugin_id] = row
-        _write(data)
-    return row
+    return ensure(
+        plugin_id,
+        name=name,
+        private=bool(enabled),
+        group=bool(enabled),
+    )
+
+
+def is_enabled(plugin_id: str, *, name: str = "") -> bool:
+    row = get(plugin_id, name=name)
+    if not isinstance(row, dict):
+        return True
+    return bool(row.get("enabled", True))
 
 
 def locked(plugin_id: str) -> dict[str, bool]:
-    return {
-        "private": plugin_id in PRIVATE_LOCKED,
-        "group": plugin_id in GROUP_LOCKED,
-    }
+    return {"private": False, "group": False}
 
 
 def tool_channels(plugin_id: str, tool_name: str) -> dict[str, bool] | None:
@@ -184,7 +154,7 @@ def set_tool_channels(
     data = _read()
     row = data.get(plugin_id)
     if not isinstance(row, dict):
-        row = {"private": True, "group": True, "tools": {}}
+        row = {"enabled": True, "private": True, "group": True, "tools": {}}
     tools = row.get("tools")
     if not isinstance(tools, dict):
         tools = {}
@@ -214,6 +184,7 @@ def set_channels(
     *,
     private: bool | None = None,
     group: bool | None = None,
+    enabled: bool | None = None,
     name: str = "",
     tools: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -223,11 +194,19 @@ def set_channels(
     data = _read()
     row = data.get(plugin_id)
     if not isinstance(row, dict):
-        row = {"private": True, "group": False, "tools": {}}
+        row = {"enabled": True, "private": True, "group": True, "tools": {}}
     if private is not None:
         row["private"] = bool(private)
     if group is not None:
         row["group"] = bool(group)
+    if enabled is not None:
+        row["enabled"] = bool(enabled)
+        if enabled and not row.get("private") and not row.get("group"):
+            # Turning a plugin on with no usable channel would be a no-op.
+            row["private"] = True
+            row["group"] = True
+    else:
+        row["enabled"] = bool(row.get("enabled", True))
     if isinstance(tools, dict):
         row["tools"] = tools
     data[plugin_id] = row
@@ -239,6 +218,8 @@ def is_channel_enabled(plugin_id: str, channel: str, *, name: str = "") -> bool:
     row = get(plugin_id, name=name)
     if not isinstance(row, dict):
         return True
+    if not bool(row.get("enabled", True)):
+        return False
     return bool(row.get(channel, True))
 
 

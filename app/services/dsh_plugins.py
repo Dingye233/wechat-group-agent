@@ -414,6 +414,14 @@ def _describe(entry: dict[str, Any]) -> str:
     return description[:260] or "DSH 内置插件。"
 
 
+def _catalog_enabled(plugin_id: str, name: str = "") -> bool:
+    channels = plugin_policy.channels(plugin_id, name=name)
+    return bool(
+        plugin_policy.is_enabled(plugin_id, name=name)
+        and (channels.get("private") or channels.get("group"))
+    )
+
+
 def catalog() -> dict[str, Any]:
     text = _cached_dump()
     parsed = _parse_dump(text)
@@ -446,6 +454,7 @@ def catalog() -> dict[str, Any]:
                 "core": _category(entry) == "核心"
                 or plugin_id in _CRITICAL_IDS,
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "enabled": _catalog_enabled(plugin_id, name),
                 "tools": plugin_policy.tools_for(plugin_id),
                 "locked": plugin_policy.locked(plugin_id),
             }
@@ -498,6 +507,7 @@ def catalog() -> dict[str, Any]:
                 "core": True,
                 "critical": True,
                 "channels": plugin_policy.channels("qunban-native", name="@qunban/dsh-native"),
+                "enabled": _catalog_enabled("qunban-native", "@qunban/dsh-native"),
                 "tools": plugin_policy.tools_for("qunban-native"),
             }
         )
@@ -519,6 +529,7 @@ def catalog() -> dict[str, Any]:
                 "source": "imported",
                 "installed": _package_installed(name),
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "enabled": _catalog_enabled(plugin_id, name),
                 "tools": plugin_policy.tools_for(plugin_id),
             }
         )
@@ -543,6 +554,7 @@ def catalog() -> dict[str, Any]:
                 "installed": _package_installed(name),
                 "source": "studio",
                 "channels": plugin_policy.channels(plugin_id, name=name),
+                "enabled": _catalog_enabled(plugin_id, name),
                 "tools": plugin_policy.tools_for(plugin_id),
             }
         )
@@ -908,6 +920,7 @@ async def _import_job(job: PluginJob, spec: str, enabled: bool) -> None:
                 name=package_name,
                 private=bool(review.get("private", True)) and bool(enabled),
                 group=bool(review.get("group", True)) and bool(enabled),
+                enabled=bool(enabled),
                 tools=review.get("tools") if isinstance(review.get("tools"), dict) else {},
             )
             _DUMP_CACHE = None
@@ -1067,6 +1080,7 @@ def _install_generated(
         name=name,
         private=bool(private) and bool(enabled),
         group=bool(group) and bool(enabled),
+        enabled=bool(enabled),
         tools=package.get("qunban", {}).get("tools")
         if isinstance(package.get("qunban"), dict)
         else {},
@@ -1244,6 +1258,7 @@ def set_channels(
     *,
     private: bool | None = None,
     group: bool | None = None,
+    enabled: bool | None = None,
 ) -> dict[str, Any]:
     global _DUMP_CACHE
     plugin_id = str(plugin_id or "").strip()
@@ -1253,21 +1268,22 @@ def set_channels(
     current = plugin_policy.channels(plugin_id, name=name)
     private = current["private"] if private is None else bool(private)
     group = current["group"] if group is None else bool(group)
-    locks = plugin_policy.locked(plugin_id)
-    if locks["private"]:
-        private = False
-    if locks["group"]:
-        group = False
-    plugin_policy.set_channels(
+    if enabled is None:
+        enabled = plugin_policy.is_enabled(plugin_id, name=name)
+    row = plugin_policy.set_channels(
         plugin_id,
         name=name,
         private=private,
         group=group,
+        enabled=enabled,
     )
+    private = bool(row.get("private", private))
+    group = bool(row.get("group", group))
+    enabled = bool(row.get("enabled", enabled))
     rows = _patch_rows()
     # The qunban profile is the private/Operator profile.  The group profile
     # is composed later from plugin-policies.json.
-    rows.append({"id": plugin_id, "disabled": not private})
+    rows.append({"id": plugin_id, "disabled": not (enabled and private)})
     _write_patch(rows)
     _DUMP_CACHE = None
     manifest = _read_json(MANIFEST_PATH, {"plugins": []})
@@ -1275,7 +1291,7 @@ def set_channels(
     if isinstance(items, list):
         for item in items:
             if isinstance(item, dict) and item.get("name") == name:
-                item["enabled"] = bool(private or group)
+                item["enabled"] = enabled
                 item["channels"] = {"private": private, "group": group}
                 item["updated_at"] = _utcnow()
         _write_json(MANIFEST_PATH, {"plugins": items})
@@ -1284,12 +1300,12 @@ def set_channels(
         "name": name,
         "private": private,
         "group": group,
-        "enabled": bool(private or group),
+        "enabled": enabled,
         "core": core,
         "critical": critical,
-        "locked": locks,
+        "locked": {"private": False, "group": False},
     }
 
 
 def set_enabled(plugin_id: str, enabled: bool) -> dict[str, Any]:
-    return set_channels(plugin_id, private=enabled, group=enabled)
+    return set_channels(plugin_id, enabled=enabled)

@@ -2954,3 +2954,17 @@ dialog.modal::backdrop {
 .assistant-tool-task[open] > .assistant-tool-task-head::before {
   content: "▾";
 }
+.plugin-enable {
+  margin-right: 2px;
+}
+.plugin-enable .plugin-switch-text {
+  font-weight: 600;
+}
+.plugin-mini-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  flex: none;
+}
