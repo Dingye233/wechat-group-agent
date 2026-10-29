@@ -2180,12 +2180,33 @@ class AgentEngine:
         prompt = capsule.render()
         self.runtime.emit_typing(group.id)
         started = time.perf_counter()
-        result = await get_dsh_chat_lane_service().prompt(
-            f"chat-group-{group.id}",
-            prompt,
-            settings=settings,
-            timeout=180.0,
-        )
+        preflight: asyncio.Task | None = None
+        preflight_fn = getattr(self.runtime, "preflight_group", None)
+        if callable(preflight_fn):
+            preflight = asyncio.create_task(
+                preflight_fn(group.id),
+                name=f"chat-preflight-{group.id}",
+            )
+        try:
+            result = await get_dsh_chat_lane_service().prompt(
+                f"chat-group-{group.id}",
+                prompt,
+                settings=settings,
+                timeout=180.0,
+            )
+        except Exception:
+            if preflight is not None:
+                preflight.cancel()
+            raise
+        reuse_first = False
+        if preflight is not None:
+            try:
+                reuse_first = bool(
+                    await asyncio.wait_for(asyncio.shield(preflight), timeout=0.08)
+                )
+            except (asyncio.TimeoutError, Exception):
+                preflight.cancel()
+                reuse_first = False
         text = str(result.get("text") or "").strip()
         if not text:
             await self._log(
@@ -2203,13 +2224,15 @@ class AgentEngine:
             data,
             result,
             started,
+            reuse_first=reuse_first,
         )
         await self._log(
             group.id,
             "dsh_chat_lane",
             f"Chat lane 回复｜{int((time.perf_counter() - started) * 1000)}ms"
             f"｜上下文≈{capsule.estimate_tokens()} tokens"
-            f"｜发送={'是' if sent else '否'}",
+            f"｜发送={'是' if sent else '否'}"
+            f"｜窗口预热={'是' if reuse_first else '否'}",
             level="info",
         )
         return True
