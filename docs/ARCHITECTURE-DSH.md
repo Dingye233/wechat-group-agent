@@ -361,3 +361,41 @@ wechatauto：
 - **群聊主链路已经由 DSH 接管；私聊/助手仍是 headless；legacy 仍保留 Python 编排。**
 - **实际体验问题大多来自三层边界没有完全收敛，而不是 DSH 本身“不会”。**
 - 下一步最值得做的是：统一私聊/群聊的 DSH 会话生命周期 + 建立全链路阶段计时 + 收敛重复的 prompt/意图链路。
+
+---
+
+## 10. 已开始落地：transport 边界
+
+第一阶段已经把「Agent 发送」从直接调用适配器改为明确的任务边界：
+
+```text
+Agent / Runtime
+  → send_agent_message()
+  → WechatautoTransport.submit()
+  → transport_jobs（SQLite）
+  → transport worker
+  → RuntimeManager._send_agent_message_now()
+  → ReplicaAdapter / wechatauto
+```
+
+新增内容：
+
+- `transport_jobs` 表：幂等键、目标、payload、状态、重试次数、错误、耗时
+- [`app/services/wechatauto_transport.py`](../app/services/wechatauto_transport.py)：持久队列和 worker
+- [`app/api/transport.py`](../app/api/transport.py)：`/api/transport/jobs` 查询
+- `RuntimeManager.send_agent_message()` 统一投递到 transport
+- transport 未启动时自动回退直发，避免测试/早期启动发送断裂
+
+当前限制：
+
+- worker 仍在 Qunban 进程内，还不是独立 wechatauto 守护进程
+- 读取事件仍由 RuntimeManager 轮询适配器
+- outbox 补发仍走原链路，未完全迁移
+
+下一阶段：
+
+1. 把 worker 和 ReplicaAdapter 的发送/激活/确认抽到独立 wechatauto 服务
+2. 增加 `POST /v1/outbound`、`GET /v1/outbound/{id}`、事件流
+3. 把读取监听也迁到该服务的 `message.created` 事件
+4. 接入持久任务状态机和完成验证
+5. 再拆 DSH Chat / Task lane 与 Router

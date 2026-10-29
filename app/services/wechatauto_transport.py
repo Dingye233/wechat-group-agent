@@ -1,0 +1,300 @@
+"""Durable outbound transport boundary for WeChat Agent replies.
+
+The transport owns an explicit job queue instead of letting every Agent/Send
+caller drive the WeChat UI directly.  The worker can later be moved into a
+separate wechatauto service process without changing the Agent-facing API.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, TYPE_CHECKING
+
+from sqlalchemy import func, select
+
+from app.db import SessionLocal
+from app.models import Sticker, TransportJob
+
+if TYPE_CHECKING:
+    from app.core.runtime import RuntimeManager
+
+logger = logging.getLogger(__name__)
+
+
+class TransportUnavailable(RuntimeError):
+    pass
+
+
+class WechatautoTransport:
+    def __init__(self, runtime: "RuntimeManager") -> None:
+        self.runtime = runtime
+        self._queue: asyncio.Queue[int] = asyncio.Queue(maxsize=2000)
+        self._worker: asyncio.Task | None = None
+        self._futures: dict[int, asyncio.Future] = {}
+        self._running = False
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    async def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        await self._recover()
+        self._worker = asyncio.create_task(
+            self._worker_loop(), name="wechatauto-transport"
+        )
+        logger.info("wechatauto transport worker 已启动")
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._worker is not None:
+            self._worker.cancel()
+            try:
+                await self._worker
+            except asyncio.CancelledError:
+                pass
+            self._worker = None
+        for future in self._futures.values():
+            if not future.done():
+                future.set_exception(TransportUnavailable("transport 已停止"))
+        self._futures.clear()
+
+    async def _recover(self) -> None:
+        """Requeue jobs left queued by a previous service run."""
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TransportJob)
+                    .where(TransportJob.status == "queued")
+                    .order_by(TransportJob.id.asc())
+                    .limit(100)
+                )
+            ).scalars().all()
+        for row in rows:
+            try:
+                self._queue.put_nowait(row.id)
+            except asyncio.QueueFull:
+                break
+
+    async def submit(
+        self,
+        *,
+        group_id: int,
+        text: str = "",
+        sticker_id: int | None = None,
+        files: list[str] | None = None,
+        meta: dict[str, Any] | None = None,
+        reuse_chat: bool = False,
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        key = str(
+            idempotency_key
+            or (meta or {}).get("client_msg_id")
+            or uuid.uuid4().hex
+        )[:160]
+        async with SessionLocal() as db:
+            if key:
+                existing = (
+                    await db.execute(
+                        select(TransportJob)
+                        .where(TransportJob.idempotency_key == key)
+                        .order_by(TransportJob.id.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    return self._job_dict(existing)
+            job = TransportJob(
+                idempotency_key=key,
+                group_id=int(group_id),
+                kind="sticker" if sticker_id else "text",
+                payload={
+                    "text": str(text or ""),
+                    "sticker_id": sticker_id,
+                    "files": [str(Path(item)) for item in files or []],
+                    "meta": meta or {},
+                    "reuse_chat": bool(reuse_chat),
+                },
+                status="queued",
+            )
+            db.add(job)
+            await db.commit()
+            await db.refresh(job)
+            payload = self._job_dict(job)
+        if not self._running:
+            raise TransportUnavailable("wechatauto transport 未启动")
+        loop = asyncio.get_running_loop()
+        self._futures[int(job.id)] = loop.create_future()
+        self._queue.put_nowait(int(job.id))
+        self._broadcast("queued", payload)
+        return payload
+
+    async def wait(self, job_id: int, timeout: float = 180.0) -> dict[str, Any]:
+        future = self._futures.get(int(job_id))
+        if future is None:
+            # Job may have been submitted by a previous process or recovered;
+            # wait by polling its durable row instead of returning immediately.
+            deadline = time.monotonic() + max(1.0, timeout)
+            while time.monotonic() < deadline:
+                job = await self._load_job(int(job_id))
+                if job.get("status") in {"sent", "failed"}:
+                    return job
+                await asyncio.sleep(0.1)
+            raise TransportUnavailable("发送任务等待超时")
+        try:
+            await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise TransportUnavailable("发送任务等待超时") from exc
+        return await self._load_job(int(job_id))
+
+    async def job(self, job_id: int) -> dict[str, Any] | None:
+        async with SessionLocal() as db:
+            row = await db.get(TransportJob, int(job_id))
+            return self._job_dict(row) if row else None
+
+    async def list_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(200, int(limit)))
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TransportJob)
+                    .order_by(TransportJob.id.desc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+            return [self._job_dict(row) for row in rows]
+
+    async def stats(self) -> dict[str, int]:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(TransportJob.status, func.count(TransportJob.id))
+                    .group_by(TransportJob.status)
+                )
+            ).all()
+        result = {"queued": 0, "sending": 0, "sent": 0, "failed": 0}
+        for status, count in rows:
+            result[str(status)] = int(count)
+        return result
+
+    async def _worker_loop(self) -> None:
+        while self._running:
+            try:
+                job_id = await self._queue.get()
+            except asyncio.CancelledError:
+                raise
+            try:
+                await self._run_job(int(job_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("transport worker 处理任务异常")
+
+    async def _run_job(self, job_id: int) -> None:
+        async with SessionLocal() as db:
+            row = await db.get(TransportJob, job_id)
+            if row is None or row.status not in {"queued", "sending"}:
+                self._resolve(job_id, None)
+                return
+            row.status = "sending"
+            row.attempts = int(row.attempts or 0) + 1
+            row.started_at = row.started_at or datetime.utcnow()
+            await db.commit()
+            payload = dict(row.payload or {})
+            attempts = int(row.attempts or 1)
+            max_attempts = int(row.max_attempts or 3)
+            group_id = int(row.group_id or 0)
+        self._broadcast("sending", await self._load_job(job_id))
+        sticker = None
+        sticker_id = payload.get("sticker_id")
+        if sticker_id:
+            async with SessionLocal() as db:
+                sticker = await db.get(Sticker, int(sticker_id))
+        try:
+            if group_id <= 0:
+                raise ValueError("transport job 缺少目标群")
+            started = time.perf_counter()
+            sent = await self.runtime._send_agent_message_now(
+                group_id,
+                text=str(payload.get("text") or ""),
+                sticker=sticker,
+                meta=dict(payload.get("meta") or {}),
+                files=[Path(item) for item in payload.get("files") or []],
+                reuse_chat=bool(payload.get("reuse_chat")),
+            )
+            elapsed = int((time.perf_counter() - started) * 1000)
+            async with SessionLocal() as db:
+                row = await db.get(TransportJob, job_id)
+                if row is not None:
+                    row.status = "sent" if sent else "failed"
+                    row.result = {"sent": bool(sent), "elapsed_ms": elapsed}
+                    row.error = "" if sent else "发送未确认"
+                    row.finished_at = datetime.utcnow()
+                    await db.commit()
+            self._broadcast("sent", await self._load_job(job_id))
+            self._resolve(job_id, True)
+            return
+        except Exception as exc:
+            async with SessionLocal() as db:
+                row = await db.get(TransportJob, job_id)
+                if row is not None:
+                    row.error = str(exc)[:2000]
+                    if attempts < max_attempts:
+                        row.status = "queued"
+                    else:
+                        row.status = "failed"
+                        row.finished_at = datetime.utcnow()
+                    await db.commit()
+            self._broadcast("failed" if attempts >= max_attempts else "queued", await self._load_job(job_id))
+            if attempts < max_attempts:
+                self._broadcast("queued", await self._load_job(job_id))
+                await asyncio.sleep(min(5.0, 0.4 * attempts + random.random() * 0.3))
+                if self._running:
+                    self._queue.put_nowait(job_id)
+                return
+            self._resolve(job_id, False)
+            logger.warning("transport job %s 发送失败: %s", job_id, exc)
+
+    def _resolve(self, job_id: int, value: Any) -> None:
+        future = self._futures.pop(job_id, None)
+        if future is not None and not future.done():
+            future.set_result(value)
+
+    async def _load_job(self, job_id: int) -> dict[str, Any]:
+        async with SessionLocal() as db:
+            row = await db.get(TransportJob, job_id)
+            if row is None:
+                raise TransportUnavailable("发送任务不存在")
+            return self._job_dict(row)
+
+    @staticmethod
+    def _job_dict(row: TransportJob) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "idempotency_key": row.idempotency_key,
+            "group_id": row.group_id,
+            "kind": row.kind,
+            "payload": row.payload or {},
+            "status": row.status,
+            "attempts": row.attempts,
+            "max_attempts": row.max_attempts,
+            "error": row.error,
+            "result": row.result or {},
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        }
+
+    def _broadcast(self, action: str, job: dict[str, Any]) -> None:
+        try:
+            self.runtime.broadcast("transport.job", {"action": action, "job": job})
+        except Exception:
+            pass

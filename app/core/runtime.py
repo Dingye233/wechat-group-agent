@@ -353,6 +353,7 @@ class RuntimeManager:
         self._outbox_task: asyncio.Task | None = None
         self._outbox_lock: asyncio.Lock | None = None
         self._chat_tasks_recovered = False
+        self.transport = None
 
     # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -361,6 +362,10 @@ class RuntimeManager:
         self._consumer = asyncio.create_task(
             self._consume_events(), name="adapter-event-consumer"
         )
+        from app.services.wechatauto_transport import WechatautoTransport
+
+        self.transport = WechatautoTransport(self)
+        await self.transport.start()
         self._memory_loop = asyncio.create_task(
             self._memory_scheduler(), name="memory-scheduler"
         )
@@ -513,6 +518,9 @@ class RuntimeManager:
     async def close(self) -> None:
         with contextlib.suppress(Exception):
             await self.agent.close()
+        if self.transport is not None:
+            with contextlib.suppress(Exception):
+                await self.transport.stop()
         with contextlib.suppress(Exception):
             self._hotkey.stop()
         if self._outbox_task and not self._outbox_task.done():
@@ -2398,6 +2406,51 @@ class RuntimeManager:
             await self.adapter.send_sticker(room_id, path)
 
     async def send_agent_message(
+        self,
+        group_id: int,
+        *,
+        text: str = "",
+        sticker: Sticker | None = None,
+        meta: dict[str, Any] | None = None,
+        files: list[Path] | None = None,
+        reuse_chat: bool = False,
+    ) -> bool:
+        """Submit an Agent reply to the transport boundary.
+
+        The transport owns the outbound queue and retries.  When it is not
+        running (unit tests, early boot, or a degraded runtime), fall back to
+        the historical direct path so message delivery never silently breaks.
+        """
+        transport = getattr(self, "transport", None)
+        if transport is None or not getattr(transport, "running", False):
+            return await self._send_agent_message_now(
+                group_id,
+                text=text,
+                sticker=sticker,
+                meta=meta,
+                files=files,
+                reuse_chat=reuse_chat,
+            )
+        safe_meta = json.loads(
+            json.dumps(meta or {}, ensure_ascii=False, default=str)
+        )
+        job = await transport.submit(
+            group_id=group_id,
+            text=text,
+            sticker_id=int(sticker.id) if sticker is not None else None,
+            files=[str(path) for path in files or []],
+            meta=safe_meta,
+            reuse_chat=reuse_chat,
+            idempotency_key=str(safe_meta.get("client_msg_id") or ""),
+        )
+        finished = await transport.wait(int(job["id"]), timeout=180.0)
+        if finished.get("status") != "sent":
+            raise RuntimeError(
+                str(finished.get("error") or "微信发送失败")
+            )
+        return True
+
+    async def _send_agent_message_now(
         self,
         group_id: int,
         *,
