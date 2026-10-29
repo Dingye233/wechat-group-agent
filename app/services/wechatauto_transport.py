@@ -273,7 +273,7 @@ class WechatautoTransport:
             async with SessionLocal() as db:
                 row = await db.get(TransportJob, job_id)
                 if row is not None:
-                    row.error = str(exc)[:2000]
+                    row.error = (str(exc).strip() or type(exc).__name__)[:2000]
                     row.status = "failed"
                     row.result = {
                         "uncertain": True,

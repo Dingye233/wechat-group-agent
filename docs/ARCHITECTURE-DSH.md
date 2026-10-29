@@ -854,9 +854,9 @@ remote send_text ok
 
 ---
 
-## 28. 生产已切换：Qunban ↔ wechatauto 独立进程
+## 28. 生产切换演练：已回滚到本地 replica
 
-当前生产拓扑：
+2026-10-29 曾把生产切到：
 
 ```text
 微信 4.x
@@ -864,41 +864,27 @@ remote send_text ok
 wechatauto service :8010（独占 ReplicaAdapter）
   ↕ HTTP /v1/events /v1/send_text /v1/groups ...
 Qunban :8000（replica-remote）
-  ├─ RuntimeManager
-  ├─ transport worker
-  ├─ 规则/记忆/知识/任务
-  └─ DSH primary / chat / task lanes
 ```
 
-已确认：
+读取、群同步、服务重启恢复都验证通过。
+
+但真实发送测试失败：
 
 ```text
-adapter=replica-remote
-service backend=replica
-service status=online
-Qunban runtime=online
-groups/messages 同步正常
+group 211 测试消息
+transport job failed after 120s
+service GUI 无法回到聊天页/搜索框
 ```
 
-启动顺序：
-
-```powershell
-.\start-wechatauto-service.ps1
-.\start-background.ps1 -NoBrowser -NoTray
-```
-
-`start-background.ps1` 会读取 `auto_login`；如果为 `replica-remote`，会先确保 8010 服务健康，再启动 Qunban。
-
-回滚到本地 replica：
+为避免生产继续处于不可发送状态，已回滚：
 
 ```text
-1. 停止 Qunban
-2. 停止 8010 wechatauto 服务
-3. 将 auto_login 设置为 replica
-4. 启动 Qunban
+adapter=replica（本地）
+auto_login=replica
+8010 service stopped
 ```
 
-当前 transport worker 仍位于 Qunban 进程内；它通过 `replica-remote` 把发送交给独立服务。因此“适配器所有权”已拆开，“outbound 队列所有权”还没有完全迁移。
+当前生产以本地 `replica` 运行；`replica-remote` 保留为待修复的迁移路径。
 
 ---
 
@@ -965,3 +951,38 @@ adapter: replica-remote
 传输服务重启 → Qunban 自动恢复
 双方冷启动 → 按顺序拉起
 ```
+
+---
+
+## 31. 远程发送失败复盘
+
+真实发送到测试群时：
+
+```text
+transport job -> replica-remote -> service /v1/send_text
+service 内 ReplicaAdapter 初始化 GUI
+GUI 日志：无法回到聊天页，搜索框不在树里
+120s 后 HTTP 超时
+```
+
+Qunban 侧表现：
+
+```text
+job.status=failed
+result.uncertain=true
+error 为空
+```
+
+已采取：
+
+- 停止自动重试，避免重复发送
+- 回滚到本地 replica
+- 保留 pending/failed 记录，手工标记取消
+- 服务独立进程、读取事件、断线恢复保留
+
+下一版远程发送需要先解决：
+
+1. 服务启动后先做一次 UI 预热/回到聊天页
+2. 发送前确认主窗口在聊天 tab，而不是只判断 DB 在线
+3. 远程 send 增加明确的超时和错误信息，禁止空错误
+4. 先在 mock/测试窗口验证，再切生产
