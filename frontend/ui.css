@@ -2968,3 +2968,35 @@ dialog.modal::backdrop {
   gap: 4px 8px;
   flex: none;
 }
+.durable-task-request {
+  margin: 3px 0 6px;
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.durable-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 3px 0 6px;
+}
+.durable-step {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+.durable-step.done {
+  color: var(--green);
+  border-color: var(--green-line);
+}
+.durable-step.failed {
+  color: var(--red);
+  border-color: var(--red);
+}
+.durable-step.running {
+  color: var(--amber);
+  border-color: var(--amber);
+}

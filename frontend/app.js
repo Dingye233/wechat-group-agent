@@ -5077,19 +5077,108 @@ function toolTaskChild(task) {
   return item;
 }
 
+function durableTaskChild(task) {
+  const status = String(task.status || 'queued');
+  const labels = {
+    queued: '排队中',
+    running: '执行中',
+    done: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  };
+  const item = el('details', `assistant-tool-task ${status}`);
+  const summary = el('summary', 'assistant-tool-task-head');
+  const title = el('strong', null, `#${task.id} 群任务`);
+  title.title = task.request || '';
+  summary.appendChild(title);
+  summary.appendChild(
+    el(
+      'span',
+      `plugin-badge${status === 'failed' ? ' danger' : status === 'done' ? ' accent' : ''}`,
+      labels[status] || status,
+    ),
+  );
+  summary.appendChild(
+    el('span', 'assistant-tool-task-meta', toolTaskTime(task.created_at)),
+  );
+  item.appendChild(summary);
+  const body = el('div', 'assistant-tool-task-body');
+  body.appendChild(el('div', 'assistant-tool-label', '请求'));
+  body.appendChild(el('p', 'durable-task-request', task.request || '—'));
+  const steps = Array.isArray(task.steps) ? task.steps : [];
+  if (steps.length) {
+    const row = el('div', 'durable-task-steps');
+    for (const step of steps) {
+      row.appendChild(
+        el(
+          'span',
+          `durable-step ${step.status || 'pending'}`,
+          `${step.name || 'step'} · ${step.status || 'pending'}`,
+        ),
+      );
+    }
+    body.appendChild(el('div', 'assistant-tool-label', '步骤'));
+    body.appendChild(row);
+  }
+  if (task.result) {
+    body.appendChild(el('div', 'assistant-tool-label', '结果'));
+    body.appendChild(el('pre', 'assistant-tool-output', task.result));
+  }
+  if (task.error) {
+    body.appendChild(el('div', 'assistant-tool-label', '错误'));
+    body.appendChild(el('pre', 'assistant-tool-output', task.error));
+  }
+  item.appendChild(body);
+  return item;
+}
+
+function durableTaskGroup(tasks) {
+  if (!tasks.length) return null;
+  const running = tasks.some((task) =>
+    ['queued', 'running'].includes(String(task.status)),
+  );
+  const failed = tasks.some((task) => task.status === 'failed');
+  const box = el('details', 'tool-task-group durable-task-group');
+  box.open = running || failed;
+  const summary = el('summary', 'tool-task-group-head');
+  summary.appendChild(el('strong', null, '执行任务'));
+  summary.appendChild(
+    el('span', 'tool-task-group-count', `${tasks.length} 个任务`),
+  );
+  summary.appendChild(
+    el(
+      'span',
+      `plugin-badge${failed ? ' danger' : running ? '' : ' accent'}`,
+      running ? '执行中' : failed ? '有失败' : '已完成',
+    ),
+  );
+  box.appendChild(summary);
+  const children = el('div', 'tool-task-children');
+  for (const task of tasks) children.appendChild(durableTaskChild(task));
+  box.appendChild(children);
+  return box;
+}
+
 async function loadAssistantTasks() {
   try {
-    const data = await api('/assistant/tool-tasks?limit=120');
+    const [data, durableData] = await Promise.all([
+      api('/assistant/tool-tasks?limit=120'),
+      api('/tasks?limit=30').catch(() => ({ tasks: [] })),
+    ]);
     state.assistantTasks = data.tasks || [];
+    const durableTasks = durableData.tasks || [];
     const root = $('#assistant-task-list');
     if (!root) return;
     root.replaceChildren();
-    if (!state.assistantTasks.length) {
+    if (!state.assistantTasks.length && !durableTasks.length) {
       root.appendChild(
-        el('p', 'tool-empty', '还没有工具调用任务。私聊里让 Agent 查天气、B站、记忆或知识库时，这里会实时出现。'),
+        el('p', 'tool-empty', '还没有 Agent 任务。复杂任务和工具调用会显示在这里。'),
       );
       return;
     }
+    const durableGroup = durableTaskGroup(durableTasks);
+    if (durableGroup) root.appendChild(durableGroup);
+    if (!state.assistantTasks.length) return;
     const groups = new Map();
     for (const task of state.assistantTasks) {
       const type = toolTaskType(task.tool_name);
@@ -6049,12 +6138,15 @@ function bindAssistantActions() {
   });
   $('#assistant-refresh-tasks')?.addEventListener('click', loadAssistantTasks);
   $('#assistant-clear-tasks')?.addEventListener('click', async () => {
-    if (!window.confirm('清空工具调用任务记录？')) return;
+    if (!window.confirm('清空 Agent 任务和工具调用记录？')) return;
     try {
-      await api('/assistant/tool-tasks', { method: 'DELETE' });
+      await Promise.all([
+        api('/assistant/tool-tasks', { method: 'DELETE' }),
+        api('/tasks', { method: 'DELETE' }),
+      ]);
       await loadAssistantTasks();
       await loadAssistantStatus();
-      toast('工具调用任务已清空');
+      toast('Agent 任务记录已清空');
     } catch (error) {
       toast(error.message, 'error');
     }
