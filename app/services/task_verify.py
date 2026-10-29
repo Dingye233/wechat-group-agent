@@ -21,6 +21,9 @@ WIN_PATH_RE = re.compile(
     r"[A-Za-z]:\\[^\s\"'<>|]+?\.(?:xlsx|xls|csv|docx|pdf|png|jpg|jpeg|zip|txt)",
     re.IGNORECASE,
 )
+PLUGIN_RE = re.compile(
+    r"(?:studio[\\/]|@qunban[\\/]|插件[：: ]+)([A-Za-z0-9][A-Za-z0-9._-]{1,80})"
+)
 
 
 async def verify_task(
@@ -97,6 +100,38 @@ async def verify_task(
                     "ok": found,
                     "detail": bvid,
                 }
+            )
+
+    if "插件" in text or "plugin" in text.lower():
+        try:
+            from app.services import dsh_plugins
+
+            catalog = dsh_plugins.catalog()
+            rows = (
+                list(catalog.get("builtin") or [])
+                + list(catalog.get("installed") or [])
+                + list(catalog.get("generated") or [])
+            )
+            haystack = " ".join(
+                str(row.get(key) or "")
+                for row in rows
+                for key in ("id", "name", "path", "package")
+            )
+            markers = PLUGIN_RE.findall(text)
+            matched = next(
+                (marker for marker in markers if marker and marker in haystack),
+                "",
+            )
+            checks.append(
+                {
+                    "name": "plugin",
+                    "ok": bool(matched),
+                    "detail": matched or "未在插件目录中找到结果中的插件",
+                }
+            )
+        except Exception as exc:
+            checks.append(
+                {"name": "plugin", "ok": False, "detail": str(exc)[:200]}
             )
 
     required = [item for item in checks if item.get("name") != "none"]
