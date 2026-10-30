@@ -1,0 +1,1 @@
+(function(){System.register([],function(e,t){function n(e,t){var n;(n=window.history.state)!=null&&n.back?e.back():e.push(t)}return e(`t`,n),{setters:[],execute:function(){}}})})();
