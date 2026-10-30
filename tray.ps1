@@ -286,7 +286,11 @@ $openButton = New-Object System.Windows.Forms.Button
 $openButton.Text = "打开控制台"
 $openButton.Location = New-Object System.Drawing.Point(24, 196)
 $openButton.Size = New-Object System.Drawing.Size(146, 40)
-$openButton.Add_Click({ Start-Process $serviceUrl })
+$openButton.Add_Click({
+    $launcher = Join-Path $PSScriptRoot 'open-console.ps1'
+    if (Test-Path $launcher) { Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`"" -WindowStyle Hidden }
+    else { Start-Process $serviceUrl }
+})
 $form.Controls.Add($openButton)
 Set-FlatButton $openButton ([System.Drawing.Color]::FromArgb(34, 197, 94)) ([System.Drawing.Color]::FromArgb(52, 211, 153)) ([System.Drawing.Color]::FromArgb(5, 30, 18)) $true
 Set-RoundedRegion $openButton 12
@@ -366,7 +370,11 @@ $menu.ShowImageMargin = $false
 $showItem = $menu.Items.Add("显示后台窗口")
 $showItem.Add_Click({ $script:userHidden = $false; $form.Show(); $form.WindowState = "Normal"; $form.Activate() })
 $openItem = $menu.Items.Add("打开群伴控制台")
-$openItem.Add_Click({ Start-Process $serviceUrl })
+$openItem.Add_Click({
+    $launcher = Join-Path $PSScriptRoot 'open-console.ps1'
+    if (Test-Path $launcher) { Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`"" -WindowStyle Hidden }
+    else { Start-Process $serviceUrl }
+})
 $pauseItem = $menu.Items.Add("暂停 Agent（Alt+P）")
 $pauseItem.Add_Click({
     try {
