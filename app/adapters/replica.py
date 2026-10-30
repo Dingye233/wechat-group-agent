@@ -2084,6 +2084,38 @@ class ReplicaAdapter(BaseAdapter):
             return False, f"「{display_name}」对应 {found}，与目标 {raw} 不一致"
         return False, f"无法确认「{display_name}」的身份"
 
+    def auto_probe_uia(self, *, force: bool = False) -> dict[str, Any]:
+        """Probe UIA only when WeChat version changed (or explicitly forced)."""
+        from app.services import wechat_compat
+
+        snap = wechat_compat.snapshot()
+        version = str(snap.get("version") or "")
+        state = wechat_compat.load_uia_state()
+        needed = bool(force or wechat_compat.auto_probe_needed(version))
+        if not needed:
+            return {
+                "probed": False,
+                "version": version,
+                "uia_ok": bool(state.get("uia_ok")),
+                "reason": "version-unchanged",
+            }
+        ok = False
+        for attempt in range(4):
+            ok = bool(self.uia_ready())
+            if ok or attempt >= 3:
+                break
+            time.sleep(1.0)
+        state = wechat_compat.record_uia_probe(
+            version,
+            ok,
+            note="startup-auto-probe" if not force else "forced-probe",
+        )
+        self.log(
+            f"微信版本 {version or '未知'}：UIA 自检{'通过' if ok else '失败'}",
+            level="info" if ok else "warn",
+        )
+        return {"probed": True, "version": version, "uia_ok": ok, **state}
+
     def uia_ready(self) -> bool:
         """Read-only-ish UIA health probe; never clicks or sends."""
         try:

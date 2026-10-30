@@ -119,3 +119,46 @@ $env:WECHATAUTO_STRICT_UIA = "0"
 ```
 
 不建议在微信刚更新、UIA 未验证时开启。
+
+## 启动自动版本检查开关
+
+service 启动时默认先读取 `Weixin.exe` 版本，并和 `%USERPROFILE%\.wechatauto\uia_state.json` 比较：
+
+```text
+版本相同 + 上次 UIA 成功 → 跳过扫描，快速启动
+版本变化，或上次 UIA 失败 → 自动做一次 UIA 探测
+探测成功 → 记录版本和 uia_ok=true
+探测失败 → 记录失败，strict_uia 会阻止发送
+```
+
+开关：
+
+```powershell
+# 默认开启
+$env:WECHATAUTO_AUTO_UIA_PROBE = "1"
+
+# 关闭自动探测（只允许人工 probe）
+$env:WECHATAUTO_AUTO_UIA_PROBE = "0"
+```
+
+手动探测：
+
+```powershell
+curl -X POST http://127.0.0.1:8010/v1/uia/probe
+```
+
+service status 会显示：
+
+```json
+{
+  "auto_uia_probe": true,
+  "uia_probe": {
+    "probed": true,
+    "version": "4.2.0.12",
+    "uia_ok": true
+  },
+  "uia_ready": true
+}
+```
+
+启动探测最多重试 4 次，避免微信刚启动、窗口还没就绪时误记失败。

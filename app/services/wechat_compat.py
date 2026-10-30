@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ _CANDIDATES = (
     r"C:\Program Files (x86)\Tencent\Weixin\Weixin.exe",
 )
 GATE_CACHE = Path(os.path.expanduser("~")) / ".wechatauto" / "gate_cache.json"
+UIA_STATE = Path(os.path.expanduser("~")) / ".wechatauto" / "uia_state.json"
 
 
 def _file_version(path: Path) -> str:
@@ -75,3 +77,37 @@ def snapshot() -> dict[str, Any]:
         "gate_cache_hit": cache_hit,
         "known": bool(profile),
     }
+
+
+def load_uia_state() -> dict[str, Any]:
+    try:
+        data = json.loads(UIA_STATE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def record_uia_probe(version: str, uia_ok: bool, *, note: str = "") -> dict[str, Any]:
+    state = {
+        "version": str(version or ""),
+        "uia_ok": bool(uia_ok),
+        "probed_at": time.time(),
+        "note": str(note or "")[:500],
+    }
+    try:
+        UIA_STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = UIA_STATE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(UIA_STATE)
+    except Exception:
+        pass
+    return state
+
+
+def auto_probe_needed(version: str) -> bool:
+    if not version:
+        return False
+    state = load_uia_state()
+    if str(state.get("version") or "") != str(version):
+        return True
+    return not bool(state.get("uia_ok"))

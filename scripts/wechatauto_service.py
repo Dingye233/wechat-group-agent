@@ -43,6 +43,8 @@ class ServiceState:
         self.lock = threading.Lock()
         self.status: dict[str, Any] = {"state": "offline", "message": ""}
         self.account: dict[str, Any] = {}
+        self.auto_uia_probe = True
+        self.last_uia_probe: dict[str, Any] = {}
         self.started_at = time.time()
 
     def emit(self, event: AdapterEvent) -> None:
@@ -88,12 +90,30 @@ class ServiceState:
 
     async def start(self) -> None:
         strict_uia = str(os.environ.get("WECHATAUTO_STRICT_UIA", "1")).strip().lower()
+        self.auto_uia_probe = str(
+            os.environ.get("WECHATAUTO_AUTO_UIA_PROBE", "1")
+        ).strip().lower() not in {"0", "false", "no", "off"}
         self.adapter = create_adapter(
             self.backend,
             self.emit,
             {"strict_uia": strict_uia not in {"0", "false", "no", "off"}},
         )
         await self.adapter.start()
+        if self.auto_uia_probe and callable(getattr(self.adapter, "auto_probe_uia", None)):
+            try:
+                result = await asyncio.to_thread(self.adapter.auto_probe_uia)
+                self.last_uia_probe = dict(result or {})
+                self.emit(
+                    AdapterEvent(
+                        "log",
+                        {
+                            "level": "info",
+                            "message": f"启动 UIA 版本检查：{self.last_uia_probe}",
+                        },
+                    )
+                )
+            except Exception as exc:
+                self.last_uia_probe = {"probed": False, "error": str(exc)[:400]}
         self.queue = ServiceQueue(
             self.adapter,
             PROJECT / "data" / "wechatauto-queue.db",
@@ -149,6 +169,8 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             "pid": os.getpid(),
             "adapter": getattr(adapter, "adapter_id", ""),
             "strict_uia": bool(getattr(adapter, "_strict_uia", True)),
+            "auto_uia_probe": bool(state.auto_uia_probe),
+            "uia_probe": dict(state.last_uia_probe or {}),
             "uia_ready": (
                 bool(adapter.uia_ready())
                 if callable(getattr(adapter, "uia_ready", None))
@@ -160,9 +182,18 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             "seq": state.seq,
         }
 
+    @app.post("/v1/uia/probe", dependencies=[Depends(_auth)])
+    async def uia_probe() -> dict[str, Any]:
+        assert state is not None and state.adapter is not None
+        fn = getattr(state.adapter, "auto_probe_uia", None)
+        if not callable(fn):
+            raise HTTPException(status_code=400, detail="当前适配器不支持 UIA 自检")
+        result = await asyncio.to_thread(fn, force=True)
+        state.last_uia_probe = dict(result or {})
+        return {"result": state.last_uia_probe}
+
     @app.get("/v1/events")
-    async def events(
-        since: int = 0, timeout: float = 0.8
+    async def events(        since: int = 0, timeout: float = 0.8
     ) -> dict[str, Any]:
         assert state is not None
         end = time.monotonic() + max(0.05, min(3.0, float(timeout)))
