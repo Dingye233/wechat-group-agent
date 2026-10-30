@@ -1361,6 +1361,16 @@ function renderChatHeader() {
     'on',
     Boolean(group.agent?.agent_enabled) && readEnabled,
   );
+  const toolsToggle = $('#chat-tools-toggle');
+  const toolsOn = group.agent?.tools_enabled !== false;
+  if (toolsToggle) {
+    toolsToggle.checked = toolsOn;
+    toolsToggle.disabled = !readEnabled || !Boolean(group.agent?.agent_enabled);
+  }
+  toolsToggle?.closest('.chat-toggle')?.classList.toggle(
+    'on',
+    toolsOn && readEnabled && Boolean(group.agent?.agent_enabled),
+  );
   const pinButton = $('#chat-pin-btn');
   if (pinButton) {
     const pinned = state.pinnedGroupId === group.id;
@@ -1839,7 +1849,7 @@ function switchInspectorTab(name = 'config') {
 function renderInspector(group) {
   syncWorkspaceLayout(Boolean(group));
   const disabled = !group;
-  const fields = ['#cfg-read', '#cfg-read-interval', '#cfg-enabled', '#cfg-trigger', '#cfg-keywords', '#cfg-probability', '#cfg-cooldown', '#cfg-max', '#cfg-quiet-start', '#cfg-quiet-end', '#cfg-stickers', '#cfg-multi-message', '#cfg-max-messages', '#cfg-proactive', '#cfg-proactive-interval', '#cfg-mention', '#cfg-persona', '#cfg-model', '#save-config-btn'];
+  const fields = ['#cfg-read', '#cfg-read-interval', '#cfg-enabled', '#cfg-tools-enabled', '#cfg-trigger', '#cfg-keywords', '#cfg-probability', '#cfg-cooldown', '#cfg-max', '#cfg-quiet-start', '#cfg-quiet-end', '#cfg-stickers', '#cfg-multi-message', '#cfg-max-messages', '#cfg-proactive', '#cfg-proactive-interval', '#cfg-mention', '#cfg-persona', '#cfg-model', '#save-config-btn'];
   for (const selector of fields) {
     const node = $(selector);
     if (node) node.disabled = disabled;
@@ -1865,6 +1875,8 @@ function renderInspector(group) {
   $('#cfg-read-interval').value = String(config.read_interval_seconds ?? 0);
   $('#cfg-enabled').checked = Boolean(config.agent_enabled) && readEnabled;
   $('#cfg-enabled').disabled = disabled || !readEnabled;
+  $('#cfg-tools-enabled').checked = config.tools_enabled !== false;
+  $('#cfg-tools-enabled').disabled = disabled || !readEnabled || !Boolean(config.agent_enabled);
   $('#cfg-trigger').value = config.trigger_mode || 'mention';
   $('#cfg-keywords').value = (config.keywords || []).join(', ');
   $('#cfg-probability').value = String(Math.round((config.probability ?? 1) * 100));
@@ -1910,6 +1922,7 @@ function collectGroupConfig() {
     read_enabled: readEnabled,
     read_interval_seconds: parseIntSafe($('#cfg-read-interval').value, 0),
     agent_enabled: agentEnabled,
+    tools_enabled: $('#cfg-tools-enabled').checked,
     trigger_mode: $('#cfg-trigger').value,
     keywords: $('#cfg-keywords').value.split(/[,，、\n]+/).map((item) => item.trim()).filter(Boolean),
     probability: parseIntSafe($('#cfg-probability').value, 100) / 100,
@@ -2026,6 +2039,20 @@ async function toggleGroupAgent(enabled) {
   } catch {
     const toggle = $('#chat-agent-toggle');
     if (toggle) toggle.checked = Boolean(currentGroup()?.agent?.agent_enabled);
+  }
+}
+
+async function toggleGroupTools(enabled) {
+  const group = currentGroup();
+  if (!group) return;
+  try {
+    await patchGroupConfig(
+      { tools_enabled: enabled },
+      enabled ? '已允许本群工具调用' : '已关闭本群工具调用，只聊天不执行任务',
+    );
+  } catch {
+    const toggle = $('#chat-tools-toggle');
+    if (toggle) toggle.checked = currentGroup()?.agent?.tools_enabled !== false;
   }
 }
 
@@ -7321,11 +7348,18 @@ function bindEvents() {
   $('#detached-dialog')?.addEventListener('cancel', (event) => event.preventDefault());
   $('#chat-read-toggle')?.addEventListener('change', (event) => toggleGroupRead(event.target.checked));
   $('#chat-agent-toggle')?.addEventListener('change', (event) => toggleGroupAgent(event.target.checked));
+  $('#chat-tools-toggle')?.addEventListener('change', (event) => toggleGroupTools(event.target.checked));
   $('#cfg-read')?.addEventListener('change', (event) => {
     const agent = $('#cfg-enabled');
+    const tools = $('#cfg-tools-enabled');
     if (!agent) return;
     if (!event.target.checked) agent.checked = false;
     agent.disabled = !event.target.checked;
+    if (tools) tools.disabled = !event.target.checked || !agent.checked;
+  });
+  $('#cfg-enabled')?.addEventListener('change', (event) => {
+    const tools = $('#cfg-tools-enabled');
+    if (tools) tools.disabled = !event.target.checked;
   });
   $('#members-refresh')?.addEventListener('click', openMembersDialog);
   $('#members-dialog-refresh')?.addEventListener('click', () => {

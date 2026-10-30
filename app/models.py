@@ -112,6 +112,7 @@ class GroupConfig(Base):
     read_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     read_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
     agent_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    tools_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     trigger_mode: Mapped[str] = mapped_column(String(24), default="mention")
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
     probability: Mapped[float] = mapped_column(Float, default=1.0)

@@ -1302,6 +1302,7 @@ class AgentEngine:
             if not config.read_enabled or not config.agent_enabled:
                 return
 
+            tools_enabled = bool(getattr(config, "tools_enabled", True))
             settings = await get_settings(db)
             if not await self._triggered(message, config, settings):
                 return
@@ -1316,16 +1317,22 @@ class AgentEngine:
 
             route = agent_router.classify_group(
                 str(message.content or ""),
-                has_tools=bool(settings.get("llm_api_key")),
+                has_tools=bool(settings.get("llm_api_key")) and tools_enabled,
             )
+            if not tools_enabled:
+                route = agent_router.Route(
+                    "chat", 0.99, "本群已关闭工具调用，只走无工具聊天"
+                )
             await self._log(
                 group_id,
                 "router",
                 f"建议 lane={route.lane}｜置信度={route.confidence:.2f}｜{route.reason}",
                 level="info",
             )
-            if bool(settings.get("dsh_router_enabled", True)) and route.confidence < float(
-                settings.get("dsh_router_threshold") or 0.6
+            if (
+                tools_enabled
+                and bool(settings.get("dsh_router_enabled", True))
+                and route.confidence < float(settings.get("dsh_router_threshold") or 0.6)
             ):
                 from app.services.dsh_router import get_dsh_router
 
@@ -1374,6 +1381,7 @@ class AgentEngine:
                 settings = await get_settings(db)
                 if config is None or not config.read_enabled or not config.agent_enabled:
                     return
+                tools_enabled = bool(getattr(config, "tools_enabled", True))
                 if not await self._passes_limits(group_id, config, settings):
                     return
                 context, members = await self._build_context(db, group_id, settings)
@@ -1408,7 +1416,7 @@ class AgentEngine:
                         )
                 if message is not None and str(
                     settings.get("group_channel_mode") or "dsh_primary"
-                ) == "dsh_primary":
+                ) == "dsh_primary" and tools_enabled:
                     try:
                         handled = await self._handle_dsh_primary(
                             message,
@@ -1459,8 +1467,16 @@ class AgentEngine:
                         plan["need_tools"] = False
                         plan["tools"] = []
                         plan["ack"] = ""
+                    if not tools_enabled:
+                        plan["need_tools"] = False
+                        plan["tools"] = []
+                        plan["delegate_to_opencode"] = False
+                        plan["ack"] = ""
+                        if str(plan.get("intent") or "") == "task":
+                            plan["intent"] = "chat"
                     if (
-                        (
+                        tools_enabled
+                        and (
                             self._wants_opencode(str(message.content or ""))
                             or self._wants_file_research(
                                 str(message.content or "")
@@ -2282,6 +2298,14 @@ class AgentEngine:
         request = str(message.content or "").strip()
         if not request:
             return
+        if not bool(getattr(config, "tools_enabled", True)):
+            await self._log(
+                group.id,
+                "skip",
+                "本群已关闭工具调用，拒绝进入任务链路",
+                level="info",
+            )
+            return
         task = await task_runs.create(
             kind="group_task",
             source="router",
@@ -2449,6 +2473,8 @@ class AgentEngine:
         """DSH owns the group decision; Qunban only supplies channel context."""
         from app.services.dsh_primary import get_dsh_primary_service
 
+        if not bool(getattr(config, "tools_enabled", True)):
+            return False
         self.runtime.emit_typing(group.id)
         prompt = self._primary_prompt(
             message,
@@ -3288,6 +3314,10 @@ sticker 填表情包 id、名称或标签，也可为 null。
             "delegate_to_opencode": False,
             "opencode_brief": "",
         }
+        if not bool(getattr(config, "tools_enabled", True)):
+            force_tools = False
+            plan["need_tools"] = False
+            plan["tools"] = []
         tool_payload = await catalog_for_scope("group")
         group_tools = tool_payload.get("tools") or []
         use_tools = bool(plan.get("need_tools") or force_tools) and bool(group_tools)

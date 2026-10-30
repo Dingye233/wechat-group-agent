@@ -58,6 +58,10 @@ def _migrate_schema(connection) -> None:  # type: ignore[no-untyped-def]
         connection.exec_driver_sql(
             "ALTER TABLE group_configs ADD COLUMN read_interval_seconds INTEGER DEFAULT 0"
         )
+    if "tools_enabled" not in config_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE group_configs ADD COLUMN tools_enabled BOOLEAN DEFAULT 1"
+        )
     if "last_memory_message_id" not in config_columns:
         connection.exec_driver_sql(
             "ALTER TABLE group_configs ADD COLUMN last_memory_message_id INTEGER DEFAULT 0"

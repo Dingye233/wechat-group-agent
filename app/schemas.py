@@ -29,6 +29,7 @@ class GroupConfigUpdate(BaseModel):
     read_enabled: bool | None = None
     read_interval_seconds: int | None = Field(default=None, ge=0, le=3600)
     agent_enabled: bool | None = None
+    tools_enabled: bool | None = None
     trigger_mode: Literal["mention", "keyword", "all"] | None = None
     keywords: list[str] | None = None
     probability: float | None = Field(default=None, ge=0, le=1)

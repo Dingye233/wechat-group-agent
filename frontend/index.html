@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui39">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui39">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui40">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui40">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -175,6 +175,10 @@
                     <span>回复</span>
                     <label class="switch switch-sm"><input type="checkbox" id="chat-agent-toggle"><span></span></label>
                   </div>
+                  <div class="chat-toggle" title="允许工具调用；关闭后只聊天，不进入任务">
+                    <span>工具</span>
+                    <label class="switch switch-sm"><input type="checkbox" id="chat-tools-toggle"><span></span></label>
+                  </div>
                   <button class="icon-btn inspector-toggle" id="inspector-toggle" title="Agent 设置"><span data-icon="sliders"></span></button>
                 </div>
               </header>
@@ -236,6 +240,10 @@
                 <div class="switch-row">
                   <div><strong>启用 Agent 自动回复</strong><small>开启后才会回复；必须先开启读取，否则为只读</small></div>
                   <label class="switch"><input type="checkbox" id="cfg-enabled"><span></span></label>
+                </div>
+                <div class="switch-row">
+                  <div><strong>允许工具调用</strong><small>关闭后只聊天，不进入任务、不调用任何工具；防止群友关键词误触发</small></div>
+                  <label class="switch"><input type="checkbox" id="cfg-tools-enabled" checked><span></span></label>
                 </div>
                 <label class="field">
                   <span>触发方式</span>
