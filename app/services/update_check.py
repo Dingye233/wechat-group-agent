@@ -292,6 +292,7 @@ async def apply_update() -> dict[str, Any]:
     """
     async with _APPLY_LOCK:
         state = _read_state()
+        backup_dir = ""
         try:
             branch = await _run_git("rev-parse", "--abbrev-ref", "HEAD", timeout=8.0)
             if branch.strip() != BRANCH:
@@ -343,6 +344,7 @@ async def apply_update() -> dict[str, Any]:
                 {
                     "applied_at": "",
                     "restart_required": False,
+                    "backup_dir": backup_dir,
                     "error": str(exc)[:1000],
                 }
             )
