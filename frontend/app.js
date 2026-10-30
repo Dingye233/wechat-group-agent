@@ -80,6 +80,7 @@ const state = {
   assistantSkills: [],
   assistantMemories: [],
   assistantTasks: [],
+  assistantDurableTasks: [],
   assistantCapabilities: [],
   assistantPanel: 'workspace',
   assistantBusy: false,
@@ -4248,15 +4249,27 @@ async function setPluginEnabled(id, enabled, row = {}) {
       method: 'POST',
       body: JSON.stringify({ id, enabled: Boolean(enabled) }),
     });
+    const reload = await hotReloadPlugins();
     toast(
-      enabled
-        ? `插件已启用${row.core ? '；核心插件改动需重启对应 DSH 链路' : '；重启对应 DSH 链路后完全生效'}`
-        : '插件已停用；重启对应 DSH 链路后完全生效',
+      reload
+        ? `${enabled ? '插件已启用' : '插件已停用'}，已热加载（${reload.seconds ?? '?'}s），下条消息生效`
+        : `${enabled ? '插件已启用' : '插件已停用'}；热加载失败，可手动重启 DSH 链路`,
+      reload ? undefined : 'error',
     );
     await loadPlugins();
   } catch (error) {
     toast(error.message, 'error');
     await loadPlugins();
+  }
+}
+
+// 插件改动后的热加载：不重启群伴，只刷新 DSH 侧（primary + 一次性进程）
+async function hotReloadPlugins() {
+  try {
+    const data = await api('/dsh/hot-reload', { method: 'POST' });
+    return data && data.ok ? data : null;
+  } catch {
+    return null;
   }
 }
 
@@ -4473,7 +4486,8 @@ async function pollPluginJob(jobId) {
       return;
     }
     if (job.status === 'done') {
-      toast('插件任务完成');
+      const reload = await hotReloadPlugins();
+      toast(reload ? `插件任务完成，已热加载（${reload.seconds ?? '?'}s），下条消息生效` : '插件任务完成；热加载失败，可手动重启 DSH 链路', reload ? undefined : 'error');
       await loadPlugins();
     } else {
       toast(job.error || '插件任务失败', 'error');
@@ -4988,16 +5002,6 @@ function toolTaskType(toolName) {
   return found ? { key: found[0], label: found[1] } : { key: 'other', label: '其他工具' };
 }
 
-function toolTaskStatus(tasks) {
-  if (tasks.some((task) => task.status === 'running')) {
-    return { text: '执行中', cls: '' };
-  }
-  if (tasks.some((task) => task.status === 'error')) {
-    return { text: '有失败', cls: ' danger' };
-  }
-  return { text: '已完成', cls: ' accent' };
-}
-
 function toolTaskTitle(toolName) {
   const name = String(toolName || 'tool');
   const known = {
@@ -5028,98 +5032,292 @@ function toolTaskTitle(toolName) {
   return name.replace(/^qunban_/, '').replace(/_/g, ' ');
 }
 
-function toolTaskTime(value) {
-  const text = String(value || '');
-  const match = text.match(/T(\d{2}:\d{2}:\d{2})/);
-  return match ? match[1] : text.slice(0, 19);
+/* ---- 工具调用任务：单层折叠 + 筛选 + 详情弹窗 ---- */
+const TOOL_TASK_OPEN = new Set();
+const TOOL_TASK_AUTO = new Set();
+const TOOL_TASK_VIEW = { status: 'all', type: 'all', query: '', limit: 30 };
+const TOOL_TASK_STATUS_FILTERS = [
+  ['all', '全部'],
+  ['active', '执行中 / 失败'],
+  ['error', '失败'],
+  ['done', '完成'],
+];
+let toolTaskSignature = '';
+
+function toolTaskStatusLabel(status) {
+  if (status === 'running') return '执行中';
+  if (status === 'error') return '失败';
+  return '完成';
 }
 
-function toolTaskChild(task) {
-  const item = el(
-    'details',
-    `assistant-tool-task ${task.status || 'running'}`,
+function toolTaskBadgeClass(status) {
+  if (status === 'error') return 'plugin-badge danger';
+  if (status === 'running') return 'plugin-badge';
+  return 'plugin-badge accent';
+}
+
+function toolTaskTimeText(value, withDate = false) {
+  const text = String(value || '');
+  const full = text.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2}:\d{2})/);
+  if (full) {
+    return withDate ? `${full[2]}-${full[3]} ${full[4].slice(0, 5)}` : full[4];
+  }
+  if (/^\d{2}:\d{2}:\d{2}/.test(text)) return withDate ? text.slice(0, 16) : text.slice(0, 8);
+  return text.slice(0, withDate ? 16 : 8);
+}
+
+function firstLineText(value, max = 70) {
+  const line = String(value || '')
+    .split('\n')
+    .map((item) => item.trim())
+    .find((item) => item);
+  return line ? truncate(line, max) : '';
+}
+
+function toolTaskPreview(task) {
+  return (
+    firstLineText(assistantToolValue(task.tool_input)) ||
+    firstLineText(task.tool_output) ||
+    firstLineText(task.error) ||
+    '无输入'
   );
-  const summary = el('summary', 'assistant-tool-task-head');
-  const name = el('strong', null, `⚙ ${toolTaskTitle(task.tool_name)}`);
-  name.title = task.tool_name || 'tool';
-  summary.appendChild(name);
-  summary.appendChild(
-    el(
-      'span',
-      `plugin-badge${task.status === 'error' ? ' danger' : task.status === 'done' ? ' accent' : ''}`,
-      task.status === 'running' ? '执行中' : task.status === 'done' ? '完成' : '失败',
-    ),
+}
+
+function copyText(text, label = '内容') {
+  const value = String(text || '');
+  if (!value) return toast('没有可复制的内容', 'warn');
+  const done = () => toast(`${label}已复制`);
+  const legacy = () => {
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
+    document.body.appendChild(area);
+    area.select();
+    try {
+      document.execCommand('copy');
+      done();
+    } catch {
+      toast('复制失败，请手动选择文本', 'error');
+    } finally {
+      area.remove();
+    }
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(value).then(done, legacy);
+  } else {
+    legacy();
+  }
+}
+
+function toolTaskVisible(task) {
+  const view = TOOL_TASK_VIEW;
+  const status = String(task.status || '');
+  if (view.status === 'active') {
+    if (!['running', 'error'].includes(status)) return false;
+  } else if (view.status !== 'all' && status !== view.status) {
+    return false;
+  }
+  if (view.type !== 'all' && toolTaskType(task.tool_name).key !== view.type) return false;
+  const query = view.query.trim().toLowerCase();
+  if (!query) return true;
+  return [
+    task.tool_name,
+    toolTaskTitle(task.tool_name),
+    assistantToolValue(task.tool_input),
+    task.tool_output,
+    task.error,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
+function toolTaskAccordion({
+  key,
+  status,
+  title,
+  subtitle,
+  preview,
+  badges,
+  time,
+  buildBody,
+}) {
+  const card = el('article', `tool-task-card ${status}`);
+  card.dataset.taskKey = key;
+  const row = el('button', 'tool-task-row');
+  row.type = 'button';
+  const caret = el('span', 'tool-task-caret', '▸');
+  row.appendChild(caret);
+  const name = el('strong', 'tool-task-name', title);
+  if (subtitle) name.title = subtitle;
+  row.appendChild(name);
+  if (preview) row.appendChild(el('span', 'tool-task-preview', preview));
+  for (const badge of badges || []) {
+    if (typeof badge === 'string') row.appendChild(el('span', 'plugin-badge', badge));
+    else row.appendChild(el('span', badge.cls, badge.text));
+  }
+  if (time) row.appendChild(el('span', 'tool-task-time', time));
+  card.appendChild(row);
+  const detail = el('div', 'tool-task-detail');
+  detail.hidden = true;
+  card.appendChild(detail);
+  let filled = false;
+  const sync = () => {
+    const open = TOOL_TASK_OPEN.has(key);
+    card.classList.toggle('open', open);
+    caret.textContent = open ? '▾' : '▸';
+    row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && !filled) {
+      filled = true;
+      detail.appendChild(buildBody());
+    }
+    detail.hidden = !open;
+  };
+  row.addEventListener('click', () => {
+    if (TOOL_TASK_OPEN.has(key)) TOOL_TASK_OPEN.delete(key);
+    else TOOL_TASK_OPEN.add(key);
+    sync();
+  });
+  card.syncOpen = sync;
+  sync();
+  return card;
+}
+
+function toolTaskDetail(task, inDialog = false) {
+  const wrap = el('div', inDialog ? 'tool-task-detail tool-task-detail-dialog' : 'tool-task-detail-inner');
+  const bar = el('div', 'tool-task-detail-bar');
+  bar.appendChild(el('code', 'assistant-tool-task-tool', task.tool_name || 'tool'));
+  const actions = el('span', 'tool-task-detail-actions');
+  if (!inDialog) {
+    const zoom = el('button', 'text-btn', '放大查看');
+    zoom.type = 'button';
+    zoom.addEventListener('click', () => openToolTaskDialog(task));
+    actions.appendChild(zoom);
+  }
+  const copy = el('button', 'text-btn', '复制输出');
+  copy.type = 'button';
+  copy.addEventListener('click', () =>
+    copyText(assistantToolValue(task.tool_output) || task.error || '', '输出'),
   );
-  summary.appendChild(
-    el(
-      'span',
-      'assistant-tool-task-meta',
-      toolTaskTime(task.created_at),
-    ),
-  );
-  item.appendChild(summary);
-  const body = el('div', 'assistant-tool-task-body');
-  body.appendChild(el('div', 'assistant-tool-label', '工具'));
-  body.appendChild(el('code', 'assistant-tool-task-tool', task.tool_name || 'tool'));
+  actions.appendChild(copy);
+  bar.appendChild(actions);
+  wrap.appendChild(bar);
   const input = assistantToolValue(task.tool_input);
   if (input) {
-    body.appendChild(el('div', 'assistant-tool-label', '输入'));
-    body.appendChild(el('pre', 'assistant-tool-input', input));
+    wrap.appendChild(el('div', 'assistant-tool-label', '输入'));
+    wrap.appendChild(el('pre', 'assistant-tool-input', input));
   }
-  body.appendChild(el('div', 'assistant-tool-label', '输出'));
-  body.appendChild(
+  wrap.appendChild(el('div', 'assistant-tool-label', '输出'));
+  wrap.appendChild(
     el(
       'pre',
       'assistant-tool-output',
-      task.tool_output || (task.status === 'running' ? '执行中…' : '（无输出）'),
+      assistantToolValue(task.tool_output) ||
+        (task.status === 'running' ? '执行中…' : '（无输出）'),
     ),
   );
-  body.appendChild(
+  wrap.appendChild(
     el(
       'p',
       'assistant-tool-task-time',
-      `会话 ${task.session_id || '—'}${task.updated_at ? ` · 更新 ${task.updated_at}` : ''}`,
+      `会话 ${task.session_id || '—'}${
+        task.updated_at ? ` · 更新 ${toolTaskTimeText(task.updated_at, true)}` : ''
+      }`,
     ),
   );
-  item.appendChild(body);
-  return item;
+  return wrap;
 }
 
-function durableTaskChild(task) {
-  const status = String(task.status || 'queued');
-  const labels = {
-    queued: '排队中',
-    running: '执行中',
-    done: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  };
-  const item = el('details', `assistant-tool-task ${status}`);
-  const summary = el('summary', 'assistant-tool-task-head');
-  const title = el('strong', null, `#${task.id} 群任务`);
-  title.title = task.request || '';
-  summary.appendChild(title);
-  summary.appendChild(
+function openToolTaskDialog(task) {
+  let dialog = $('#tool-task-dialog');
+  if (!dialog) {
+    dialog = el('dialog', 'modal tool-task-dialog');
+    dialog.id = 'tool-task-dialog';
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    document.body.appendChild(dialog);
+  }
+  dialog.replaceChildren();
+  const head = el('div', 'tool-task-dialog-head');
+  const info = el('div', 'tool-task-dialog-info');
+  info.appendChild(el('strong', null, `⚙ ${toolTaskTitle(task.tool_name)}`));
+  info.appendChild(
     el(
       'span',
-      `plugin-badge${status === 'failed' ? ' danger' : status === 'done' ? ' accent' : ''}`,
-      labels[status] || status,
+      'tool-task-dialog-sub',
+      `${task.tool_name || 'tool'} · ${toolTaskTimeText(task.created_at, true)} · ${toolTaskStatusLabel(task.status)}`,
     ),
   );
-  if (status === 'done') {
-    summary.appendChild(
-      el(
-        'span',
-        `plugin-badge${task.verified ? ' accent' : ' danger'}`,
-        task.verified ? '已验证' : '未验证',
-      ),
-    );
-  }
-  summary.appendChild(
-    el('span', 'assistant-tool-task-meta', toolTaskTime(task.created_at)),
+  head.appendChild(info);
+  const actions = el('span', 'tool-task-detail-actions');
+  const copy = el('button', 'text-btn', '复制全部');
+  copy.type = 'button';
+  copy.addEventListener('click', () =>
+    copyText(
+      [assistantToolValue(task.tool_input), assistantToolValue(task.tool_output)]
+        .filter(Boolean)
+        .join('\n\n'),
+      '任务内容',
+    ),
   );
-  item.appendChild(summary);
-  const body = el('div', 'assistant-tool-task-body');
+  const close = el('button', 'text-btn', '关闭');
+  close.type = 'button';
+  close.addEventListener('click', () => dialog.close());
+  actions.append(copy, close);
+  head.appendChild(actions);
+  dialog.appendChild(head);
+  const body = el('div', 'tool-task-dialog-body');
+  body.appendChild(toolTaskDetail(task, true));
+  dialog.appendChild(body);
+  dialog.showModal();
+}
+
+function toolTaskCard(task) {
+  const status = ['running', 'error', 'done'].includes(task.status) ? task.status : 'done';
+  return toolTaskAccordion({
+    key: String(task.id),
+    status,
+    title: `⚙ ${toolTaskTitle(task.tool_name)}`,
+    subtitle: `${task.tool_name || 'tool'} · ${toolTaskTimeText(task.created_at, true)}`,
+    preview: toolTaskPreview(task),
+    badges: [{ cls: toolTaskBadgeClass(status), text: toolTaskStatusLabel(status) }],
+    time: toolTaskTimeText(task.created_at),
+    buildBody: () => toolTaskDetail(task),
+  });
+}
+
+const DURABLE_STATUS_LABELS = {
+  queued: '排队中',
+  running: '执行中',
+  done: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+function durableTaskDetail(task, status) {
+  const body = el('div', 'tool-task-detail-inner');
+  const bar = el('div', 'tool-task-detail-bar');
+  bar.appendChild(
+    el(
+      'span',
+      'assistant-tool-task-tool',
+      `#${task.id} · ${toolTaskTimeText(task.created_at, true)}`,
+    ),
+  );
+  const actions = el('span', 'tool-task-detail-actions');
+  if (status === 'failed' || status === 'cancelled' || status === 'done' || status === 'queued') {
+    const retry = el('button', 'text-btn', status === 'done' ? '重新执行' : '重试');
+    retry.type = 'button';
+    retry.addEventListener('click', () => retryDurableTask(task.id));
+    actions.appendChild(retry);
+  }
+  if (status === 'running' || status === 'queued') {
+    const cancel = el('button', 'text-btn', '取消');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => cancelDurableTask(task.id));
+    actions.appendChild(cancel);
+  }
+  bar.appendChild(actions);
+  body.appendChild(bar);
   body.appendChild(el('div', 'assistant-tool-label', '请求'));
   body.appendChild(el('p', 'durable-task-request', task.request || '—'));
   const steps = Array.isArray(task.steps) ? task.steps : [];
@@ -5145,20 +5343,33 @@ function durableTaskChild(task) {
     body.appendChild(el('div', 'assistant-tool-label', '错误'));
     body.appendChild(el('pre', 'assistant-tool-output', task.error));
   }
-  if (status === 'failed' || status === 'cancelled' || status === 'done' || status === 'queued') {
-    const retry = el('button', 'text-btn', status === 'done' ? '重新执行' : '重试');
-    retry.type = 'button';
-    retry.addEventListener('click', () => retryDurableTask(task.id));
-    body.appendChild(retry);
+  return body;
+}
+
+function durableTaskCard(task) {
+  const status = String(task.status || 'queued');
+  const badges = [
+    {
+      cls: `plugin-badge${status === 'failed' ? ' danger' : status === 'done' ? ' accent' : ''}`,
+      text: DURABLE_STATUS_LABELS[status] || status,
+    },
+  ];
+  if (status === 'done') {
+    badges.push({
+      cls: `plugin-badge${task.verified ? ' accent' : ' danger'}`,
+      text: task.verified ? '已验证' : '未验证',
+    });
   }
-  if (status === 'running' || status === 'queued') {
-    const cancel = el('button', 'text-btn', '取消');
-    cancel.type = 'button';
-    cancel.addEventListener('click', () => cancelDurableTask(task.id));
-    body.appendChild(cancel);
-  }
-  item.appendChild(body);
-  return item;
+  return toolTaskAccordion({
+    key: `durable-${task.id}`,
+    status: status === 'failed' ? 'error' : status === 'done' ? 'done' : 'running',
+    title: `#${task.id} 群任务`,
+    subtitle: task.request || '',
+    preview: firstLineText(task.request, 60),
+    badges,
+    time: toolTaskTimeText(task.created_at),
+    buildBody: () => durableTaskDetail(task, status),
+  });
 }
 
 async function retryDurableTask(taskId) {
@@ -5183,86 +5394,153 @@ async function cancelDurableTask(taskId) {
   }
 }
 
-function durableTaskGroup(tasks) {
-  if (!tasks.length) return null;
-  const running = tasks.some((task) =>
-    ['queued', 'running'].includes(String(task.status)),
+function toolTaskSectionHeader(text, count) {
+  const row = el('div', 'tool-task-section');
+  row.appendChild(el('strong', null, text));
+  row.appendChild(el('span', 'tool-task-group-count', `${count} 个`));
+  return row;
+}
+
+function renderToolTaskChips(tasks) {
+  const statusRoot = $('#assistant-task-status-chips');
+  if (statusRoot) {
+    statusRoot.replaceChildren();
+    for (const [value, label] of TOOL_TASK_STATUS_FILTERS) {
+      const button = el(
+        'button',
+        TOOL_TASK_VIEW.status === value ? 'tool-task-chip active' : 'tool-task-chip',
+        label,
+      );
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        TOOL_TASK_VIEW.status = value;
+        toolTaskSignature = '';
+        renderAssistantTasks();
+      });
+      statusRoot.appendChild(button);
+    }
+  }
+  const typeRoot = $('#assistant-task-type-chips');
+  if (!typeRoot) return;
+  typeRoot.replaceChildren();
+  const counts = new Map();
+  for (const task of tasks) {
+    const type = toolTaskType(task.tool_name);
+    const entry = counts.get(type.key) || { label: type.label, n: 0 };
+    entry.n += 1;
+    counts.set(type.key, entry);
+  }
+  const typed = [...counts.entries()].sort((a, b) => b[1].n - a[1].n);
+  const list = [
+    ['all', { label: `全部类型 ${tasks.length}`, n: tasks.length }],
+    ...typed.map(([key, entry]) => [key, { label: `${entry.label} ${entry.n}`, n: entry.n }]),
+  ];
+  for (const [key, entry] of list) {
+    const button = el(
+      'button',
+      TOOL_TASK_VIEW.type === key ? 'tool-task-chip active' : 'tool-task-chip',
+      entry.label,
+    );
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      TOOL_TASK_VIEW.type = key;
+      toolTaskSignature = '';
+      renderAssistantTasks();
+    });
+    typeRoot.appendChild(button);
+  }
+}
+
+function autoOpenNewToolTasks() {
+  const tasks = state.assistantTasks || [];
+  const fresh = tasks.filter(
+    (task) =>
+      ['running', 'error'].includes(task.status) && !TOOL_TASK_AUTO.has(Number(task.id)),
   );
-  const failed = tasks.some((task) => task.status === 'failed');
-  const box = el('details', 'tool-task-group durable-task-group');
-  box.open = running || failed;
-  const summary = el('summary', 'tool-task-group-head');
-  summary.appendChild(el('strong', null, '执行任务'));
-  summary.appendChild(
-    el('span', 'tool-task-group-count', `${tasks.length} 个任务`),
-  );
-  summary.appendChild(
-    el(
-      'span',
-      `plugin-badge${failed ? ' danger' : running ? '' : ' accent'}`,
-      running ? '执行中' : failed ? '有失败' : '已完成',
-    ),
-  );
-  box.appendChild(summary);
-  const children = el('div', 'tool-task-children');
-  for (const task of tasks) children.appendChild(durableTaskChild(task));
-  box.appendChild(children);
-  return box;
+  for (const task of fresh) TOOL_TASK_AUTO.add(Number(task.id));
+  if (TOOL_TASK_AUTO.size > 400) TOOL_TASK_AUTO.clear();
+  if (!fresh.length || TOOL_TASK_OPEN.size >= 3) return;
+  for (const task of fresh.slice(0, 2)) TOOL_TASK_OPEN.add(String(task.id));
+  toolTaskSignature = '';
+}
+
+function renderAssistantTasks() {
+  const root = $('#assistant-task-list');
+  if (!root) return;
+  const tasks = state.assistantTasks || [];
+  const durableTasks = state.assistantDurableTasks || [];
+  renderToolTaskChips(tasks);
+
+  const filtered = tasks.filter(toolTaskVisible);
+  const shown = filtered.slice(0, TOOL_TASK_VIEW.limit);
+  const hint = $('#assistant-task-hint');
+  if (hint) {
+    hint.textContent = tasks.length || durableTasks.length
+      ? `共 ${tasks.length} 次工具调用，当前显示 ${shown.length} 条 · 点任意一行看详情，不用一层层展开`
+      : '还没有工具调用记录，Agent 调用工具时会实时出现在这里。';
+  }
+
+  const signature = JSON.stringify([
+    TOOL_TASK_VIEW.status,
+    TOOL_TASK_VIEW.type,
+    TOOL_TASK_VIEW.query,
+    TOOL_TASK_VIEW.limit,
+    shown.map((task) => [task.id, task.status, String(task.tool_output || '').length]),
+    durableTasks.map((task) => [task.id, task.status, task.verified ? 1 : 0]),
+  ]);
+  if (signature === toolTaskSignature && root.childElementCount) {
+    root.querySelectorAll('.tool-task-card').forEach((card) => card.syncOpen?.());
+    return;
+  }
+  toolTaskSignature = signature;
+
+  const scrollTop = root.scrollTop;
+  root.replaceChildren();
+  if (!tasks.length && !durableTasks.length) {
+    root.appendChild(
+      el('p', 'tool-empty', '还没有 Agent 任务。复杂任务和工具调用会显示在这里。'),
+    );
+    return;
+  }
+  if (durableTasks.length) {
+    root.appendChild(toolTaskSectionHeader('群任务', durableTasks.length));
+    for (const task of durableTasks) root.appendChild(durableTaskCard(task));
+  }
+  if (shown.length) {
+    root.appendChild(toolTaskSectionHeader('工具调用', shown.length));
+    for (const task of shown) root.appendChild(toolTaskCard(task));
+    if (filtered.length > shown.length) {
+      const more = el(
+        'button',
+        'btn btn-ghost tool-task-more',
+        `显示更多（还剩 ${filtered.length - shown.length} 条）`,
+      );
+      more.type = 'button';
+      more.addEventListener('click', () => {
+        TOOL_TASK_VIEW.limit += 30;
+        renderAssistantTasks();
+      });
+      root.appendChild(more);
+    }
+  } else if (tasks.length) {
+    root.appendChild(
+      el('p', 'tool-empty', '没有匹配的调用，换个筛选条件或清空搜索试试。'),
+    );
+  }
+  root.scrollTop = scrollTop;
 }
 
 async function loadAssistantTasks() {
   try {
+    window.clearTimeout(state._toolTaskTimer);
     const [data, durableData] = await Promise.all([
       api('/assistant/tool-tasks?limit=120'),
       api('/tasks?limit=30').catch(() => ({ tasks: [] })),
     ]);
     state.assistantTasks = data.tasks || [];
-    const durableTasks = durableData.tasks || [];
-    const root = $('#assistant-task-list');
-    if (!root) return;
-    root.replaceChildren();
-    if (!state.assistantTasks.length && !durableTasks.length) {
-      root.appendChild(
-        el('p', 'tool-empty', '还没有 Agent 任务。复杂任务和工具调用会显示在这里。'),
-      );
-      return;
-    }
-    const durableGroup = durableTaskGroup(durableTasks);
-    if (durableGroup) root.appendChild(durableGroup);
-    if (!state.assistantTasks.length) return;
-    const groups = new Map();
-    for (const task of state.assistantTasks) {
-      const type = toolTaskType(task.tool_name);
-      if (!groups.has(type.key)) groups.set(type.key, { ...type, tasks: [] });
-      groups.get(type.key).tasks.push(task);
-    }
-    const ordered = [...groups.values()].sort((a, b) => {
-      const aId = Math.max(...a.tasks.map((task) => Number(task.id) || 0));
-      const bId = Math.max(...b.tasks.map((task) => Number(task.id) || 0));
-      return bId - aId;
-    });
-    ordered.forEach((group, index) => {
-      const active = group.tasks.some((task) =>
-        ['running', 'error'].includes(task.status),
-      );
-      const box = el('details', 'tool-task-group');
-      box.open = active;
-      const summary = el('summary', 'tool-task-group-head');
-      summary.appendChild(el('strong', null, group.label));
-      summary.appendChild(
-        el('span', 'tool-task-group-count', `${group.tasks.length} 个调用`),
-      );
-      const status = toolTaskStatus(group.tasks);
-      summary.appendChild(el('span', `plugin-badge${status.cls}`, status.text));
-      box.appendChild(summary);
-      const children = el('div', 'tool-task-children');
-      group.tasks
-        .slice()
-        .sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
-        .forEach((task) => children.appendChild(toolTaskChild(task)));
-      box.appendChild(children);
-      root.appendChild(box);
-    });
+    state.assistantDurableTasks = durableData.tasks || [];
+    autoOpenNewToolTasks();
+    renderAssistantTasks();
   } catch (error) {
     toast(error.message, 'error');
   }
@@ -6317,6 +6595,30 @@ function bindAssistantActions() {
     if (event.key === 'Enter') loadAssistantMemories();
   });
   $('#assistant-refresh-tasks')?.addEventListener('click', loadAssistantTasks);
+  $('#assistant-task-search')?.addEventListener('input', (event) => {
+    const value = event.target.value || '';
+    window.clearTimeout(state._toolTaskSearchTimer);
+    state._toolTaskSearchTimer = window.setTimeout(() => {
+      TOOL_TASK_VIEW.query = value;
+      toolTaskSignature = '';
+      renderAssistantTasks();
+    }, 180);
+  });
+  $('#assistant-task-expand')?.addEventListener('click', () => {
+    const root = $('#assistant-task-list');
+    const cards = root ? [...root.querySelectorAll('.tool-task-card')] : [];
+    const anyClosed = cards.some(
+      (card) => !TOOL_TASK_OPEN.has(String(card.dataset.taskKey || '')),
+    );
+    for (const card of cards) {
+      const key = String(card.dataset.taskKey || '');
+      if (anyClosed) TOOL_TASK_OPEN.add(key);
+      else TOOL_TASK_OPEN.delete(key);
+    }
+    const button = $('#assistant-task-expand');
+    if (button) button.textContent = anyClosed ? '全部收起' : '全部展开';
+    root?.querySelectorAll('.tool-task-card').forEach((card) => card.syncOpen?.());
+  });
   $('#assistant-clear-tasks')?.addEventListener('click', async () => {
     if (!window.confirm('清空 Agent 任务和工具调用记录？')) return;
     try {
@@ -6703,7 +7005,10 @@ function handleWsEvent(event) {
       }, 150);
       break;
     case 'assistant.tool_task':
-      if (state.assistantPanel === 'tasks') loadAssistantTasks();
+      window.clearTimeout(state._toolTaskTimer);
+      state._toolTaskTimer = window.setTimeout(() => {
+        if (state.assistantPanel === 'tasks') loadAssistantTasks().catch(() => {});
+      }, 250);
       loadAssistantStatus().catch(() => {});
       break;
     case 'bili.autopilot':

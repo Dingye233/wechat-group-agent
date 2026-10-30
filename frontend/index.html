@@ -409,9 +409,12 @@
               </div>
 
               <div class="assistant-panel" data-assistant-panel-body="tasks" hidden>
-                <div class="assistant-section-head"><strong>工具调用任务</strong><span class="assistant-head-actions"><button class="text-btn" id="assistant-refresh-tasks">刷新</button><button class="text-btn" id="assistant-clear-tasks">清空</button></span></div>
-                <p class="field-hint">私聊/助手对话中 DSH 分析到需要调用工具时，会实时显示在这里。</p>
-                <div class="assistant-memory-list" id="assistant-task-list"></div>
+                <div class="assistant-section-head"><strong>工具调用任务</strong><span class="assistant-head-actions"><button class="text-btn" id="assistant-task-expand">全部展开</button><button class="text-btn" id="assistant-refresh-tasks">刷新</button><button class="text-btn" id="assistant-clear-tasks">清空</button></span></div>
+                <p class="field-hint" id="assistant-task-hint">点任意一行看详情，不用一层层展开。</p>
+                <input id="assistant-task-search" placeholder="搜索工具名 / 参数 / 输出">
+                <div class="tool-task-chips" id="assistant-task-status-chips"></div>
+                <div class="tool-task-chips" id="assistant-task-type-chips"></div>
+                <div class="assistant-task-list" id="assistant-task-list"></div>
               </div>
 
               <div class="assistant-panel" data-assistant-panel-body="contacts" hidden>

@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
    群伴 UI v2 — neutral workspace theme
    Layered on top of styles.css; keeps the existing component class names.
    Inspired by shadcn/ui (tokens, borders, focus rings), Linear (sidebar and
@@ -2684,54 +2684,6 @@ dialog.modal::backdrop {
   align-items: center;
   gap: 8px;
 }
-.assistant-tool-task {
-  margin: 0 0 8px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--amber);
-  border-radius: 8px;
-  background: var(--panel-2);
-  overflow: hidden;
-}
-.assistant-tool-task.done {
-  border-left-color: var(--green);
-}
-.assistant-tool-task.error {
-  border-left-color: var(--red);
-}
-.assistant-tool-task-head {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 8px 9px;
-  cursor: pointer;
-  list-style: none;
-}
-.assistant-tool-task-head::-webkit-details-marker {
-  display: none;
-}
-.assistant-tool-task-head strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-}
-.assistant-tool-task-meta {
-  margin-left: auto;
-  color: var(--muted-2);
-  font-size: 9px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.assistant-tool-task-body {
-  padding: 0 9px 8px;
-  border-top: 1px solid var(--line);
-}
-.assistant-tool-task-body .assistant-tool-input,
-.assistant-tool-task-body .assistant-tool-output {
-  max-height: 34vh;
-}
 .assistant-tool-task-time {
   margin: 6px 0 0;
   color: var(--muted-2);
@@ -2851,108 +2803,225 @@ dialog.modal::backdrop {
   display: none;
 }
 
-/* grouped private-chat tool tasks */
+/* 工具调用任务面板：单层折叠 + 筛选 + 详情弹窗 */
 .plugin-badge {
   white-space: nowrap;
   flex: none;
 }
-.tool-task-group {
-  margin: 0 0 8px;
+.assistant-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(60vh, 640px);
+  overflow: auto;
+  margin: 6px 0 0;
+  padding-right: 2px;
+}
+.tool-task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0 0;
+}
+.tool-task-chip {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.7;
+  padding: 1px 9px;
+  cursor: pointer;
+}
+.tool-task-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.tool-task-chip.active {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #e4c887;
+}
+.tool-task-section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0 2px;
+  color: var(--muted-2);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tool-task-section strong {
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.tool-task-card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
   background: var(--panel-2);
   overflow: hidden;
 }
-.tool-task-group[open] {
-  border-color: var(--line-strong);
+.tool-task-card.done {
+  border-left-color: var(--green);
 }
-.tool-task-group-head {
+.tool-task-card.error {
+  border-left-color: var(--red);
+}
+.tool-task-card.open {
+  border-color: var(--line-strong);
+  background: var(--panel-3);
+}
+.tool-task-row {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   padding: 7px 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  list-style: none;
-  background: var(--panel-3);
 }
-.tool-task-group-head::-webkit-details-marker {
-  display: none;
+.tool-task-row:hover {
+  background: rgba(255, 255, 255, 0.035);
 }
-.tool-task-group-head strong {
-  min-width: 0;
+.tool-task-caret {
+  flex: none;
+  width: 8px;
+  color: var(--muted-2);
+  font-size: 9px;
+}
+.tool-task-name {
+  flex: none;
+  max-width: 46%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
 }
-.tool-task-group-count {
+.tool-task-preview {
+  flex: 1 1 30%;
+  min-width: 0;
   color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-task-time {
+  flex: none;
+  color: var(--muted-2);
   font-size: 9px;
   white-space: nowrap;
 }
-.tool-task-group-head .plugin-badge {
-  margin-left: auto;
-  font-size: 9px;
+.tool-task-row .plugin-badge {
+  font-size: 8.5px;
   padding: 1px 5px;
 }
-.tool-task-children {
-  padding: 5px 5px 3px;
-  display: grid;
-  gap: 5px;
+.tool-task-detail {
+  padding: 6px 9px 9px;
+  border-top: 1px solid var(--line);
 }
-.tool-task-children .assistant-tool-task {
+.tool-task-detail[hidden] {
+  display: none;
+}
+.tool-task-detail-dialog {
+  border-top: 0;
+  padding: 6px 0 0;
+}
+.tool-task-detail-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-task-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.tool-task-detail .assistant-tool-task-tool,
+.tool-task-detail-inner .assistant-tool-task-tool {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
-  background: var(--panel);
-}
-.tool-task-children .assistant-tool-task-head {
-  padding: 6px 7px;
-}
-.tool-task-children .assistant-tool-task-head strong {
-  font-size: 10.5px;
-}
-.tool-task-children .assistant-tool-task-meta {
-  max-width: 45%;
-  text-align: right;
-}
-.assistant-tool-task-tool {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--muted);
+  background: transparent;
+  color: var(--muted-2);
   font-size: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tool-task-children .assistant-tool-task-head .plugin-badge {
-  font-size: 9px;
-  padding: 1px 5px;
+.tool-task-detail .assistant-tool-input,
+.tool-task-detail .assistant-tool-output,
+.tool-task-detail-inner .assistant-tool-output {
+  max-height: min(28vh, 240px);
 }
-.tool-task-children .assistant-tool-task-meta {
-  max-width: 52px;
-  font-size: 8.5px;
+.tool-task-more {
+  width: 100%;
+  font-size: 10.5px;
 }
-.assistant-panel[data-assistant-panel-body="tasks"] .assistant-memory-list {
-  max-height: min(52vh, 520px);
+.tool-task-dialog {
+  width: min(820px, 94vw);
+  max-width: min(820px, 94vw);
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--text);
 }
-.tool-task-group-head::before {
-  content: "▸";
-  flex: none;
+.tool-task-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(4px);
+}
+.tool-task-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tool-task-dialog-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tool-task-dialog-sub {
   color: var(--muted-2);
-  font-size: 9px;
-  width: 8px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.tool-task-group[open] > .tool-task-group-head::before {
-  content: "▾";
+.tool-task-dialog-body {
+  max-height: 70vh;
+  overflow: auto;
+  padding-top: 4px;
 }
-.assistant-tool-task-head::before {
-  content: "▸";
-  flex: none;
-  color: var(--muted-2);
-  font-size: 8px;
-  width: 7px;
+.tool-task-dialog .assistant-tool-input,
+.tool-task-dialog .assistant-tool-output {
+  max-height: none;
 }
-.assistant-tool-task[open] > .assistant-tool-task-head::before {
-  content: "▾";
+@media (max-width: 1180px) {
+  .tool-task-preview {
+    display: none;
+  }
+  .tool-task-name {
+    flex: 1 1 auto;
+    max-width: none;
+  }
 }
 .plugin-enable {
   margin-right: 2px;
