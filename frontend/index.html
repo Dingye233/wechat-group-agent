@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -562,6 +562,12 @@
                 <div class="assistant-section-head"><strong>DeepSeek Harness</strong><button class="text-btn" id="dsh-refresh">刷新</button></div>
                 <p class="field-hint">群伴现在只有一套 Agent 运行时：DeepSeek Harness。wechatauto 负责读取微信消息和发送回复，DSH 原生插件提供微信/记忆/B站/技能工具。</p>
                 <p class="field-hint" id="dsh-status-line">读取中…</p>
+                <div class="dsh-version-bar" id="dsh-version-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#0d1712">
+                  <span class="field-hint" style="margin:0">当前版本</span>
+                  <strong id="dsh-current-version" style="font-variant-numeric:tabular-nums">—</strong>
+                  <span class="field-hint" id="dsh-latest-version" style="margin:0">检查中…</span>
+                  <button class="btn btn-primary" id="dsh-push-update" disabled style="margin-left:auto">推送更新</button>
+                </div>
                 <label class="check-row"><input type="checkbox" id="dsh-enabled"><span>启用 DeepSeek Harness 作为唯一 Agent 运行时</span></label>
                 <div class="assistant-inline">
                   <label class="field-label" style="min-width:140px">更新渠道
@@ -1093,7 +1099,7 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261029-ui37" defer></script>
+  <script src="/app.js?v=20261030-ui45" defer></script>
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);

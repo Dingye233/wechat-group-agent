@@ -3890,6 +3890,10 @@ async function loadDSH() {
     }
     if (st.installing) {
       dshPollTimer = setTimeout(loadDSH, 3000);
+    } else if ($('#dsh-latest-version')?.dataset.checked !== '1') {
+      const latestEl = $('#dsh-latest-version');
+      if (latestEl) latestEl.dataset.checked = '1';
+      window.refreshDshVersion?.();
     }
   } catch (error) {
     if (statusLine) statusLine.textContent = `读取失败：${error.message}`;
@@ -6091,11 +6095,123 @@ function bindAssistantActions() {
           ? `发现新版本 ${info.latest}（当前 ${info.current || '未安装'}）`
           : `已是最新：${info.current || info.latest}`,
       );
+      renderDshVersion(info);
       loadDSH();
     } catch (error) {
       toast(error.message, 'error');
     }
   });
+
+  // 版本条 + 推送更新：面板打开时自动查一次，有新版就把按钮点亮
+  async function refreshDshVersion() {
+    const currentEl = $('#dsh-current-version');
+    const latestEl = $('#dsh-latest-version');
+    const pushBtn = $('#dsh-push-update');
+    if (!currentEl) return;
+    try {
+      const status = await api('/dsh/status');
+      const dsh = status.dsh || {};
+      currentEl.textContent = dsh.version ? `v${dsh.version}` : '未安装';
+      const channel = $('#dsh-channel')?.value || dsh.channel || 'stable';
+      if (latestEl) latestEl.textContent = '检查中…';
+      const data = await api('/dsh/check', {
+        method: 'POST',
+        body: JSON.stringify({ channel }),
+      });
+      renderDshVersion(data.update || {});
+    } catch (error) {
+      if (latestEl) latestEl.textContent = `检查失败：${error.message}`;
+      if (pushBtn) pushBtn.disabled = true;
+    }
+  }
+
+  function renderDshVersion(info) {
+    const currentEl = $('#dsh-current-version');
+    const latestEl = $('#dsh-latest-version');
+    const pushBtn = $('#dsh-push-update');
+    const current = info.current || '';
+    const latest = info.latest || '';
+    if (currentEl && current) currentEl.textContent = `v${current}`;
+    if (latestEl) {
+      if (info.update_available) {
+        latestEl.textContent = `最新 v${latest} · 可更新`;
+        latestEl.style.color = 'var(--accent, #6ee7b7)';
+      } else if (latest) {
+        latestEl.textContent = `最新 v${latest} · 已是最新`;
+        latestEl.style.color = '';
+      } else {
+        latestEl.textContent = '';
+      }
+    }
+    if (pushBtn) {
+      pushBtn.disabled = !info.update_available;
+      pushBtn.textContent = info.update_available ? `推送更新到 v${latest}` : '已是最新';
+      pushBtn.dataset.channel = $('#dsh-channel')?.value || 'stable';
+    }
+  }
+
+  // loadDSH 在外层作用域，需要从 window 取这两个函数
+  window.refreshDshVersion = refreshDshVersion;
+  window.renderDshVersion = renderDshVersion;
+  // 切到 DSH 面板时自动刷新版本条（不依赖 loadDSH 是否被调用）
+  document.querySelector('[data-assistant-panel="dsh"]')?.addEventListener('click', () => {
+    setTimeout(() => window.refreshDshVersion?.(), 300);
+  });
+  // 页面加载后先填一次版本，打开面板就能直接看到
+  if (document.readyState === 'complete') {
+    setTimeout(() => window.refreshDshVersion?.(), 1200);
+  } else {
+    window.addEventListener('load', () => setTimeout(() => window.refreshDshVersion?.(), 1200));
+  }
+  // 面板从隐藏变显示时刷新（不管走的是哪条切换路径）
+  const dshPanelBody = document.querySelector('[data-assistant-panel-body="dsh"]');
+  if (dshPanelBody) {
+    new MutationObserver(() => {
+      if (!dshPanelBody.hidden) window.refreshDshVersion?.();
+    }).observe(dshPanelBody, { attributes: true, attributeFilter: ['hidden'] });
+  }
+  // 轻量轮询：只取当前版本（便宜），防止页面重渲染把版本条刷掉
+  setInterval(() => {
+    const cur = $('#dsh-current-version');
+    if (!cur || document.hidden) return;
+    api('/dsh/status')
+      .then((status) => {
+        const dsh = status.dsh || {};
+        const text = dsh.version ? `v${dsh.version}` : '未安装';
+        if (cur.textContent !== text) cur.textContent = text;
+        if (dsh.installing) {
+          const latestEl = $('#dsh-latest-version');
+          if (latestEl) latestEl.textContent = '正在安装…';
+        }
+      })
+      .catch(() => {});
+  }, 5000);
+
+  $('#dsh-push-update')?.addEventListener('click', async () => {
+    const channel = $('#dsh-channel')?.value || 'stable';
+    const pushBtn = $('#dsh-push-update');
+    if (pushBtn) {
+      pushBtn.disabled = true;
+      pushBtn.textContent = '正在更新…';
+    }
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ dsh_channel: channel }),
+      });
+      const data = await api('/dsh/update', {
+        method: 'POST',
+        body: JSON.stringify({ channel }),
+      });
+      toast(data.started ? '已开始推送更新，装完会自动切换版本' : '已有安装任务在运行');
+      loadDSH();
+      setTimeout(refreshDshVersion, 6000);
+    } catch (error) {
+      toast(error.message, 'error');
+      if (pushBtn) pushBtn.disabled = false;
+    }
+  });
+
   $('#dsh-install')?.addEventListener('click', async () => {
     try {
       const channel = $('#dsh-channel')?.value || 'stable';
@@ -6951,3 +7067,103 @@ function bindEvents() {
 
   window.addEventListener('online', () => connectWS());
 }
+
+/* ---------------------------------------------------------------
+ * DSH 版本条：自包含刷新（不依赖页面内部的函数作用域）
+ * 每 5 秒拉一次 /api/dsh/status 更新「当前版本」，
+ * 打开面板时再拉一次 /api/dsh/check 显示「最新版本 / 推送更新」。
+ * ------------------------------------------------------------- */
+(function dshVersionBar() {
+  if (window.__dshVersionBarReady) return;
+  window.__dshVersionBarReady = true;
+
+  const byId = (id) => document.getElementById(id);
+
+  function paintCurrent(version, installing) {
+    const cur = byId('dsh-current-version');
+    if (cur) {
+      const text = version ? 'v' + version : '未安装';
+      if (cur.textContent !== text) cur.textContent = text;
+    }
+    if (installing) {
+      const latest = byId('dsh-latest-version');
+      if (latest) latest.textContent = '正在安装…';
+    }
+  }
+
+  function paintCheck(info) {
+    const cur = byId('dsh-current-version');
+    const latest = byId('dsh-latest-version');
+    const btn = byId('dsh-push-update');
+    if (cur && info.current) cur.textContent = 'v' + info.current;
+    if (latest) {
+      if (info.update_available) {
+        latest.textContent = '最新 v' + info.latest + ' · 可更新';
+        latest.style.color = 'var(--accent, #6ee7b7)';
+      } else if (info.latest) {
+        latest.textContent = '最新 v' + info.latest + ' · 已是最新';
+        latest.style.color = '';
+      }
+    }
+    if (btn) {
+      btn.disabled = !info.update_available;
+      btn.textContent = info.update_available ? ('推送更新到 v' + info.latest) : '已是最新';
+    }
+  }
+
+  async function pollCurrent() {
+    try {
+      const res = await fetch('/api/dsh/status', { headers: { accept: 'application/json' } });
+      const data = await res.json();
+      const dsh = data.dsh || {};
+      paintCurrent(dsh.version, dsh.installing);
+    } catch (e) {
+      /* 忽略：服务重启期间常见 */
+    }
+  }
+
+  async function checkUpdate() {
+    const channel = (byId('dsh-channel') && byId('dsh-channel').value) || 'stable';
+    try {
+      const res = await fetch('/api/dsh/check', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      });
+      const data = await res.json();
+      if (data && data.update) paintCheck(data.update);
+    } catch (e) {
+      const latest = byId('dsh-latest-version');
+      if (latest) latest.textContent = '检查失败，可稍后重试';
+    }
+  }
+
+  window.dshCheckUpdate = checkUpdate;
+
+  const start = () => {
+    pollCurrent();
+    checkUpdate();
+    setInterval(pollCurrent, 5000);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+
+  document.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest('[data-assistant-panel="dsh"]')) setTimeout(checkUpdate, 300);
+    const btn = target.closest('#dsh-push-update');
+    if (btn) {
+      setTimeout(() => {
+        const latest = byId('dsh-latest-version');
+        if (latest) latest.textContent = '正在更新…';
+        btn.disabled = true;
+        setTimeout(checkUpdate, 20000);
+      }, 500);
+    }
+  });
+})();
