@@ -26,7 +26,6 @@ from app.api import (
     opencode,
     outbox,
     replica_tools,
-    rpg,
     router as agent_router_api,
     settings as settings_api,
     status,
@@ -194,12 +193,6 @@ app.include_router(bilibili.router, prefix="/api", tags=["bilibili"])
 app.include_router(stickers.router, prefix="/api", tags=["stickers"])
 app.include_router(settings_api.router, prefix="/api", tags=["settings"])
 app.include_router(ws.router)
-app.include_router(rpg.api_router, prefix="/api", tags=["rpg"])
-app.include_router(rpg.page_router, tags=["rpg"])
-
-_YUNYIN_DIR = Path(__file__).resolve().parents[1] / "frontend" / "yunyin"
-if _YUNYIN_DIR.is_dir():
-    app.mount("/rpg/yunyin", StaticFiles(directory=str(_YUNYIN_DIR), html=True), name="yunyin-game")
 
 
 @app.middleware("http")

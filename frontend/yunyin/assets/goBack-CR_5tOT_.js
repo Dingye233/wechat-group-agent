@@ -1,1 +1,0 @@
-function e(e,t){window.history.state?.back?e.back():e.push(t)}export{e as t};

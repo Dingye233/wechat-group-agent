@@ -1,1 +1,0 @@
-import{J as e}from"./runtime-core.esm-bundler-Dc1Q9oyn.js";import{Qn as t}from"./player-CebetTD-.js";import{n}from"./index-UPxVwoLU.js";function r(r=1e3){let i=e(t());return n(()=>{i.value=t()},r),i}export{r as t};
