@@ -80,3 +80,51 @@ async def dsh_primary_restart() -> dict:
         settings = await get_settings(db)
     await service.start(settings)
     return {"ok": True, "primary": service.status()}
+
+@router.post("/dsh/hot-reload")
+async def dsh_hot_reload() -> dict:
+    """插件安装/启停后热加载：不重启群伴服务，只刷新 DSH 侧。"""
+    import time as _time
+
+    from app.db import SessionLocal
+    from app.services import dsh_plugins
+    from app.services.dsh_agent import get_dsh_agent_runtime
+    from app.services.dsh_primary import get_dsh_primary_service
+    from app.services.settings import get_settings
+
+    started = _time.time()
+    steps: list[str] = []
+
+    try:
+        dsh_plugins.invalidate_catalog_cache()
+        steps.append("catalog-cache-cleared")
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"catalog-cache-failed:{exc}")
+
+    killed = 0
+    try:
+        agent = get_dsh_agent_runtime()
+        killed = len(getattr(agent, "_processes", {}) or {})
+        await agent.stop()
+        steps.append(f"agent-processes-stopped:{killed}")
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"agent-stop-failed:{exc}")
+
+    primary_ok = False
+    try:
+        service = get_dsh_primary_service()
+        await service.stop()
+        async with SessionLocal() as db:
+            settings = await get_settings(db)
+        await service.start(settings)
+        primary_ok = True
+        steps.append("primary-restarted")
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"primary-restart-failed:{exc}")
+
+    return {
+        "ok": primary_ok,
+        "seconds": round(_time.time() - started, 2),
+        "steps": steps,
+        "note": "插件已热加载：下一条消息就会用上新工具，无需重启群伴",
+    }
