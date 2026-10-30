@@ -18,30 +18,54 @@ function Start-TrayWindow {
         -WindowStyle Hidden | Out-Null
 }
 
+# Environment bootstrap: creates .venv312/.venv, installs deps, writes .env,
+# builds data/ + agent.db on a fresh clone, then verifies quickly on later runs.
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+$bootstrap = Join-Path $PSScriptRoot "scripts\bootstrap.py"
+$venvPython = Join-Path $PSScriptRoot ".venv312\Scripts\python.exe"
+if (-not (Test-Path $venvPython)) {
+    $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+}
+if (Test-Path $bootstrap) {
+    if (Test-Path $venvPython) {
+        & $venvPython $bootstrap --no-input
+    } else {
+        # 优先 3.12 / 3.11：`py -3` 可能落到 3.13+，部分依赖还没有轮子
+        $launcher = $null
+        foreach ($argset in @(@("-3.12"), @("-3.11"), @("-3.13"), @("-3"))) {
+            if ($launcher) { break }
+            $py = Get-Command py -ErrorAction SilentlyContinue
+            if (-not $py) { break }
+            & $py.Source @argset -c "import sys" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $launcher = @($py.Source) + $argset }
+        }
+        if (-not $launcher) {
+            $base = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $base) {
+                Write-Error "Python 3.11+ not found. Install the 64-bit build, then retry."
+                exit 1
+            }
+            $launcher = @($base.Source)
+        }
+        $exe = $launcher[0]
+        $prefix = @()
+        if ($launcher.Length -gt 1) { $prefix = @($launcher[1..($launcher.Length - 1)]) }
+        & $exe @prefix $bootstrap --no-input
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Environment bootstrap failed. Details: python scripts\bootstrap.py --check"
+        exit 1
+    }
+}
+
 $venvDir = Join-Path $PSScriptRoot ".venv"
 if (Test-Path (Join-Path $PSScriptRoot ".venv312\Scripts\python.exe")) {
     $venvDir = Join-Path $PSScriptRoot ".venv312"
 }
 $python = Join-Path $venvDir "Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    Write-Host "[setup] Creating virtual environment..."
-    $base = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $base) {
-        $base = Get-Command py -ErrorAction SilentlyContinue
-    }
-    if (-not $base) {
-        Write-Error "Python not found. Install Python 3.11+ first."
-        exit 1
-    }
-    if ($base.Name -eq "py.exe") {
-        & $base.Source -3 -m venv .venv
-    } else {
-        & $base.Source -m venv .venv
-    }
-    $venvDir = Join-Path $PSScriptRoot ".venv"
-    $python = Join-Path $venvDir "Scripts\python.exe"
-    & $python -m pip install --upgrade pip
-    & $python -m pip install -r requirements.txt
+    Write-Error "Virtualenv is still missing after bootstrap; run scripts\bootstrap.py --check."
+    exit 1
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "data") | Out-Null
