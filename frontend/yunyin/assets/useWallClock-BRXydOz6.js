@@ -1,0 +1,1 @@
+import{As as e,fs as t,ps as n}from"./player-M1gyggto.js";function r(e,t=1e3){let n=window.setInterval(e,t);return()=>window.clearInterval(n)}function i(i=1e3){let a=e(Date.now()),o;return t(()=>{o=r(()=>{a.value=Date.now()},i)}),n(()=>o?.()),a}export{i as t};
