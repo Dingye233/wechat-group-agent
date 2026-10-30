@@ -32,6 +32,7 @@ from app.api import (
     stickers,
     tasks,
     transport,
+    updates,
     wechatauto,
     ws,
 )
@@ -192,6 +193,7 @@ app.include_router(opencode.router, prefix="/api", tags=["opencode"])
 app.include_router(bilibili.router, prefix="/api", tags=["bilibili"])
 app.include_router(stickers.router, prefix="/api", tags=["stickers"])
 app.include_router(settings_api.router, prefix="/api", tags=["settings"])
+app.include_router(updates.router, prefix="/api", tags=["update"])
 app.include_router(ws.router)
 
 

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui37">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui37">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui38">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui38">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -565,6 +565,12 @@
                 <div class="assistant-section-head"><strong>DeepSeek Harness</strong><button class="text-btn" id="dsh-refresh">刷新</button></div>
                 <p class="field-hint">群伴现在只有一套 Agent 运行时：DeepSeek Harness。wechatauto 负责读取微信消息和发送回复，DSH 原生插件提供微信/记忆/B站/技能工具。</p>
                 <p class="field-hint" id="dsh-status-line">读取中…</p>
+                <div class="dsh-version-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#0d1712">
+                  <span class="field-hint" style="margin:0">群伴版本</span>
+                  <strong id="qunban-current-version" style="font-variant-numeric:tabular-nums">—</strong>
+                  <span class="field-hint" id="qunban-latest-version" style="margin:0">检查中…</span>
+                  <button class="btn btn-ghost" id="qunban-check-update" style="margin-left:auto">检查群伴更新</button>
+                </div>
                 <div class="dsh-version-bar" id="dsh-version-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#0d1712">
                   <span class="field-hint" style="margin:0">当前版本</span>
                   <strong id="dsh-current-version" style="font-variant-numeric:tabular-nums">—</strong>

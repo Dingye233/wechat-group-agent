@@ -3827,7 +3827,56 @@ function loadAssistantPanel(name) {
 
 let dshPollTimer = null;
 
+async function loadQunbanUpdate(runCheck = false) {
+  const currentEl = $('#qunban-current-version');
+  const latestEl = $('#qunban-latest-version');
+  const button = $('#qunban-check-update');
+  if (!currentEl) return;
+  if (button && runCheck) {
+    button.disabled = true;
+    button.textContent = '检查中…';
+  }
+  try {
+    const data = runCheck
+      ? await api('/update/check', { method: 'POST', body: '{}' })
+      : await api('/update/status');
+    const info = data.update || {};
+    currentEl.textContent = info.current_version
+      ? `v${info.current_version}${info.current_short ? ` · #${info.current_short}` : ''}`
+      : info.current_short
+        ? `#${info.current_short}`
+        : '本地版本未知';
+    if (latestEl) {
+      if (info.error) {
+        latestEl.textContent = `检查失败：${info.error}`;
+        latestEl.style.color = 'var(--danger, #f87171)';
+      } else if (info.update_available) {
+        latestEl.textContent = `远程 #${info.latest_short || '—'} · 有新提交`;
+        latestEl.style.color = 'var(--accent, #6ee7b7)';
+      } else if (info.latest_short) {
+        latestEl.textContent = `远程 #${info.latest_short} · 已是最新`;
+        latestEl.style.color = '';
+      } else {
+        latestEl.textContent = '尚未检查';
+        latestEl.style.color = '';
+      }
+    }
+    state.qunbanUpdate = info;
+  } catch (error) {
+    if (latestEl) {
+      latestEl.textContent = `检查失败：${error.message}`;
+      latestEl.style.color = 'var(--danger, #f87171)';
+    }
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = '检查群伴更新';
+    }
+  }
+}
+
 async function loadDSH() {
+  loadQunbanUpdate().catch(() => {});
   const statusLine = $('#dsh-status-line');
   const jobLine = $('#dsh-job-line');
   const logRoot = $('#dsh-log');
@@ -6295,6 +6344,9 @@ function bindAssistantActions() {
       toast(error.message, 'error');
       event.target.checked = !event.target.checked;
     }
+  });
+  $('#qunban-check-update')?.addEventListener('click', () => {
+    loadQunbanUpdate(true).catch(() => {});
   });
   $('#dsh-refresh')?.addEventListener('click', loadDSH);
   $('#dsh-enabled')?.addEventListener('change', async (event) => {
