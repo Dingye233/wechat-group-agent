@@ -275,6 +275,12 @@ def _cached_dump() -> str:
     return text
 
 
+def invalidate_catalog_cache() -> None:
+    """清掉 --dump-config 缓存，下一次读目录会重新解析（热加载用）。"""
+    global _DUMP_CACHE
+    _DUMP_CACHE = None
+
+
 def _parse_dump(text: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
@@ -1018,6 +1024,15 @@ def _validate_plugin(target: Path) -> None:
     source = entry.read_text(encoding="utf-8")
     if "apply" not in source or "export" not in source:
         raise RuntimeError("插件入口必须导出 apply")
+    if re.search(
+        r"parameters\s*:\s*\{\s*type\s*:\s*['\"]object['\"]",
+        source,
+    ):
+        raise RuntimeError(
+            "插件参数 schema 不兼容当前 DSH：parameters 必须是参数映射 "
+            "（例如 {text: {type:'string', required:true}}），"
+            "不能在 parameters 里再套 type:'object'/properties。"
+        )
     proc = subprocess.run(
         [_node(), "--check", str(entry)],
         cwd=str(target),

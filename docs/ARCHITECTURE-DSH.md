@@ -1896,3 +1896,50 @@ Qunban 重启 → 任务消失
 - 进度消息去重：连续相同的进度不再重复发送
 
 这样再问“卡住了吗/进度”，不会出现“任务在跑但后台说没任务”的矛盾。
+
+---
+
+## 56. DSH rc5 工具 schema 兼容修复
+
+报错：
+
+```text
+studio-bili-listen (@qunban/bili-listen):
+JsonSchemaError: unsupported JSON schema:
+parameters.type must be a value schema object
+```
+
+根因：
+
+- `@qunban/bili-listen` 使用旧格式：
+
+```js
+parameters: {
+  type: 'object',
+  properties: { ... },
+  additionalProperties: false
+}
+```
+
+- DSH `0.2.1-rc.5` 的 `defineTool` 参数 schema 期望的是**参数映射**：
+
+```js
+parameters: {
+  text: { type: 'string', required: true },
+  ...
+}
+```
+
+所以 DSH 把参数键 `type` 当成一个参数，发现它的值是字符串 `"object"` 而不是 schema 对象，直接抛 JsonSchemaError。
+
+修复：
+
+- 重写 `bili_listen_check/new/reply/dm/whoami` 的参数 schema 为参数映射
+- 同步到 `qunban` / `qunban-primary` 的已安装副本
+- `_validate_plugin` 增加旧 schema 检查，后续安装直接拒绝并提示格式
+
+关于热重启：
+
+- 14:23 的“热重启”任务确实因为 Qunban 重启被中断，任务记录为 failed/服务重启中断
+- 14:29 的 `？` 任务失败不是热重启本身，而是重启后 DSH 加载旧 `bili-listen` schema 失败
+- 现在插件 schema 已修复；热重启后不会再把插件 schema 错误当成任务失败
