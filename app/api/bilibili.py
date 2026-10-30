@@ -339,3 +339,50 @@ async def bili_knowledge_stats() -> dict:
         return await bili_knowledge.stats_async()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+# ---------------------------------------------------- 监听：定时轮询 + 自动回复
+@router.get("/bili/listen")
+async def bili_listen_status() -> dict:
+    from app.services import bili_watch
+
+    return bili_watch.status()
+
+
+@router.post("/bili/listen")
+async def bili_listen_save(payload: dict) -> dict:
+    from app.services import bili_watch
+
+    conf = bili_watch.load_config()
+    patch = {}
+    if "enabled" in payload:
+        patch["enabled"] = bool(payload.get("enabled"))
+    if "interval_minutes" in payload:
+        try:
+            patch["interval_minutes"] = max(1, min(1440, int(payload.get("interval_minutes"))))
+        except Exception:
+            raise HTTPException(status_code=400, detail="间隔需要是分钟数")
+    if "admin_name" in payload or "admin_uid" in payload:
+        name = str(payload.get("admin_name") or "").strip()
+        try:
+            uid = int(payload.get("admin_uid") or 0)
+        except Exception:
+            uid = 0
+        if not name or uid <= 0:
+            raise HTTPException(status_code=400, detail="管理员必须同时提供名称和 UID")
+        patch["admin_name"] = name
+        patch["admin_uid"] = uid
+    if "reply_others" in payload:
+        patch["reply_others"] = bool(payload.get("reply_others"))
+    if "reply_admin" in payload:
+        patch["reply_admin"] = bool(payload.get("reply_admin"))
+    conf = bili_watch.save_config(patch)
+    return {"ok": True, "config": conf}
+
+
+@router.post("/bili/listen/run")
+async def bili_listen_run() -> dict:
+    import asyncio as _asyncio
+
+    from app.services import bili_watch
+
+    return await _asyncio.to_thread(bili_watch.poll_once, True)

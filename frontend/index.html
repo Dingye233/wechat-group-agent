@@ -458,6 +458,41 @@
                   <img class="bili-qr" id="bili-qr-image" alt="B站登录二维码">
                   <p class="field-hint" id="bili-qr-status">等待扫码…</p>
                 </div>
+                <div class="assistant-card" id="bili-listen-card" style="margin-top:12px;border:1px solid var(--line);border-radius:12px;padding:12px;background:#0d1712">
+                  <div class="assistant-section-head" style="display:flex;align-items:center;gap:8px">
+                    <strong>消息监听</strong>
+                    <span class="field-hint" id="bili-listen-state" style="margin-left:auto">未开启</span>
+                  </div>
+                  <p class="field-hint">定时查看 @我、评论回复、私信；管理员发指令就照做（三连 / 回这条 / 发动态），别人的评论按人设回。</p>
+                  <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
+                    <input type="checkbox" id="bili-listen-enabled"> 开启定时监听
+                  </label>
+                  <label style="display:block;margin:6px 0">
+                    <span class="field-hint">间隔（分钟）</span>
+                    <input type="number" id="bili-listen-interval" min="1" max="1440" value="10" style="width:100%">
+                  </label>
+                  <label style="display:block;margin:6px 0">
+                    <span class="field-hint">管理员名称（必填）</span>
+                    <input id="bili-listen-admin-name" placeholder="nanbei123" style="width:100%">
+                  </label>
+                  <label style="display:block;margin:6px 0">
+                    <span class="field-hint">管理员 UID（必填，数字）</span>
+                    <input id="bili-listen-admin-uid" placeholder="3493087403838091" inputmode="numeric" style="width:100%">
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
+                    <input type="checkbox" id="bili-listen-reply-admin" checked> 回复管理员消息
+                  </label>
+                  <label style="display:flex;align-items:center;gap:8px;margin:6px 0">
+                    <input type="checkbox" id="bili-listen-reply-others" checked> 回复其他人的评论
+                  </label>
+                  <div class="assistant-inline" style="display:flex;gap:8px;margin-top:8px">
+                    <button class="btn btn-primary" id="bili-listen-save">保存</button>
+                    <button class="btn btn-ghost" id="bili-listen-run">立即执行一次</button>
+                  </div>
+                  <p class="field-hint" id="bili-listen-msg" style="margin-top:8px"></p>
+                  <div id="bili-listen-log" class="field-hint" style="max-height:150px;overflow:auto;margin-top:6px"></div>
+                </div>
+
                 <details class="bili-advanced">
                   <summary>Cookie 登录（高级）</summary>
                   <input id="bili-sessdata" placeholder="SESSDATA">
@@ -1059,5 +1094,71 @@
   </dialog>
 
   <script src="/app.js?v=20261029-ui37" defer></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  if (!$('bili-listen-card')) return;
+  const msg = (text) => { const el = $('bili-listen-msg'); if (el) el.textContent = text || ''; };
+
+  async function load() {
+    try {
+      const res = await fetch('/api/bili/listen');
+      const data = await res.json();
+      const c = data.config || {};
+      $('bili-listen-enabled').checked = !!c.enabled;
+      $('bili-listen-interval').value = c.interval_minutes || 10;
+      $('bili-listen-admin-name').value = c.admin_name || '';
+      $('bili-listen-admin-uid').value = c.admin_uid || '';
+      $('bili-listen-reply-admin').checked = c.reply_admin !== false;
+      $('bili-listen-reply-others').checked = c.reply_others !== false;
+      const state = $('bili-listen-state');
+      if (state) state.textContent = c.enabled ? `运行中 · 每 ${c.interval_minutes} 分钟` : '未开启';
+      const logBox = $('bili-listen-log');
+      if (logBox) {
+        logBox.textContent = (data.recent || []).slice(-6).map((line) => {
+          if (line.kind === 'poll') return `[轮询] 新消息 ${JSON.stringify(line.counts || {})} · 动作 ${(line.actions || []).length}`;
+          if (line.kind === 'error') return `[错误] ${line.error || ''}`;
+          return `[${line.kind}]`;
+        }).join('\n');
+      }
+    } catch (err) { msg('读取失败：' + err.message); }
+  }
+
+  async function save() {
+    const payload = {
+      enabled: $('bili-listen-enabled').checked,
+      interval_minutes: Number($('bili-listen-interval').value || 10),
+      admin_name: ($('bili-listen-admin-name').value || '').trim(),
+      admin_uid: Number($('bili-listen-admin-uid').value || 0),
+      reply_admin: $('bili-listen-reply-admin').checked,
+      reply_others: $('bili-listen-reply-others').checked,
+    };
+    if (!payload.admin_name || !payload.admin_uid) { msg('管理员必须同时填名称和 UID'); return; }
+    try {
+      const res = await fetch('/api/bili/listen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) { msg(data.detail || '保存失败'); return; }
+      msg('已保存');
+      load();
+    } catch (err) { msg('保存失败：' + err.message); }
+  }
+
+  async function run() {
+    msg('执行中…');
+    try {
+      const res = await fetch('/api/bili/listen/run', { method: 'POST' });
+      const data = await res.json();
+      msg(data.ok ? (data.summary || '执行完成') : ('失败：' + (data.error || '')));
+      load();
+    } catch (err) { msg('执行失败：' + err.message); }
+  }
+
+  $('bili-listen-save').addEventListener('click', save);
+  $('bili-listen-run').addEventListener('click', run);
+  const refresh = $('bili-refresh');
+  if (refresh) refresh.addEventListener('click', () => setTimeout(load, 300));
+  load();
+})();
+</script>
 </body>
 </html>

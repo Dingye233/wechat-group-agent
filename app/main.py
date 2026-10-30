@@ -261,3 +261,9 @@ if __name__ == "__main__":
         port=settings.port,
         reload=False,
     )
+
+@app.on_event("startup")
+async def _start_bili_watch() -> None:
+    from app.services import bili_watch
+
+    bili_watch.start_loop()
