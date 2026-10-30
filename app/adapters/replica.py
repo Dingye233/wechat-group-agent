@@ -1655,6 +1655,61 @@ class ReplicaAdapter(BaseAdapter):
             self._wx = None
         return int(hwnd)
 
+    def _ensure_window_usable(self, hwnd: int) -> tuple[int, int]:
+        """Restore the client window to a state the UI driver can actually use.
+
+        Driving a minimized or zero-sized window is what produced the crashes
+        and the "clicked into nowhere" failures: the screenshot region is
+        negative, the UIA tree is empty, and blind clicks land on unrelated
+        widgets.  So restore it, verify, then widen it if needed — and refuse
+        the send instead of clicking blind when it cannot be recovered.
+        """
+
+        if not hwnd:
+            return 0, 0
+        try:
+            import win32con
+            import win32gui
+        except Exception:
+            return 0, 0
+
+        for _attempt in range(5):
+            try:
+                if not win32gui.IsIconic(hwnd) and win32gui.IsWindowVisible(hwnd):
+                    break
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            except Exception:
+                break
+            time.sleep(0.25)
+
+        try:
+            iconic = bool(win32gui.IsIconic(hwnd))
+            visible = bool(win32gui.IsWindowVisible(hwnd))
+        except Exception:
+            return 0, 0
+        if iconic or not visible:
+            raise RuntimeError(
+                "微信窗口处于最小化/隐藏状态，已取消发送，避免在无效窗口上盲点；"
+                "请把微信窗口恢复成正常大小后重试"
+            )
+
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width, height = right - left, bottom - top
+        if width < 1100 or height < 700:
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+            except Exception:
+                pass
+            time.sleep(0.6)
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width, height = right - left, bottom - top
+        if width < 1000 or height < 650:
+            raise RuntimeError(
+                "微信窗口过窄，搜索框无法稳定显示，已取消发送；"
+                "请先把微信窗口最大化/拉宽后重试"
+            )
+        return int(width), int(height)
+
     def _ensure_wx(self) -> Any:
         if self._db is None:
             raise RuntimeError("微信 4.x 数据库尚未就绪")
@@ -2078,38 +2133,15 @@ class ReplicaAdapter(BaseAdapter):
                 import win32con
                 import win32gui
 
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                 win32gui.SetForegroundWindow(hwnd)
                 time.sleep(0.2)
             except Exception:
                 pass
-        # A narrow WeChat window keeps the current chat open and hides the
-        # search box used by ChatWith.  Maximize before any lookup; if the
-        # window still cannot provide the wide layout, abort instead of
-        # clicking blind and freezing the UI.
-        try:
-            import win32con
-            import win32gui
-
-            if hwnd and not win32gui.IsIconic(hwnd):
-                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-                width = right - left
-                height = bottom - top
-                if width < 1100 or height < 700:
-                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-                    time.sleep(0.6)
-                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-                    width = right - left
-                    height = bottom - top
-                if width < 1000 or height < 650:
-                    raise RuntimeError(
-                        "微信窗口过窄，搜索框无法稳定显示，已取消发送；"
-                        "请先把微信窗口最大化/拉宽后重试"
-                    )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
+            # A minimized or narrow window hides the search box, and blind
+            # clicks then land on unrelated widgets — that is what took the
+            # client down on 4.2.x.  Recover, verify, and refuse to send when
+            # the window cannot be made usable.
+            self._ensure_window_usable(hwnd)
         wx = self._ensure_wx()
         gui = getattr(wx, "_gui", None)
         if gui is not None:
