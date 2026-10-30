@@ -1866,3 +1866,33 @@ replica-remote
 - 私聊任务持久化到 `agent_task_runs`
 - 进程重启后的任务恢复
 - 前端私聊任务进度卡片
+
+---
+
+## 55. 私聊任务 durable + 重启恢复
+
+私聊任务之前只存在 `_admin_tasks` 内存里：
+
+```text
+Qunban 重启 → 任务消失
+没有 agent_task_runs
+用户问进度时只能看到“后台没有任务”
+```
+
+现在：
+
+- 每个私聊任务创建 `agent_task_runs`：
+  - `kind=private_task`
+  - `source=admin`
+  - `session_id=admin:<wxid>`
+  - `group_id=None`
+- 步骤：ack / execute / send / verify
+- 最终发送失败时任务标 failed，不再假装 done
+- 启动后 `recover_private_tasks()`：
+  - 找到上次遗留的 running/queued 私聊任务
+  - 标记 failed：「服务重启，任务中断」
+  - 给管理员发一条中断通知
+- `_admin_task_status` 先看内存阶段，再查 durable task，最后才查 OpenCode
+- 进度消息去重：连续相同的进度不再重复发送
+
+这样再问“卡住了吗/进度”，不会出现“任务在跑但后台说没任务”的矛盾。

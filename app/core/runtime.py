@@ -372,6 +372,7 @@ class RuntimeManager:
         self._admin_tasks: dict[str, asyncio.Task] = {}
         self._admin_side_tasks: set[asyncio.Task] = set()
         self._admin_progress: dict[str, dict[str, Any]] = {}
+        self._admin_task_ids: dict[str, int] = {}
         self._proactive_tasks: dict[int, asyncio.Task] = {}
         self._memory_loop: asyncio.Task | None = None
         self._hotkey = GlobalHotkey()
@@ -455,6 +456,7 @@ class RuntimeManager:
                 for _attempt in range(8):
                     try:
                         await self.login(auto)
+                        await self.recover_private_tasks()
                         return
                     except Exception as exc:
                         last_error = exc
@@ -464,6 +466,7 @@ class RuntimeManager:
                 return
             if auto in {"mock", "uia", "wcf", "replica"}:
                 await self.login(auto)
+                await self.recover_private_tasks()
         except Exception as exc:
             logger.warning("自动登录失败: %s", exc)
 
@@ -1850,10 +1853,10 @@ class RuntimeManager:
 
     async def _send_admin_notice(
         self, contact_id: int, text: str, *, allow_seconds: float = 60.0
-    ) -> None:
+    ) -> bool:
         text = str(text or "").strip()
         if not text:
-            return
+            return False
         for attempt in range(2):
             try:
                 await self.send_contact_message(
@@ -1862,16 +1865,16 @@ class RuntimeManager:
                     is_agent=True,
                     allow_seconds=allow_seconds,
                 )
-                return
+                return True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 if getattr(self, "detached", False):
                     logger.warning("发送管理员通知暂停：用户已重新接管微信")
-                    return
+                    return False
                 if attempt > 0:
                     logger.warning("发送管理员通知仍失败: %s", exc)
-                    return
+                    return False
                 logger.warning("发送管理员通知失败，尝试恢复微信窗口: %s", exc)
                 recover = getattr(self.adapter, "recover_window", None)
                 if callable(recover):
@@ -1880,6 +1883,7 @@ class RuntimeManager:
                     except Exception:
                         pass
                 await asyncio.sleep(0.8)
+        return False
 
     @staticmethod
     def _admin_cancel_message(text: str, active: bool, starting: bool) -> bool:
@@ -1941,7 +1945,84 @@ class RuntimeManager:
             return True
         return False
 
+    async def recover_private_tasks(self) -> None:
+        """Mark private tasks left running by a previous process as interrupted.
+
+        Private admin tasks used to live only in memory, so a restart silently
+        removed them.  The durable record lets us at least tell the user which
+        task was interrupted instead of pretending nothing happened.
+        """
+        try:
+            rows = await task_runs.list_tasks(100)
+        except Exception:
+            return
+        for row in rows:
+            if row.get("source") != "admin":
+                continue
+            if row.get("status") not in {"queued", "running"}:
+                continue
+            task_id = int(row.get("id") or 0)
+            if not task_id:
+                continue
+            try:
+                await task_runs.step(
+                    task_id, "execute", "failed", detail="服务重启，任务中断"
+                )
+                await task_runs.update(
+                    task_id,
+                    status="failed",
+                    error="服务重启，任务中断",
+                )
+            except Exception:
+                continue
+            session_id = str(row.get("session_id") or "")
+            wxid = session_id.removeprefix("admin:")
+            if not wxid:
+                continue
+            try:
+                async with SessionLocal() as db:
+                    contact = (
+                        await db.execute(
+                            select(Contact).where(
+                                Contact.account_key == self.account_key,
+                                Contact.wxid == wxid,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                if contact is not None:
+                    await self._send_admin_notice(
+                        contact.id,
+                        f"上次任务 #{task_id} 因服务重启中断了："
+                        f"{str(row.get('request') or '')[:80]}。需要的话我重新执行。",
+                    )
+            except Exception:
+                pass
+
     async def _admin_task_status(self, wxid: str) -> str:
+        progress = self._admin_progress.get(wxid)
+        if progress:
+            elapsed = max(
+                0,
+                int(time.monotonic() - float(progress.get("started") or 0.0)),
+            )
+            return (
+                f"正在执行：{progress.get('stage') or '处理中'}"
+                f"｜已用 {elapsed}s"
+            )
+        try:
+            rows = await task_runs.list_tasks(100)
+            for row in rows:
+                if (
+                    row.get("source") == "admin"
+                    and row.get("session_id") == f"admin:{wxid}"
+                    and row.get("status") in {"queued", "running"}
+                ):
+                    return (
+                        f"任务 #{row.get('id')} 正在执行："
+                        f"{str(row.get('request') or '')[:80]}"
+                    )
+        except Exception:
+            pass
         try:
             from app.services.opencode_agent import get_opencode_runtime
 
@@ -2204,6 +2285,7 @@ class RuntimeManager:
         async def run() -> None:
             progress_queue: asyncio.Queue[str] = asyncio.Queue()
             progress_worker: asyncio.Task | None = None
+            private_task_id: int | None = None
             try:
                 await asyncio.sleep(0.2)
                 if self.detached:
@@ -2227,6 +2309,22 @@ class RuntimeManager:
                         )
                         persona = contact.persona or ""
                         contact_name = contact.name or contact.remark or wxid
+                try:
+                    task = await task_runs.create(
+                        kind="private_task",
+                        source="admin",
+                        group_id=None,
+                        session_id=session_id,
+                        request=clean,
+                    )
+                    private_task_id = int(task["id"])
+                    self._admin_task_ids[wxid] = private_task_id
+                    await task_runs.step(private_task_id, "ack", "done")
+                    await task_runs.step(
+                        private_task_id, "execute", "running"
+                    )
+                except Exception:
+                    private_task_id = None
                 service = AssistantService(self.llm, self)
                 progress_state: dict[str, Any] = {
                     "sent": 0,
@@ -2240,9 +2338,13 @@ class RuntimeManager:
                 heartbeat: asyncio.Task | None = None
 
                 async def progress_worker_loop() -> None:
+                    last_text = ""
                     while True:
                         message = await progress_queue.get()
                         try:
+                            if message == last_text:
+                                continue
+                            last_text = message
                             await self._send_admin_notice(
                                 contact_id, message, allow_seconds=8.0
                             )
@@ -2308,9 +2410,31 @@ class RuntimeManager:
                     },
                 )
                 if result.get("queued"):
+                    if private_task_id is not None:
+                        await task_runs.step(
+                            private_task_id, "execute", "done"
+                        )
+                        await task_runs.step(
+                            private_task_id, "send", "skipped"
+                        )
+                        await task_runs.update(
+                            private_task_id,
+                            status="done",
+                            result="新要求已插入，等待合并处理",
+                        )
                     return
                 reply = str(result.get("reply") or "").strip()
                 if not reply:
+                    if private_task_id is not None:
+                        await task_runs.step(
+                            private_task_id, "execute", "failed",
+                            detail="没有最终回复",
+                        )
+                        await task_runs.update(
+                            private_task_id,
+                            status="failed",
+                            error="没有最终回复",
+                        )
                     return
                 # Always wait for in-flight progress work. Checking empty() is
                 # racy: the worker may have dequeued the last item but not
@@ -2328,21 +2452,65 @@ class RuntimeManager:
                     except Exception as exc:
                         logger.warning("发送联系人图片失败: %s", exc)
                 text_reply = RuntimeManager._strip_inline_images(reply)
+                sent_ok = False
                 if text_reply:
-                    await self._send_admin_notice(contact_id, text_reply)
+                    sent_ok = await self._send_admin_notice(contact_id, text_reply)
                 elif sent_images == 0:
                     # If the image could not be sent, keep the original reply
                     # so the user still gets the link instead of silence.
-                    await self._send_admin_notice(contact_id, reply)
+                    sent_ok = await self._send_admin_notice(contact_id, reply)
+                else:
+                    sent_ok = True
+                if private_task_id is not None:
+                    await task_runs.step(
+                        private_task_id, "execute", "done"
+                    )
+                    await task_runs.step(
+                        private_task_id,
+                        "send",
+                        "done" if sent_ok else "failed",
+                    )
+                    if sent_ok:
+                        await task_runs.step(
+                            private_task_id, "verify", "done"
+                        )
+                        await task_runs.update(
+                            private_task_id,
+                            status="done",
+                            result=reply[:4000],
+                        )
+                    else:
+                        await task_runs.update(
+                            private_task_id,
+                            status="failed",
+                            error="最终回复发送失败",
+                        )
             except asyncio.CancelledError:
+                if private_task_id is not None:
+                    await task_runs.update(
+                        private_task_id,
+                        status="cancelled",
+                        error="任务已取消",
+                    )
                 raise
             except Exception as exc:
                 logger.exception("管理员 Agent 回复失败: %s", exc)
+                if private_task_id is not None:
+                    await task_runs.step(
+                        private_task_id, "execute", "failed", detail=str(exc)
+                    )
+                    await task_runs.update(
+                        private_task_id,
+                        status="failed",
+                        error=str(exc),
+                    )
                 await self._send_admin_notice(
                     contact_id, f"Agent 执行失败：{exc}"
                 )
             finally:
                 self._admin_progress.pop(wxid, None)
+                if self._admin_task_ids.get(wxid) == private_task_id:
+                    self._admin_task_ids.pop(wxid, None)
                 if heartbeat is not None:
                     heartbeat.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
