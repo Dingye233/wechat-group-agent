@@ -1,8 +1,8 @@
-"""Check the Qunban GitHub repository for a newer main commit.
+"""Check and safely fast-forward the Qunban GitHub main branch.
 
 DeepSeek Harness uses release tags; Qunban currently has no tags, so main's
-commit is the source of truth.  This is detection only: it never pulls or
-mutates the checkout.
+commit is the source of truth.  Checking is read-only.  Applying an update
+backs up user state first and refuses to run with tracked local changes.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPO_URL = "https://github.com/Dingye233/wechat-group-agent"
 BRANCH = "main"
 STATE_PATH = PROJECT_ROOT / "data" / "update-check.json"
+BACKUP_ROOT = PROJECT_ROOT / "data" / "update-backups"
 _TIMEOUT = 20.0
+_APPLY_LOCK = asyncio.Lock()
 
 
 def _git_exe() -> str:
@@ -132,6 +135,82 @@ def _write_state(state: dict[str, Any]) -> None:
         pass
 
 
+def _backup_update() -> str:
+    """Back up user state, but not multi-GB media/runtime caches."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = BACKUP_ROOT / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+
+    def copy_path(relative: str) -> None:
+        source = PROJECT_ROOT / relative
+        if not source.exists():
+            return
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, target)
+
+    for relative in (
+        "data/agent.db",
+        "data/wechatauto-queue.db",
+        "data/knowledge",
+        "data/dsh/studio",
+        ".env",
+    ):
+        copy_path(relative)
+
+    profiles = PROJECT_ROOT / "data" / "dsh" / "home" / "profiles"
+    if profiles.is_dir():
+        for profile in profiles.iterdir():
+            if not profile.is_dir():
+                continue
+            target = dest / "data" / "dsh" / "home" / "profiles" / profile.name
+            shutil.copytree(
+                profile,
+                target,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(
+                    "node_modules",
+                    "sessions",
+                    "logs",
+                    "*.log",
+                    "__pycache__",
+                ),
+            )
+            qunban_plugins = profile / "node_modules" / "@qunban"
+            if qunban_plugins.is_dir():
+                shutil.copytree(
+                    qunban_plugins,
+                    target / "node_modules" / "@qunban",
+                    dirs_exist_ok=True,
+                )
+
+    manifest = {
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "head": _read_state().get("current") or "",
+        "selected": [
+            "data/agent.db",
+            "data/wechatauto-queue.db",
+            "data/knowledge",
+            "data/dsh/studio",
+            "data/dsh/home/profiles (without node_modules/sessions/logs)",
+            "profiles/*/node_modules/@qunban",
+            ".env",
+        ],
+    }
+    (dest / "BACKUP.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(dest)
+
+
+async def _tracked_dirty() -> str:
+    return await _run_git("status", "--porcelain", "--untracked-files=no")
+
+
 def status() -> dict[str, Any]:
     state = _read_state()
     return {
@@ -146,6 +225,9 @@ def status() -> dict[str, Any]:
         "latest_message": state.get("latest_message") or "",
         "latest_time": state.get("latest_time") or "",
         "checked_at": state.get("checked_at") or "",
+        "backup_dir": state.get("backup_dir") or "",
+        "applied_at": state.get("applied_at") or "",
+        "restart_required": bool(state.get("restart_required")),
         "error": state.get("error") or "",
     }
 
@@ -184,8 +266,9 @@ async def check_update() -> dict[str, Any]:
             "checked_at": checked,
             "error": "",
         }
-        _write_state(result)
-        return result
+        state.update(result)
+        _write_state(state)
+        return state
     except Exception as exc:
         result = {
             **state,
@@ -199,3 +282,69 @@ async def check_update() -> dict[str, Any]:
         }
         _write_state(result)
         return result
+
+
+async def apply_update() -> dict[str, Any]:
+    """Fast-forward to origin/main after snapshotting user state.
+
+    The caller must restart Qunban to load the new Python code.  This function
+    deliberately does not run git reset/clean or overwrite data/.
+    """
+    async with _APPLY_LOCK:
+        state = _read_state()
+        try:
+            branch = await _run_git("rev-parse", "--abbrev-ref", "HEAD", timeout=8.0)
+            if branch.strip() != BRANCH:
+                raise RuntimeError(f"当前分支是 {branch.strip()}，只允许从 {BRANCH} 更新")
+            dirty = await _tracked_dirty()
+            if dirty.strip():
+                raise RuntimeError(
+                    "检测到未提交的 tracked 文件修改，已停止更新。"
+                    "请先提交/暂存这些修改，data/ 等 ignored 文件不影响。"
+                )
+            await _run_git("fetch", "origin", BRANCH, timeout=60.0)
+            latest = await _run_git("rev-parse", "FETCH_HEAD", timeout=8.0)
+            current = await current_commit()
+            if not latest or latest == current:
+                state.update(
+                    {
+                        "update_available": False,
+                        "backup_dir": "",
+                        "applied_at": "",
+                        "restart_required": False,
+                        "error": "",
+                    }
+                )
+                _write_state(state)
+                return {**state, "applied": False, "reason": "already-up-to-date"}
+            if not await _is_ancestor(current, latest):
+                raise RuntimeError("当前 HEAD 不是 origin/main 的祖先，无法 fast-forward")
+            backup_dir = await asyncio.to_thread(_backup_update)
+            await _run_git("merge", "--ff-only", "FETCH_HEAD", timeout=60.0)
+            new_head = await current_commit()
+            applied_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            state.update(
+                {
+                    "current": new_head,
+                    "current_short": new_head[:12],
+                    "latest": latest,
+                    "latest_short": latest[:12],
+                    "update_available": False,
+                    "applied_at": applied_at,
+                    "backup_dir": backup_dir,
+                    "restart_required": True,
+                    "error": "",
+                }
+            )
+            _write_state(state)
+            return {**state, "applied": True, "restart_required": True}
+        except Exception as exc:
+            state.update(
+                {
+                    "applied_at": "",
+                    "restart_required": False,
+                    "error": str(exc)[:1000],
+                }
+            )
+            _write_state(state)
+            return {**state, "applied": False, "error": str(exc)[:1000]}

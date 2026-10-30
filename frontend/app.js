@@ -3831,6 +3831,7 @@ async function loadQunbanUpdate(runCheck = false) {
   const currentEl = $('#qunban-current-version');
   const latestEl = $('#qunban-latest-version');
   const button = $('#qunban-check-update');
+  const applyButton = $('#qunban-apply-update');
   if (!currentEl) return;
   if (button && runCheck) {
     button.disabled = true;
@@ -3847,7 +3848,10 @@ async function loadQunbanUpdate(runCheck = false) {
         ? `#${info.current_short}`
         : '本地版本未知';
     if (latestEl) {
-      if (info.error) {
+      if (info.restart_required) {
+        latestEl.textContent = '已更新，重启 Qunban 后生效';
+        latestEl.style.color = 'var(--accent, #6ee7b7)';
+      } else if (info.error) {
         latestEl.textContent = `检查失败：${info.error}`;
         latestEl.style.color = 'var(--danger, #f87171)';
       } else if (info.update_available) {
@@ -3861,16 +3865,60 @@ async function loadQunbanUpdate(runCheck = false) {
         latestEl.style.color = '';
       }
     }
+    if (applyButton) {
+      const canApply = Boolean(info.update_available) && !info.restart_required;
+      applyButton.hidden = !canApply;
+      applyButton.disabled = !canApply;
+    }
     state.qunbanUpdate = info;
   } catch (error) {
     if (latestEl) {
       latestEl.textContent = `检查失败：${error.message}`;
       latestEl.style.color = 'var(--danger, #f87171)';
     }
+    if (applyButton) applyButton.hidden = true;
   } finally {
     if (button) {
       button.disabled = false;
       button.textContent = '检查群伴更新';
+    }
+  }
+}
+
+async function applyQunbanUpdate() {
+  const button = $('#qunban-apply-update');
+  const latestEl = $('#qunban-latest-version');
+  if (!window.confirm('将备份 data/ 中的提示词、知识库和插件，然后执行 git merge --ff-only。继续？')) {
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = '更新中…';
+  }
+  try {
+    const data = await api('/update/apply', { method: 'POST', body: '{}' });
+    const info = data.update || {};
+    if (info.error) {
+      toast(info.error, 'error');
+      if (latestEl) latestEl.textContent = `更新失败：${info.error}`;
+    } else if (info.applied) {
+      toast('更新已拉取，重启 Qunban 后生效');
+      if (latestEl) {
+        latestEl.textContent = '已更新，重启 Qunban 后生效';
+        latestEl.style.color = 'var(--accent, #6ee7b7)';
+      }
+    } else {
+      toast(info.reason === 'already-up-to-date' ? '已经是最新版本' : '没有执行更新');
+    }
+    state.qunbanUpdate = info;
+  } catch (error) {
+    toast(error.message, 'error');
+    if (latestEl) latestEl.textContent = `更新失败：${error.message}`;
+  } finally {
+    if (button) {
+      button.disabled = true;
+      button.hidden = true;
+      button.textContent = '安全更新';
     }
   }
 }
@@ -6347,6 +6395,9 @@ function bindAssistantActions() {
   });
   $('#qunban-check-update')?.addEventListener('click', () => {
     loadQunbanUpdate(true).catch(() => {});
+  });
+  $('#qunban-apply-update')?.addEventListener('click', () => {
+    applyQunbanUpdate().catch(() => {});
   });
   $('#dsh-refresh')?.addEventListener('click', loadDSH);
   $('#dsh-enabled')?.addEventListener('change', async (event) => {

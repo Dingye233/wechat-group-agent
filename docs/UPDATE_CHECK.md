@@ -60,3 +60,55 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/update/check
 ```
 
 如果 GitHub 不可达，接口返回 `error`，UI 显示检查失败，不影响 Qunban 运行。
+
+## 安全更新
+
+前端在有新提交时显示「安全更新」。流程：
+
+```text
+检查 tracked 文件是否干净
+→ 拒绝未提交修改
+→ git fetch origin main
+→ 校验 fast-forward
+→ 备份 user state
+→ git merge --ff-only FETCH_HEAD
+→ 标记 restart_required
+```
+
+不会执行：
+
+```text
+git reset --hard
+git clean
+覆盖 data/
+删除插件
+```
+
+备份位置：
+
+```text
+data/update-backups/<timestamp>/
+```
+
+备份范围：
+
+```text
+data/agent.db
+data/wechatauto-queue.db
+data/knowledge
+data/dsh/studio
+data/dsh/home/profiles（不含 node_modules/sessions/logs）
+profiles/*/node_modules/@qunban
+.env
+```
+
+不备份：
+
+```text
+data/agent_workspace（可能数 GB）
+data/dsh/runtimes
+data/media
+wechatauto_logs
+```
+
+更新完成后必须重启 Qunban 才加载新代码。失败时接口返回错误，备份目录保留。

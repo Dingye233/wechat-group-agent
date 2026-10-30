@@ -15,3 +15,8 @@ async def update_status() -> dict:
 @router.post("/update/check")
 async def update_check_now() -> dict:
     return {"update": await update_check.check_update()}
+
+
+@router.post("/update/apply")
+async def update_apply() -> dict:
+    return {"update": await update_check.apply_update()}
