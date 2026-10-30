@@ -240,25 +240,54 @@ flowchart LR
 双击 start.bat
 ```
 
-首次运行会自动创建 `.venv`、安装依赖，然后打开 `http://127.0.0.1:8000`。
+第一次启动会自动补全「`git clone` 拿不到的东西」，然后打开 `http://127.0.0.1:8000`：
 
-### 方式 B：手动启动
+| 自动补全 | 说明 |
+| --- | --- |
+| 虚拟环境 | 有 3.12 就建 `.venv312`，否则建 `.venv`；已存在则复用 |
+| Python 依赖 | `requirements.txt`，并按需装微信 4.x 适配器（`requirements-replica.txt`） |
+| `.env` | 从 `.env.example` 生成（UTF-8），只补缺失的键，绝不覆盖你的配置 |
+| `data/` 骨架 | `stickers`、`media/chat｜replica｜assistant`、`knowledge/chroma`、`dsh/runtimes` 等 |
+| `data/agent.db` | 建表 + 就地迁移；老库原样保留，不会清空 |
+| 体检报告 | 逐项打印 OK / WARN，明确告诉你还缺什么 |
 
-需要 64 位 Python 3.11+（微信 4.x 适配器建议使用 3.11 / 3.12）：
+第二次之后只做秒级体检（约 2 秒），不会重复装依赖。参数会透传给自举脚本：
+
+```text
+start.bat --extras all       装全部可选模块（OCR / B站 / 语义记忆 / 3.9 适配器）
+start.bat --with-dsh         顺带装 DSH 运行时（约 700 MB）
+start.bat --mirror tsinghua  用国内 PyPI 镜像
+start.bat --check            只体检，不启动服务
+```
+
+### 方式 B：只体检 / 只修复，不启动服务
+
+```text
+setup.bat                补齐缺失项，然后退出
+setup.bat --check        只体检，不改任何文件
+setup.bat --force        依赖整套重装
+```
+
+对应的 Python 入口是 `python scripts\bootstrap.py`（参数相同；加 `--json` 输出机器可读摘要），
+在 CI 或远程部署里也可以直接调用。
+
+### 方式 C：手动启动
+
+需要 64 位 Python 3.11+（微信 4.x 适配器建议 3.11 / 3.12）：
 
 ```powershell
 cd "C:\path\to\wechat-group-agent"
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-# 微信 4.x 读取与发送：
-python -m pip install -r requirements-replica.txt
-# 推荐的高精度离线 OCR：
-python -m pip install -r requirements-ocr.txt
-# DeepSeek Harness（首次安装一次，约 700 MB）：
-python .\scripts\setup_dsh.py --channel stable
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+py -3.12 -m venv .venv312
+.\.venv312\Scripts\python.exe scripts\bootstrap.py        # 自举 + 体检
+.\.venv312\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+需要单独控制的模块：
+
+```powershell
+.\.venv312\Scripts\python.exe -m pip install -r requirements-replica.txt   # 微信 4.x 收发
+.\.venv312\Scripts\python.exe scripts\bootstrap.py --extras ocr,bilibili,memory
+.\.venv312\Scripts\python.exe .\scripts\setup_dsh.py --channel stable      # DeepSeek Harness
 ```
 
 浏览器打开：
@@ -267,7 +296,18 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 http://127.0.0.1:8000
 ```
 
-macOS / Linux 可使用 `./start.sh`（演示模式或自定义适配器；WCF 仅 Windows）。
+macOS / Linux 使用 `./start.sh`（首次同样会自举；演示模式或自定义适配器，WCF 仅 Windows）。
+
+### 首次启动常见提示
+
+| 报告里看到 | 含义与处理 |
+| --- | --- |
+| `模型 Key：LLM_API_KEY 为空` | 不在群里接话而已；控制台「设置 → 大模型」填上即可 |
+| `功能模块：未装 ocr / bilibili` | 可选模块，`setup.bat --extras ocr,bilibili` 补装 |
+| `DSH 运行时：未安装` | Agent 能力不可用；`python scripts\setup_dsh.py --channel stable`（约 700 MB） |
+| `客户端：没找到安装痕迹` | 装微信 4.1.12+ 后扫码登录；不装也能先用演示模式跑通全流程 |
+| `Python 3.11+ was not found` | 装 64 位 Python，勾选「Add python.exe to PATH」后重跑 |
+| 依赖装到一半报网络错误 | `setup.bat --mirror tsinghua` 换镜像重试 |
 
 ### 后台运行与托盘
 
