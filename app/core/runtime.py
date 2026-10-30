@@ -1809,6 +1809,11 @@ class RuntimeManager:
             0,
             int(time.monotonic() - float(state.get("started") or time.monotonic())),
         )
+        task_prefix = (
+            f"任务 #{state.get('task_id')} "
+            if state.get("task_id") is not None
+            else ""
+        )
         if phase == "start":
             state["started"] = time.monotonic()
             return ""
@@ -1816,13 +1821,13 @@ class RuntimeManager:
             state["stage"] = "已插入新要求"
             state["sent"] = int(state.get("sent") or 0) + 1
             state["last_sent"] = time.monotonic()
-            return f"收到新要求，已插入当前任务（已用 {elapsed}s）。"
+            return f"{task_prefix}收到新要求，已插入当前任务（已用 {elapsed}s）。"
         if phase == "permission":
             state["stage"] = "等待确认"
-            return f"进度：已自动确认权限（{event.get('tool') or '工具'}），已用 {elapsed}s。"
+            return f"{task_prefix}进度：已自动确认权限（{event.get('tool') or '工具'}），已用 {elapsed}s。"
         if phase == "question":
             state["stage"] = "确认操作选项"
-            return f"进度：已自动回答确认选项，继续执行（已用 {elapsed}s）。"
+            return f"{task_prefix}进度：已自动回答确认选项，继续执行（已用 {elapsed}s）。"
         if phase == "tool":
             sent = int(state.get("sent") or 0)
             if sent >= int(state.get("max") or 10):
@@ -1832,6 +1837,7 @@ class RuntimeManager:
                 return ""
             state["sent"] = sent + 1
             state["last_sent"] = now
+            state["last_progress"] = now
             tool = str(event.get("tool") or "工具")
             normalized = (
                 tool.removeprefix("qunban_qunban_")
@@ -1840,15 +1846,16 @@ class RuntimeManager:
             )
             ack = _TOOL_ACKS.get(normalized) or _TOOL_ACKS.get(tool) or "正在处理下一步"
             state["stage"] = ack
-            return f"进度：{ack}｜已用 {elapsed}s"
+            return f"{task_prefix}进度：{ack}｜已用 {elapsed}s"
         if phase == "tool_result" and event.get("ok") is False:
             sent = int(state.get("sent") or 0)
             if sent >= int(state.get("max") or 10) + 3:
                 return ""
             state["sent"] = sent + 1
             state["last_sent"] = time.monotonic()
+            state["last_progress"] = time.monotonic()
             state["stage"] = "换一条路径重试"
-            return f"进度：刚才那步没成功，我换个办法再试｜已用 {elapsed}s"
+            return f"{task_prefix}进度：刚才那步没成功，我换个办法再试｜已用 {elapsed}s"
         return ""
 
     async def _send_admin_notice(
@@ -1918,6 +1925,10 @@ class RuntimeManager:
         value = re.sub(r"\s+", "", str(text or "")).lower()
         if not value:
             return False
+        if not re.search(r"[0-9a-z\u4e00-\u9fff]", value):
+            # Punctuation-only messages ("?", "？？", "...") are chat noise,
+            # never a reason to start a full DSH task.
+            return True
         if value in {
             "加油",
             "好的",
@@ -2191,7 +2202,7 @@ class RuntimeManager:
         value = str(text or "").strip()
         return bool(
             re.search(
-                r"(进度|到哪|在干嘛|在做什么|卡住|还在吗|还活着|多久|状态|完成了没|好了没)",
+                r"(进度|到哪|在干嘛|在做什么|卡住|还在吗|还活着|多久|状态|完成了没|好了没|在做任务|有没有做|有没有在|任务呢|任务吗|到底有没有)",
                 value,
             )
         )
@@ -2269,6 +2280,16 @@ class RuntimeManager:
             )
             return
 
+        # With no task running, status questions are answered from the durable
+        # state instead of accidentally starting a new DSH task.
+        if self._admin_progress_query(clean):
+            asyncio.create_task(
+                self._send_admin_notice(
+                    contact_id, self._admin_progress_snapshot(wxid, query=clean)
+                ),
+                name=f"admin-progress-idle-{wxid}",
+            )
+            return
         # With no task running, casual messages go to the chat model directly;
         # they must not spin up an OpenCode session just to say hello.
         if self._admin_casual_message(clean):
@@ -2333,6 +2354,8 @@ class RuntimeManager:
                     "started": time.monotonic(),
                     "stage": "准备中",
                     "request": clean,
+                    "task_id": private_task_id,
+                    "last_progress": time.monotonic(),
                 }
                 self._admin_progress[wxid] = progress_state
                 heartbeat: asyncio.Task | None = None
@@ -2376,15 +2399,42 @@ class RuntimeManager:
                             progress_state.get("sent") or 0
                         ) + 1
                         progress_state["last_sent"] = time.monotonic()
-                        progress_queue.put_nowait(
-                            f"任务进度：{stage}｜已用 {elapsed}s"
+                        task_prefix = (
+                            f"任务 #{private_task_id} "
+                            if private_task_id is not None
+                            else ""
                         )
+                        stale = (
+                            time.monotonic()
+                            - float(progress_state.get("last_progress") or 0.0)
+                            > 90.0
+                        )
+                        note = "（可能卡住）" if stale else ""
+                        progress_queue.put_nowait(
+                            f"{task_prefix}进度{note}：{stage}｜已用 {elapsed}s"
+                        )
+                        if private_task_id is not None:
+                            try:
+                                await task_runs.step(
+                                    private_task_id,
+                                    "execute",
+                                    "running",
+                                    detail=f"{stage}｜已用 {elapsed}s",
+                                )
+                            except Exception:
+                                pass
 
                 heartbeat = asyncio.create_task(
                     heartbeat_loop(), name=f"admin-heartbeat-{wxid}"
                 )
+                task_prefix = (
+                    f"任务 #{private_task_id} "
+                    if private_task_id is not None
+                    else ""
+                )
                 progress_queue.put_nowait(
-                    f"开始处理：{clean[:80]}{'…' if len(clean) > 80 else ''}"
+                    f"{task_prefix}开始处理："
+                    f"{clean[:80]}{'…' if len(clean) > 80 else ''}"
                 )
                 progress_state["sent"] = 1
                 progress_state["last_sent"] = time.monotonic()
@@ -2393,22 +2443,41 @@ class RuntimeManager:
                     message = self._admin_progress_text(event, progress_state)
                     if message:
                         progress_queue.put_nowait(message)
+                        if private_task_id is not None:
+                            now = time.monotonic()
+                            if now - float(progress_state.get("last_db") or 0.0) > 15.0:
+                                progress_state["last_db"] = now
+                                try:
+                                    await task_runs.step(
+                                        private_task_id,
+                                        "execute",
+                                        "running",
+                                        detail=message[:300],
+                                    )
+                                except Exception:
+                                    pass
 
-                result = await service.chat(
-                    clean,
-                    session_id=session_id,
-                    scope="admin",
-                    temperature=temperature,
-                    persona=persona,
-                    channel="wechat",
-                    progress=emit_progress,
-                    memory_scope="contact",
-                    memory_metadata={
-                        "contact_id": str(contact_id),
-                        "wxid": wxid,
-                        "name": contact_name,
-                    },
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        service.chat(
+                            clean,
+                            session_id=session_id,
+                            scope="admin",
+                            temperature=temperature,
+                            persona=persona,
+                            channel="wechat",
+                            progress=emit_progress,
+                            memory_scope="contact",
+                            memory_metadata={
+                                "contact_id": str(contact_id),
+                                "wxid": wxid,
+                                "name": contact_name,
+                            },
+                        ),
+                        timeout=900.0,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError("任务超过 15 分钟未完成，已判定失败") from exc
                 if result.get("queued"):
                     if private_task_id is not None:
                         await task_runs.step(
@@ -2454,6 +2523,18 @@ class RuntimeManager:
                 text_reply = RuntimeManager._strip_inline_images(reply)
                 sent_ok = False
                 if text_reply:
+                    if private_task_id is not None:
+                        elapsed = max(
+                            0,
+                            int(
+                                time.monotonic()
+                                - float(progress_state.get("started") or 0.0)
+                            ),
+                        )
+                        text_reply = (
+                            f"任务 #{private_task_id} 完成（{elapsed}s）\n"
+                            f"{text_reply}"
+                        )
                     sent_ok = await self._send_admin_notice(contact_id, text_reply)
                 elif sent_images == 0:
                     # If the image could not be sent, keep the original reply
@@ -2504,8 +2585,26 @@ class RuntimeManager:
                         status="failed",
                         error=str(exc),
                     )
+                task_prefix = (
+                    f"任务 #{private_task_id} "
+                    if private_task_id is not None
+                    else ""
+                )
+                lines = [
+                    line.strip()
+                    for line in str(exc).splitlines()
+                    if line.strip()
+                ]
+                detail = next(
+                    (
+                        line
+                        for line in lines
+                        if "Error" in line or "失败" in line or "超时" in line
+                    ),
+                    lines[0] if lines else type(exc).__name__,
+                )
                 await self._send_admin_notice(
-                    contact_id, f"Agent 执行失败：{exc}"
+                    contact_id, f"{task_prefix}执行失败：{detail[:180]}"
                 )
             finally:
                 self._admin_progress.pop(wxid, None)
