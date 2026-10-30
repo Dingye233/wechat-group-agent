@@ -507,6 +507,7 @@ class RuntimeManager:
                     "wechat_exe": data.get("wcf_wechat_exe", ""),
                     "replica_wechat_exe": data.get("replica_wechat_exe", ""),
                     "replica_db_dir": data.get("replica_db_dir", ""),
+                    "strict_uia": bool(data.get("wechat_uia_strict", True)),
                 }
             except Exception:
                 options = {}

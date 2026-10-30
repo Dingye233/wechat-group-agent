@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from app.adapters import create_adapter
 from app.adapters.base import AdapterEvent
+from app.services.wechat_compat import snapshot as wechat_snapshot
 from scripts.wechatauto_queue import ServiceQueue
 
 
@@ -86,7 +87,12 @@ class ServiceState:
             )
 
     async def start(self) -> None:
-        self.adapter = create_adapter(self.backend, self.emit)
+        strict_uia = str(os.environ.get("WECHATAUTO_STRICT_UIA", "1")).strip().lower()
+        self.adapter = create_adapter(
+            self.backend,
+            self.emit,
+            {"strict_uia": strict_uia not in {"0", "false", "no", "off"}},
+        )
         await self.adapter.start()
         self.queue = ServiceQueue(
             self.adapter,
@@ -142,6 +148,14 @@ def create_app(backend: str, token: str = "") -> FastAPI:
             "account": state.account,
             "pid": os.getpid(),
             "adapter": getattr(adapter, "adapter_id", ""),
+            "strict_uia": bool(getattr(adapter, "_strict_uia", True)),
+            "uia_ready": (
+                bool(adapter.uia_ready())
+                if callable(getattr(adapter, "uia_ready", None))
+                else None
+            ),
+            "wechat": wechat_snapshot(),
+            "version": "4.x",
             "uptime": int(time.time() - state.started_at),
             "seq": state.seq,
         }

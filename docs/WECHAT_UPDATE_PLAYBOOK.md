@@ -79,3 +79,43 @@ gate 缓存：
 - 连续两次目标窗口不匹配立即中止
 - 屏幕控制期间禁止 OSD/overlay 热键
 - 版本/窗口/UIA 状态暴露到 `/api/status` 和 diagnostics
+
+## 当前版本优化
+
+已加入：
+
+```text
+app/services/wechat_compat.py
+```
+
+记录已验证版本、Weixin.dll 身份和 gate RVA。
+
+service `/v1/status` 现在返回：
+
+```json
+{
+  "strict_uia": true,
+  "uia_ready": true,
+  "wechat": {
+    "version": "4.2.0.12",
+    "dll_exists": true,
+    "uia_profile": true,
+    "gate_rva": "0xb507c08",
+    "known": true
+  }
+}
+```
+
+`ReplicaAdapter` 默认 **strict_uia=true**：
+
+- UIA 不可用时停止发送
+- 不再降级 OCR 盲点击
+- 报错会提示运行 doctor 或设置 `WECHATAUTO_STRICT_UIA=0`
+
+临时允许 OCR：
+
+```powershell
+$env:WECHATAUTO_STRICT_UIA = "0"
+```
+
+不建议在微信刚更新、UIA 未验证时开启。

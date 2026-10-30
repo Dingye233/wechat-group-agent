@@ -649,6 +649,7 @@ class ReplicaAdapter(BaseAdapter):
 
     def __init__(self, emit, options: dict[str, Any] | None = None) -> None:
         super().__init__(emit, options)
+        self._strict_uia = bool((options or {}).get("strict_uia", True))
         self._worker: threading.Thread | None = None
         self._scheduler: threading.Thread | None = None
         self._ui_executor = ThreadPoolExecutor(
@@ -2083,6 +2084,18 @@ class ReplicaAdapter(BaseAdapter):
             return False, f"「{display_name}」对应 {found}，与目标 {raw} 不一致"
         return False, f"无法确认「{display_name}」的身份"
 
+    def uia_ready(self) -> bool:
+        """Read-only-ish UIA health probe; never clicks or sends."""
+        try:
+            wx = self._ensure_wx()
+            gui = getattr(wx, "_gui", None)
+            if gui is None:
+                return False
+            uia = gui._get_uia(refresh=True)
+            return bool(uia is not None and uia.is_materialized())
+        except Exception:
+            return False
+
     def _prepare_send_gui(
         self, raw: str, name: str = "", reuse: bool = False
     ) -> Any:
@@ -2149,11 +2162,19 @@ class ReplicaAdapter(BaseAdapter):
                 gui.ensure_visible()
             except Exception:
                 pass
+            uia = None
             try:
                 # Re-assert the UIA accessibility gate after a WeChat restart.
-                gui._get_uia(refresh=True)
+                uia = gui._get_uia(refresh=True)
             except Exception:
                 pass
+            if self._strict_uia and uia is None:
+                raise RuntimeError(
+                    "微信 UIA 未就绪（版本更新或窗口绑定失效）。"
+                    "已停止发送，未降级 OCR 盲点击；"
+                    "请运行 scripts/wechat_uia_doctor.py 检查，"
+                    "或设置 WECHATAUTO_STRICT_UIA=0 临时允许 OCR。"
+                )
             try:
                 if not gui.back_to_chat_tab():
                     self.log(

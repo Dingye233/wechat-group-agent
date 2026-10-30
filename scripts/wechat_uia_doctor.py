@@ -14,9 +14,12 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
 from wechatauto.uia_driver import WeChatUIA
+from app.services.wechat_compat import snapshot as wechat_snapshot
 
 
 def main() -> int:
+    print("=== WeChat compatibility ===")
+    print(wechat_snapshot())
     try:
         import psutil
     except Exception:
