@@ -1430,6 +1430,29 @@ class AgentEngine:
                 if (
                     message is not None
                     and route.lane == "chat"
+                    and str(settings.get("group_channel_mode") or "dsh_primary")
+                    == "dsh_primary"
+                ):
+                    try:
+                        if await self._handle_fast_group_chat(
+                            message,
+                            group,
+                            config,
+                            settings,
+                            context,
+                            memory_text,
+                        ):
+                            return
+                    except Exception as exc:
+                        await self._log(
+                            group_id,
+                            "warn",
+                            f"快速群聊失败，回退 DSH：{exc}",
+                            level="warn",
+                        )
+                if (
+                    message is not None
+                    and route.lane == "chat"
                     and bool(settings.get("dsh_chat_lane_enabled", True))
                     and str(settings.get("group_channel_mode") or "dsh_primary")
                     == "dsh_primary"
@@ -2425,6 +2448,108 @@ class AgentEngine:
                 level="warn",
             )
         self._start_primary_task(task_id)
+
+    async def _handle_fast_group_chat(
+        self,
+        message: Message,
+        group: Group,
+        config: GroupConfig,
+        settings: dict[str, Any],
+        context: list[str],
+        memory_text: str,
+    ) -> bool:
+        """One direct completion for simple group chat.
+
+        The persistent DSH chat lane is excellent for richer replies but adds
+        10+ seconds of process/session overhead.  A short group message should
+        land close to the configured reply delay.
+        """
+        if not bool(settings.get("group_fast_chat_enabled", True)):
+            return False
+        if not settings.get("llm_api_key"):
+            return False
+        content = str(message.content or "").strip()
+        if not content or len(content) > 500:
+            return False
+        started = time.perf_counter()
+        try:
+            delay = self._reply_delay(settings, 0.0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            knowledge_text = await self._load_knowledge_context(content, settings)
+            from app.services.context_capsule import build_chat_capsule
+
+            sender = str(message.sender_name or message.sender_wxid or "群友")
+            persona = (config.persona or settings.get("default_persona") or "").strip()
+            capsule = build_chat_capsule(
+                scope="微信群聊",
+                group_name=group.name or "未命名群",
+                sender=sender,
+                persona=persona,
+                memory=memory_text,
+                knowledge=knowledge_text,
+                recent="\n".join(context[-12:]) or "（无）",
+                current=f"{sender}：{content}",
+            )
+            result = await self.llm.complete(
+                base_url=str(settings.get("llm_base_url") or ""),
+                api_key=str(settings.get("llm_api_key") or ""),
+                model=str(config.model or settings.get("llm_model") or ""),
+                system_prompt=(
+                    "你是群聊 Agent。只输出一条自然、贴合人设的中文回复，"
+                    "不要解释思考过程，不要输出 JSON，不要调用工具。"
+                ),
+                user_prompt=capsule.render(),
+                temperature=float(settings.get("llm_temperature") or 0.8),
+                max_tokens=160,
+                json_mode=False,
+                call_site="group.fast_chat",
+            )
+        except Exception as exc:
+            await self._log(
+                group.id,
+                "warn",
+                f"快速群聊失败，回退 DSH chat lane：{exc}",
+                level="warn",
+            )
+            return False
+        reply = str(result.get("content") or "").strip()
+        if not reply:
+            return False
+        latest_trigger = self._latest_group_trigger.get(group.id)
+        if latest_trigger is not None and latest_trigger != message.id:
+            await self._log(
+                group.id,
+                "skip",
+                "快速回复生成期间已有更新的群消息，丢弃过期回复",
+            )
+            return True
+        data = {
+            "action": "reply",
+            "messages": [{"text": reply}],
+            "sticker": None,
+        }
+        sent = await self._send_primary_reply(
+            message,
+            group,
+            config,
+            settings,
+            data,
+            {
+                "model": result.get("model") or settings.get("llm_model"),
+                "usage": {},
+            },
+            started,
+            reuse_first=False,
+        )
+        await self._log(
+            group.id,
+            "fast_group_chat",
+            f"快速回复｜{int((time.perf_counter() - started) * 1000)}ms"
+            f"｜模型={result.get('model') or '—'}｜发送={'是' if sent else '否'}",
+            level="info",
+        )
+        return True
 
     async def _handle_dsh_chat_lane(
         self,

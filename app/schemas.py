@@ -124,6 +124,7 @@ class SettingsUpdate(BaseModel):
     mem0_collection: str | None = Field(default=None, max_length=120)
     memory_search_timeout_seconds: float | None = Field(default=None, ge=0.3, le=8)
     fast_chat_planner: bool | None = None
+    group_fast_chat_enabled: bool | None = None
     memory_forgetting_enabled: bool | None = None
     memory_forgetting_days: int | None = Field(default=None, ge=7, le=3650)
     memory_summary_max_input_chars: int | None = Field(default=None, ge=1000, le=30000)

@@ -41,6 +41,7 @@ PUBLIC_KEYS = {
     "mem0_collection",
     "memory_search_timeout_seconds",
     "fast_chat_planner",
+    "group_fast_chat_enabled",
     "memory_forgetting_enabled",
     "memory_forgetting_days",
     "memory_summary_max_input_chars",
@@ -127,6 +128,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "memory_search_timeout_seconds": 1.5,
     # Short casual messages skip the intent-planner LLM call.
     "fast_chat_planner": True,
+    # One direct completion for simple group replies; the DSH chat lane stays
+    # as the richer fallback, but its 10s+ overhead is too slow for casual chat.
+    "group_fast_chat_enabled": True,
     "memory_forgetting_enabled": True,
     "memory_forgetting_days": 180,
     "memory_summary_max_input_chars": 6000,
@@ -414,6 +418,13 @@ async def update_settings(
         and payload["fast_chat_planner"] is not None
     ):
         updates["fast_chat_planner"] = bool(payload["fast_chat_planner"])
+    if (
+        "group_fast_chat_enabled" in payload
+        and payload["group_fast_chat_enabled"] is not None
+    ):
+        updates["group_fast_chat_enabled"] = bool(
+            payload["group_fast_chat_enabled"]
+        )
     if "default_keywords" in payload and payload["default_keywords"] is not None:
         value = payload["default_keywords"]
         if not isinstance(value, list):
