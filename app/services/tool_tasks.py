@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.services.timefmt import iso_utc
 
 from typing import Any, Callable
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 
@@ -111,11 +112,34 @@ async def finish(
             broadcast("assistant.tool_task", {"action": "finished", "task": payload})
         except Exception:
             pass
+    await prune_completed()
     return payload
+
+
+async def prune_completed(max_age_seconds: int = 120) -> int:
+    """Drop finished tool-call rows after a short visible history.
+
+    Running tasks are never touched.  The dashboard keeps recent done/error
+    rows for a couple of minutes so the user can see what just happened, then
+    the row disappears instead of accumulating for a whole day.
+    """
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=max(30, int(max_age_seconds))
+    )
+    async with SessionLocal() as db:
+        result = await db.execute(
+            delete(AssistantToolTask).where(
+                AssistantToolTask.status.in_(("done", "error")),
+                AssistantToolTask.updated_at < cutoff,
+            )
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
 
 
 async def list_tasks(limit: int = 50) -> list[dict[str, Any]]:
     limit = max(1, min(200, int(limit)))
+    await prune_completed()
     async with SessionLocal() as db:
         rows = (
             await db.execute(
@@ -128,6 +152,7 @@ async def list_tasks(limit: int = 50) -> list[dict[str, Any]]:
 
 
 async def count() -> int:
+    await prune_completed()
     async with SessionLocal() as db:
         return int(
             (await db.execute(select(func.count(AssistantToolTask.id)))).scalar() or 0

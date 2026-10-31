@@ -2817,6 +2817,10 @@ dialog.modal::backdrop {
   margin: 6px 0 0;
   padding-right: 2px;
 }
+/* Let the list scroll; never squeeze cards into thin stripes. */
+.assistant-task-list > * {
+  flex: 0 0 auto;
+}
 .tool-task-chips {
   display: flex;
   flex-wrap: wrap;
@@ -2864,6 +2868,7 @@ dialog.modal::backdrop {
   border-radius: 8px;
   background: var(--panel-2);
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .tool-task-card.done {
   border-left-color: var(--green);
@@ -2880,6 +2885,8 @@ dialog.modal::backdrop {
   align-items: center;
   gap: 6px;
   width: 100%;
+  min-height: 38px;
+  flex: 0 0 auto;
   padding: 7px 9px;
   border: 0;
   background: transparent;

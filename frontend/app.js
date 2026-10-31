@@ -5170,7 +5170,7 @@ function toolTaskTitle(toolName) {
 /* ---- 工具调用任务：单层折叠 + 筛选 + 详情弹窗 ---- */
 const TOOL_TASK_OPEN = new Set();
 const TOOL_TASK_AUTO = new Set();
-const TOOL_TASK_VIEW = { status: 'all', type: 'all', query: '', limit: 30 };
+const TOOL_TASK_VIEW = { status: 'active', type: 'all', query: '', limit: 30 };
 const TOOL_TASK_STATUS_FILTERS = [
   ['all', '全部'],
   ['active', '执行中 / 失败'],
@@ -5611,7 +5611,7 @@ function renderAssistantTasks() {
   const hint = $('#assistant-task-hint');
   if (hint) {
     hint.textContent = tasks.length || durableTasks.length
-      ? `共 ${tasks.length} 次工具调用，当前显示 ${shown.length} 条 · 点任意一行看详情，不用一层层展开`
+      ? `共 ${tasks.length} 次工具调用，当前显示 ${shown.length} 条 · 已完成任务 2 分钟后自动清理 · 点任意一行看详情`
       : '还没有工具调用记录，Agent 调用工具时会实时出现在这里。';
   }
 
