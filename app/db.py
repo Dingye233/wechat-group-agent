@@ -82,6 +82,14 @@ def _migrate_schema(connection) -> None:  # type: ignore[no-untyped-def]
         connection.exec_driver_sql(
             "ALTER TABLE group_configs ADD COLUMN proactive_interval_minutes INTEGER DEFAULT 90"
         )
+    if "roast_mode" not in config_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE group_configs ADD COLUMN roast_mode BOOLEAN DEFAULT 0"
+        )
+    if "mention_mode" not in config_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE group_configs ADD COLUMN mention_mode VARCHAR(16) DEFAULT 'addressed'"
+        )
     assistant_columns = {
         str(row[1])
         for row in connection.exec_driver_sql(

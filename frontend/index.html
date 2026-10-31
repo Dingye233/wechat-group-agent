@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -275,6 +275,15 @@
                 <label class="check-row"><input type="checkbox" id="cfg-proactive"><span>允许 Agent 在群里安静后主动发起话题</span></label>
                 <label class="field"><span>主动发起间隔（分钟）</span><input type="number" id="cfg-proactive-interval" min="10" max="1440" value="90"></label>
                 <label class="check-row"><input type="checkbox" id="cfg-mention"><span>回复时 @ 消息发送者</span></label>
+                <label class="field"><span>@ 人的方式
+                  <small>默认只在被点名时才 @，避免每条都刷 @</small></span>
+                  <select id="cfg-mention-mode">
+                    <option value="addressed">只在被点名时 @（推荐）</option>
+                    <option value="always">每条回复都 @</option>
+                    <option value="off">从不 @</option>
+                  </select>
+                </label>
+                <label class="check-row"><input type="checkbox" id="cfg-roast"><span>怼怼模式 <small>说话带刺、爱抬杠，不骂脏话</small></span></label>
                 <label class="field">
                   <span>本群人设 <small>留空使用全局人设</small></span>
                   <textarea id="cfg-persona" rows="4" placeholder="例如：你是群里的资深产品经理，说话简短、务实，偶尔冷幽默。"></textarea>
@@ -1117,7 +1126,7 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261030-ui45" defer></script>
+  <script src="/app.js?v=20261031-ui47" defer></script>
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);

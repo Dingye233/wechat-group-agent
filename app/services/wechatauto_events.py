@@ -6,6 +6,7 @@ or replay it later, and Qunban can recover recent events after a restart.
 """
 
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 import json
 import threading
@@ -67,7 +68,7 @@ def publish(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         "id": f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
         "type": str(event_type or "event"),
         "payload": payload,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": iso_utc(datetime.now(timezone.utc)),
     }
     _EVENTS.append(event)
     _append(event)

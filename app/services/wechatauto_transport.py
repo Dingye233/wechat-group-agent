@@ -6,6 +6,7 @@ separate wechatauto service process without changing the Agent-facing API.
 """
 
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 import asyncio
 import logging
@@ -377,7 +378,7 @@ class WechatautoTransport:
             "max_attempts": row.max_attempts,
             "error": row.error,
             "result": row.result or {},
-            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "created_at": iso_utc(row.created_at),
             "started_at": row.started_at.isoformat() if row.started_at else None,
             "finished_at": row.finished_at.isoformat() if row.finished_at else None,
         }

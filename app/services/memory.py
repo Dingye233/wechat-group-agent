@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 import json
 import re
@@ -81,7 +82,7 @@ def memory_dict(memory: AgentMemory) -> dict[str, Any]:
         "source": memory.source,
         "token_count": int(memory.token_count or 0),
         "active": bool(memory.active),
-        "created_at": memory.created_at.isoformat() if memory.created_at else None,
+        "created_at": iso_utc(memory.created_at),
         "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
         "last_used_at": memory.last_used_at.isoformat() if memory.last_used_at else None,
         "use_count": int(memory.use_count or 0),

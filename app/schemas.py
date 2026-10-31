@@ -45,6 +45,8 @@ class GroupConfigUpdate(BaseModel):
     quiet_start: str | None = None
     quiet_end: str | None = None
     mention_on_reply: bool | None = None
+    mention_mode: Literal["off", "always", "addressed"] | None = None
+    roast_mode: bool | None = None
 
     @field_validator("keywords")
     @classmethod

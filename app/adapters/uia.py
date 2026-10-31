@@ -2656,7 +2656,7 @@ class UiAutomationAdapter(BaseAdapter):
                     if last_pos is not None:
                         dx = pos[0] - last_pos[0]
                         dy = pos[1] - last_pos[1]
-                        if dx * dx + dy * dy >= 25:
+                        if dx * dx + dy * dy >= 900:  # 30px：轻微抖动不算用户接管
                             self._user_mouse_at = now
                     last_pos = pos
             except Exception:
@@ -2678,7 +2678,7 @@ class UiAutomationAdapter(BaseAdapter):
         now = time.time()
         if now < self._user_consent_until:
             return
-        if now - self._user_mouse_at < 1.2:
+        if now - self._user_mouse_at < 0.8:
             self._set_detached("检测到用户正在使用鼠标")
             raise AutomationDetached(self._detach_reason)
         try:
@@ -2691,7 +2691,7 @@ class UiAutomationAdapter(BaseAdapter):
             ):
                 dx = pos[0] - self._last_auto_pos[0]
                 dy = pos[1] - self._last_auto_pos[1]
-                if dx * dx + dy * dy > 64:
+                if dx * dx + dy * dy > 900:  # 30px
                     self._user_mouse_at = now
                     self._set_detached("检测到鼠标被用户移动")
                     raise AutomationDetached(self._detach_reason)
@@ -2729,7 +2729,7 @@ class UiAutomationAdapter(BaseAdapter):
             import win32api
 
             pos = win32api.GetCursorPos()
-            if abs(pos[0] - expected_x) > 12 or abs(pos[1] - expected_y) > 12:
+            if abs(pos[0] - expected_x) > 40 or abs(pos[1] - expected_y) > 40:
                 self._set_detached("检测到鼠标被用户移动")
                 raise AutomationDetached(self._detach_reason)
         except AutomationDetached:

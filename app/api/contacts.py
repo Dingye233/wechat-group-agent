@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -59,7 +60,7 @@ async def contacts_list(runtime: RuntimeManager = Depends(get_runtime)) -> dict:
                 "kind": last.kind,
                 "sender_name": last.sender_name,
                 "is_self": last.is_self,
-                "created_at": last.created_at.isoformat() if last.created_at else None,
+                "created_at": iso_utc(last.created_at),
             }
     return {"contacts": contacts}
 
@@ -143,7 +144,7 @@ async def contact_messages(
                 "kind": row.kind,
                 "content": row.content,
                 "media_url": _media_url(row.media_path),
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_at": iso_utc(row.created_at),
                 "meta": row.meta or {},
             }
             for row in rows

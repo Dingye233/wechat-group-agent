@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
+from app.services.timefmt import local_text
 from app.models import AgentLog, ChatTask, Group, GroupConfig, GroupMember, Message, Sticker
 from app.services.capabilities import catalog_for_scope, execute_capability
 from app.services.failure_text import failure_notice
@@ -1530,7 +1531,7 @@ class AgentEngine:
                     "本轮不参与",
                 )
                 return
-            if plan.get("need_tools") or plan.get("delegate_to_opencode"):
+            if (plan.get("need_tools") or plan.get("delegate_to_opencode")) and settings.get("group_task_enabled", False):
                 task = await self._create_chat_task(
                     group=group,
                     message=message,
@@ -1640,7 +1641,7 @@ class AgentEngine:
                     )
                     return
 
-                if config.mention_on_reply:
+                if self._should_mention(config, message):
                     mention = f"@{message.sender_name}"
                     for segment in segments:
                         text = str(segment.get("text") or "")
@@ -2618,6 +2619,29 @@ class AgentEngine:
                 )
         return True
 
+    def _mention_mode(self, config: GroupConfig) -> str:
+        """兼容旧开关：老数据 mention_on_reply=true 视为 always。"""
+        mode = str(getattr(config, "mention_mode", "") or "").strip().lower()
+        if mode in ("off", "always", "addressed"):
+            return mode
+        return "always" if getattr(config, "mention_on_reply", False) else "off"
+
+    def _should_mention(self, config: GroupConfig, message: Message) -> bool:
+        """是否在回复开头 @ 对方：always 每条都 @；addressed 只被点名时 @。"""
+        mode = self._mention_mode(config)
+        if mode == "always":
+            return True
+        if mode == "off":
+            return False
+        if getattr(config, "trigger_mode", "") == "mention":
+            return True
+        meta = getattr(message, "meta", None) or {}
+        if isinstance(meta, dict) and (
+            meta.get("mentions_self") or meta.get("is_mention") or meta.get("at_self")
+        ):
+            return True
+        return False
+
     def _primary_prompt(
         self,
         message: Message,
@@ -2628,6 +2652,15 @@ class AgentEngine:
         memory_text: str,
     ) -> str:
         persona = (config.persona or settings.get("default_persona") or "").strip()
+        roast = (
+            "\n- 怼怼模式已开启：走贴吧老哥的战斗力路线。\n"
+            "  先抓对方话里的漏洞、错别字、逻辑硬伤，一句话戳穿再补一刀；\n"
+            "  多用贴吧腔：就这？、蚌埠住了、急了、你先别急、我寻思、属实没绷住、\n"
+            "  经典我有个朋友、这波不亏，反问句和短句连发，节奏要快、火力要足；\n"
+            "  抬杠要杠得有梗，损人可以，别骂脏话、别拿家人说事、不歧视、不上政治；\n"
+            "  被怼回来必须加倍还嘴，越辩越来劲，绝不认怂、绝不道歉、绝不解释自己。"
+            if getattr(config, "roast_mode", False) else ""
+        )
         mode = "多条消息" if config.multi_message_enabled else "单条消息"
         sticker = "允许发表情包" if config.sticker_enabled else "不要发表情包"
         sender = str(message.sender_name or message.sender_wxid or "群友")
@@ -2637,9 +2670,9 @@ class AgentEngine:
 - 群：{group.name or '未命名群'}（group_id={group.id}）
 - 触发者：{sender}
 - 群人数：{group.member_count or 0}
-- 消息时间：{message.created_at.isoformat() if message.created_at else '未知'}
+- 消息时间：{local_text(message.created_at)}（北京时间）
 - 群配置：{mode}，最多 {config.max_messages or 3} 条，{sticker}
-- 当前人设：{persona or '自然、简短、像群友一样接话'}
+- 当前人设：{persona or '自然、简短、像群友一样接话'}{roast}
 
 # 最近群聊
 {recent}
@@ -2656,7 +2689,11 @@ class AgentEngine:
 - 普通聊天：action=reply，直接给群友看的内容。
 - 需要工具/多步任务：可以调用暴露给你的群伴工具（读群、记忆、B站、接口等）；
   完成后返回 action=reply 给最终结果。
-- 需要后台继续：action=task，并给 ack 和当前可发送的 messages；群伴会负责发送。
+- 如何判断该回谁：「最近群聊」每条都带发言人昵称，「本条消息」后面也写着发送者，据此判断这句话是谁说的、接着谁的话，再决定 @ 谁或不 @。
+- @ 人的规矩：你决定回谁，就在开头 @ 谁，@ 后面写他的群昵称（必须是「最近群聊」或本条消息里出现过的昵称）。
+  例：要回筱叶就写「@筱叶 你这句我没听懂」；插话回应全场时不用 @；不要 @ 与这段对话无关的人，也不要每条都 @。
+- 群聊不启用任务/工作模式：不要返回 action=task，也不要把活交给后台 Agent。
+  需要查资料或调工具就在本轮完成，然后直接 action=reply。
 - 不要调用 wechat_send_message；primary 工具集中没有发送工具，最终由群伴统一发送。
 - 不要输出 Markdown 代码块、工具名或分析过程。只输出一个 JSON。
 
@@ -2665,7 +2702,6 @@ class AgentEngine:
 或
 {{"action":"reply","messages":[{{"text":"..."}}],"sticker":null}}
 或
-{{"action":"task","ack":"收到，我处理一下","messages":[{{"text":"..."}}]}}
 """
 
     async def _send_primary_reply(
@@ -2700,7 +2736,7 @@ class AgentEngine:
             merged = "\n".join(texts)
             if merged or sticker is not None:
                 segments = [{"text": merged, "sticker": sticker}]
-        if config.mention_on_reply:
+        if self._should_mention(config, message):
             mention = f"@{message.sender_name}"
             for segment in segments:
                 text = str(segment.get("text") or "")

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -300,7 +301,7 @@ async def bili_videos(limit: int = Query(default=20, ge=1, le=100)) -> dict:
                 "actions": row.actions,
                 "status": row.status,
                 "error": row.error,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_at": iso_utc(row.created_at),
             }
             for row in rows
         ]

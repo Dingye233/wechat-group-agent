@@ -34,6 +34,7 @@ EMPTY_CONFIG = {
     "quiet_start": "",
     "quiet_end": "",
     "mention_on_reply": False,
+    "roast_mode": False,
 }
 
 
@@ -72,6 +73,9 @@ def config_dict(config: GroupConfig | None) -> dict[str, Any]:
         "quiet_start": config.quiet_start or "",
         "quiet_end": config.quiet_end or "",
         "mention_on_reply": config.mention_on_reply,
+        "mention_mode": getattr(config, "mention_mode", None)
+        or ("always" if config.mention_on_reply else "off"),
+        "roast_mode": bool(config.roast_mode),
     }
 
 

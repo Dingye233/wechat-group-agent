@@ -1891,6 +1891,11 @@ function renderInspector(group) {
   $('#cfg-proactive').checked = Boolean(config.proactive_enabled);
   $('#cfg-proactive-interval').value = String(config.proactive_interval_minutes ?? 90);
   $('#cfg-mention').checked = Boolean(config.mention_on_reply);
+  if ($('#cfg-roast')) $('#cfg-roast').checked = Boolean(config.roast_mode);
+  if ($('#cfg-mention-mode')) {
+    $('#cfg-mention-mode').value = config.mention_mode
+      || (config.mention_on_reply ? 'always' : 'addressed');
+  }
   $('#cfg-persona').value = config.persona || '';
   $('#cfg-model').value = config.model || '';
   setRangeFill($('#cfg-probability'));
@@ -1936,6 +1941,8 @@ function collectGroupConfig() {
     proactive_enabled: $('#cfg-proactive').checked,
     proactive_interval_minutes: parseIntSafe($('#cfg-proactive-interval').value, 90),
     mention_on_reply: $('#cfg-mention').checked,
+    mention_mode: $('#cfg-mention-mode')?.value || 'addressed',
+    roast_mode: $('#cfg-roast')?.checked === true,
     persona: $('#cfg-persona').value,
     model: $('#cfg-model').value.trim(),
   };

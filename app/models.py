@@ -128,6 +128,9 @@ class GroupConfig(Base):
     quiet_start: Mapped[str] = mapped_column(String(8), default="")
     quiet_end: Mapped[str] = mapped_column(String(8), default="")
     mention_on_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+    # off / always / addressed（addrressed=仅被点名时 @）
+    mention_mode: Mapped[str] = mapped_column(String(16), default="addressed")
+    roast_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     last_memory_message_id: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

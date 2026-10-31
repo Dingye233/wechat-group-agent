@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 import asyncio
 import contextlib
@@ -85,7 +86,7 @@ def _video_payload(row: BiliVideo) -> dict[str, Any]:
         "actions": row.actions or {},
         "status": row.status,
         "error": row.error,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "created_at": iso_utc(row.created_at),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 

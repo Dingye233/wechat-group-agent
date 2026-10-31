@@ -6,6 +6,7 @@ create before it says "I will do that".
 """
 
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 from datetime import datetime
 import copy
@@ -67,10 +68,10 @@ def _dict(row: AgentTaskRun) -> dict[str, Any]:
         "error": row.error or "",
         "attempts": row.attempts,
         "verified": bool(row.verified),
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "started_at": row.started_at.isoformat() if row.started_at else None,
-        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_at": iso_utc(row.created_at),
+        "started_at": iso_utc(row.started_at),
+        "finished_at": iso_utc(row.finished_at),
+        "updated_at": iso_utc(row.updated_at),
     }
 
 
@@ -222,7 +223,7 @@ async def step(
             if isinstance(item, dict) and item.get("name") == name:
                 item["status"] = status
                 item["detail"] = detail[:500]
-                item["updated_at"] = datetime.utcnow().isoformat()
+                item["updated_at"] = iso_utc(datetime.utcnow())
                 found = True
                 break
         if not found:
@@ -231,7 +232,7 @@ async def step(
                     "name": name,
                     "status": status,
                     "detail": detail[:500],
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": iso_utc(datetime.utcnow()),
                 }
             )
         row.steps = steps

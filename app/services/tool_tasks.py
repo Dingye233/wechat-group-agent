@@ -1,6 +1,7 @@
 """Persistent task rows for private-chat tool calls."""
 
 from __future__ import annotations
+from app.services.timefmt import iso_utc
 
 from typing import Any, Callable
 
@@ -24,7 +25,7 @@ def _task_dict(row: AssistantToolTask) -> dict[str, Any]:
         "tool_output": row.tool_output or "",
         "status": row.status,
         "error": row.error or "",
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "created_at": iso_utc(row.created_at),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
