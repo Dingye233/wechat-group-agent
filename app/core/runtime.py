@@ -2363,7 +2363,23 @@ class RuntimeManager:
             clean = "\n".join([*pending, clean])
 
         async def run() -> None:
-            progress_queue: asyncio.Queue[str] = asyncio.Queue()
+            # Latest-value mailbox: progress is useful, a backlog of stale
+            # progress is not.  At most one pending message; a newer update
+            # replaces it instead of making the final reply wait in line.
+            progress_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
+
+            def offer_progress(message: str) -> None:
+                while True:
+                    try:
+                        progress_queue.put_nowait(message)
+                        return
+                    except asyncio.QueueFull:
+                        try:
+                            progress_queue.get_nowait()
+                            progress_queue.task_done()
+                        except asyncio.QueueEmpty:
+                            return
+
             progress_worker: asyncio.Task | None = None
             private_task_id: int | None = None
             try:
@@ -2469,7 +2485,7 @@ class RuntimeManager:
                             > 90.0
                         )
                         note = "（可能卡住）" if stale else ""
-                        progress_queue.put_nowait(
+                        offer_progress(
                             f"{task_prefix}进度{note}：{stage}｜已用 {elapsed}s"
                         )
                         if private_task_id is not None:
@@ -2491,7 +2507,7 @@ class RuntimeManager:
                     if private_task_id is not None
                     else ""
                 )
-                progress_queue.put_nowait(
+                offer_progress(
                     f"{task_prefix}开始处理："
                     f"{clean[:80]}{'…' if len(clean) > 80 else ''}"
                 )
@@ -2501,7 +2517,7 @@ class RuntimeManager:
                 async def emit_progress(event: dict[str, Any]) -> None:
                     message = self._admin_progress_text(event, progress_state)
                     if message:
-                        progress_queue.put_nowait(message)
+                        offer_progress(message)
                         if private_task_id is not None:
                             now = time.monotonic()
                             if now - float(progress_state.get("last_db") or 0.0) > 15.0:
@@ -2564,11 +2580,25 @@ class RuntimeManager:
                             error="没有最终回复",
                         )
                     return
-                # Always wait for in-flight progress work. Checking empty() is
-                # racy: the worker may have dequeued the last item but not
-                # finished sending it yet, and the final reply would overtake
-                # or cancel that message.
-                await progress_queue.join()
+                # The final reply must not sit behind a queue of stale progress
+                # messages.  Drop pending progress, stop the heartbeat, and
+                # only wait for an in-flight send for a bounded time.
+                progress_state["finalizing"] = True
+                if heartbeat is not None:
+                    heartbeat.cancel()
+                while not progress_queue.empty():
+                    try:
+                        progress_queue.get_nowait()
+                        progress_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
+                try:
+                    await asyncio.wait_for(progress_queue.join(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    if progress_worker is not None:
+                        progress_worker.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await progress_worker
                 image_paths = RuntimeManager._image_paths_from_trace(
                     result.get("trace") or []
                 )

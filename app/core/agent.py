@@ -121,6 +121,9 @@ class AgentEngine:
         # message from another member cancel an earlier member's pending
         # question while a slow multi-segment reply was being sent.
         self._latest_trigger: dict[tuple[int, str], int] = {}
+        # A group-level "latest eligible trigger" prevents a backlog of stale
+        # replies when several messages arrive while one reply is generating.
+        self._latest_group_trigger: dict[int, int] = {}
         self._global_lock = asyncio.Lock()
         self._global_next_reply = 0.0
         self._processed: deque[int] = deque(maxlen=3000)
@@ -1323,6 +1326,20 @@ class AgentEngine:
             if not self.runtime.is_online:
                 return
 
+            if (
+                str(config.trigger_mode or "") == "all"
+                and not self._addresses_bot(message, settings)
+                and self._is_low_value_group_message(message)
+            ):
+                await self._log(
+                    group_id,
+                    "skip",
+                    f"低信息量消息，不接话：{str(message.content or '')[:40]}",
+                    level="info",
+                )
+                return
+            self._latest_group_trigger[group_id] = message_id
+
             from app.services import agent_router
 
             route = agent_router.classify_group(
@@ -1383,9 +1400,19 @@ class AgentEngine:
         await asyncio.sleep(coalesce_wait)
         if self._latest_trigger.get(trigger_key) != message_id:
             return
+        if self._latest_group_trigger.get(group_id) != message_id:
+            await self._log(
+                group_id,
+                "skip",
+                "已有更新的群消息触发，跳过这条过期回复",
+                level="info",
+            )
+            return
 
         async with lock:
             # Configuration may have changed while waiting for the lock.
+            if self._latest_group_trigger.get(group_id) != message_id:
+                return
             async with SessionLocal() as db:
                 config = await db.get(GroupConfig, group_id)
                 settings = await get_settings(db)
@@ -1653,6 +1680,14 @@ class AgentEngine:
                 global_interval = float(
                     settings.get("reply_global_interval_seconds") or 0
                 )
+                latest_trigger = self._latest_group_trigger.get(group_id)
+                if latest_trigger is not None and latest_trigger != message.id:
+                    await self._log(
+                        group_id,
+                        "skip",
+                        "生成期间已有更新的群消息，丢弃过期回复",
+                    )
+                    return
                 async with contextlib.nullcontext():
                     wait = 0.0
                     if wait > 0:
@@ -1729,6 +1764,46 @@ class AgentEngine:
                     f"｜模型耗时：{meta.get('latency_ms', 0)}ms"
                     f"{timing}",
                 )
+
+    def _addresses_bot(self, message: Message, settings: dict[str, Any]) -> bool:
+        meta = message.meta or {}
+        if meta.get("mentioned_me") or meta.get("mentions_self") or meta.get("at_self"):
+            return True
+        text = str(message.content or "").replace("\u2005", " ").replace("\xa0", " ")
+        return any(f"@{alias}" in text for alias in self._bot_aliases(settings))
+
+    @staticmethod
+    def _is_low_value_group_message(message: Message) -> bool:
+        """Skip pure acknowledgements/emoji in trigger_mode=all.
+
+        This is deliberately narrow: it only applies when the bot is not
+        mentioned, so a direct question is never filtered.
+        """
+        text = str(message.content or "").strip()
+        compact = re.sub(r"[\W_]+", "", text, flags=re.UNICODE).lower()
+        if not compact:
+            return True
+        if len(compact) <= 2:
+            return True
+        if compact in {
+            "表情包",
+            "收到",
+            "好的",
+            "好吧",
+            "晚安",
+            "早安",
+            "睡了",
+            "在吗",
+            "哈哈",
+            "hhh",
+            "233",
+            "666",
+            "ok",
+        }:
+            return True
+        if re.fullmatch(r"(哈+|h+|2+3+|6+)", compact):
+            return True
+        return False
 
     # ------------------------------------------------------------------ trigger
     async def _triggered(
@@ -2447,6 +2522,14 @@ class AgentEngine:
                 "DSH Chat lane 返回空回复",
             )
             return True
+        latest_trigger = self._latest_group_trigger.get(group.id)
+        if latest_trigger is not None and latest_trigger != message.id:
+            await self._log(
+                group.id,
+                "skip",
+                "生成期间已有更新的群消息，丢弃过期回复",
+            )
+            return True
         data = {"action": "reply", "reply": text}
         sent = await self._send_primary_reply(
             message,
@@ -2580,6 +2663,22 @@ class AgentEngine:
                 "dsh_primary",
                 "DSH 返回空动作，本轮不发送",
                 level="warn",
+            )
+            return True
+        latest_trigger = self._latest_group_trigger.get(group.id)
+        if latest_trigger is not None and latest_trigger != message.id:
+            if task_record is not None:
+                await task_runs.update(
+                    int(task_record["id"]),
+                    status="cancelled",
+                    error="生成期间已有更新的群消息",
+                )
+            if preflight is not None:
+                preflight.cancel()
+            await self._log(
+                group.id,
+                "skip",
+                "DSH primary 生成期间已有更新的群消息，丢弃过期回复",
             )
             return True
         sent = await self._send_primary_reply(
