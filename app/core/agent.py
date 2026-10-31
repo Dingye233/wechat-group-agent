@@ -1275,15 +1275,32 @@ class AgentEngine:
             task_id, "done", result=(sent_text or "OpenCode 完成")[:4000]
         )
 
-    async def _send_task_notice(self, group_id: int, text: str) -> None:
+    async def _send_task_notice(self, group_id: int, text: str) -> bool:
+        """Deliver a task notice, and never lose it silently.
+
+        The old version wrapped the send in ``except: pass`` — so when a task
+        failed *because* the group send failed, the notice died in the same
+        broken channel and the user just saw nothing. Now a failed group send
+        falls back to the admin's private chat.
+        """
         try:
             await self.runtime.send_agent_message(
                 group_id,
                 text=text,
                 meta={"source": "opencode", "task_notice": True},
             )
-        except Exception:
-            pass
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("任务提示发到群 %s 失败：%s", group_id, exc)
+        notify = getattr(self.runtime, "notify_admin_of_failure", None)
+        if callable(notify):
+            try:
+                if await notify(group_id, text):
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("任务提示兜底私聊失败：%s", exc)
+        logger.error("任务提示彻底发不出去（群 %s）：%s", group_id, str(text)[:200])
+        return False
 
     async def _handle(self, group_id: int, message_id: int) -> None:
         if self.runtime.detached:
@@ -2597,6 +2614,14 @@ class AgentEngine:
                     status="failed",
                     error="任务确认消息发送失败",
                 )
+                # The ack itself could not be sent, so a normal notice would
+                # die in the same channel: _send_task_notice falls back to the
+                # admin's private chat.
+                await self._send_task_notice(
+                    group.id,
+                    f"任务 #{int(task_record['id'])} 没能开工：确认消息没发出去"
+                    "（微信窗口/会话状态不对）。回我一句「重试」我就再跑一遍。",
+                )
         return True
 
     def _primary_prompt(
@@ -3169,14 +3194,21 @@ class AgentEngine:
             raise
         except Exception as exc:
             await task_runs.step(task_id, "execute", "failed", detail=str(exc))
+            await task_runs.step(task_id, "send", "failed", detail="未发送")
+            await task_runs.step(task_id, "verify", "failed", detail="未执行")
             await task_runs.update(task_id, status="failed", error=str(exc))
-            try:
-                await self._send_task_notice(
-                    int(record.get("group_id") or 0),
-                    f"任务 #{task_id} 没完成：{str(exc)[:120]}。可以让我重试。",
+            from app.services.failure_text import failure_notice
+
+            delivered = await self._send_task_notice(
+                int(record.get("group_id") or 0),
+                failure_notice(task_id, exc),
+            )
+            if not delivered:
+                logger.error(
+                    "任务 #%s 的失败说明没能送达（群 %s）",
+                    task_id,
+                    record.get("group_id"),
                 )
-            except Exception:
-                pass
             await self._log(
                 int(record.get("group_id") or 0),
                 "dsh_primary_task",

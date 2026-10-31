@@ -1490,6 +1490,33 @@ class RuntimeManager:
             ).scalars().all()
         adapter.set_admin_contacts(set(rows))
 
+    async def notify_admin_of_failure(self, group_id: int | None, text: str) -> bool:
+        """Last-resort channel when the normal reply channel is what broke.
+
+        A group task that dies *because* the send failed would otherwise be
+        completely silent: the notice lands in the same broken channel. Fall
+        back to the admin's private chat so a human always hears about it.
+        """
+        body = str(text or "").strip()
+        if not body:
+            return False
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    select(Contact.id, Contact.name)
+                    .where(Contact.is_admin.is_(True))
+                    .limit(3)
+                )
+            ).all()
+        if not rows:
+            logger.warning("任务失败但找不到管理员联系人，未能兜底通知：%s", body[:120])
+            return False
+        prefix = f"群 {group_id} 那边发不出去，先在这里报一下：\n" if group_id else ""
+        for row in rows:
+            if await self._send_admin_notice(int(row.id), f"{prefix}{body}"):
+                return True
+        return False
+
     async def set_contact_admin(self, contact_id: int, is_admin: bool) -> dict[str, Any]:
         async with SessionLocal() as db:
             row = await db.get(Contact, contact_id)
@@ -1861,35 +1888,10 @@ class RuntimeManager:
 
     @staticmethod
     def _explain_failure(exc: BaseException) -> str:
-        """Translate a technical traceback into one readable line.
+        """Readable one-liner for a failure (see app.services.failure_text)."""
+        from app.services.failure_text import explain_failure
 
-        The raw exception still goes to the log and to ``agent_task_runs.error``;
-        what the user receives must answer "why did nothing happen" without
-        making them read a cordis registration stack.
-        """
-        text = str(exc or "")
-        low = text.lower()
-        rules = (
-            (
-                'service "shell" has been registered',
-                "本机命令通道没起来（DSH 的 shell 插件冲突），这轮没有真正执行",
-            ),
-            ("spawn bash enoent", "本机没有可用的 bash，命令没能执行"),
-            ("spawn pwsh enoent", "本机没找到 PowerShell 7（pwsh）"),
-            ("sandbox", "沙箱执行器不可用，命令被拦下了"),
-            ("timeout", "某一步执行超时，我先停了下来"),
-            ("超时", "某一步执行超时，我先停了下来"),
-            ("not found", "要用的文件或命令没找到"),
-            ("permission", "没有权限执行这一步"),
-            ("微信窗口", "操作窗口时出了问题（窗口被最小化或被挡住）"),
-        )
-        for needle, human in rules:
-            if needle in low or needle in text:
-                return human
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if lines:
-            return lines[0][:120]
-        return type(exc).__name__
+        return explain_failure(exc)
 
     async def _send_admin_notice(
         self, contact_id: int, text: str, *, allow_seconds: float = 60.0
