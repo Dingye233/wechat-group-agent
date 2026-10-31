@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionLocal
 from app.models import AgentLog, ChatTask, Group, GroupConfig, GroupMember, Message, Sticker
 from app.services.capabilities import catalog_for_scope, execute_capability
+from app.services.failure_text import failure_notice
 from app.services.impressions import (
     get_impression,
     impression_prompt,
@@ -1160,19 +1161,13 @@ class AgentEngine:
             await self._update_chat_task(
                 task_id, "error", error=f"{label} 执行失败：{exc}"
             )
-            await self._send_task_notice(
-                group.id,
-                "后台执行器没跑起来，我已经把错误记下来了；稍后可以再让我试一次。",
-            )
+            await self._send_task_notice(group.id, failure_notice(task_id, exc))
             return
         except Exception as exc:
             await self._update_chat_task(
                 task_id, "error", error=f"{label} 执行异常：{exc}"
             )
-            await self._send_task_notice(
-                group.id,
-                "后台执行器出了点问题，我已经把错误记下来了。",
-            )
+            await self._send_task_notice(group.id, failure_notice(task_id, exc))
             return
 
         reply = str(result.get("reply") or "").strip()
@@ -1184,7 +1179,7 @@ class AgentEngine:
             )
             await self._send_task_notice(
                 group.id,
-                "后台执行器长时间没有新进展，我已经自动中止了，避免继续消耗 token。",
+                failure_notice(task_id, "后台执行器长时间没有新进展，已自动中止，避免继续烧 token"),
             )
             return
         if result.get("timed_out") or (result.get("error") and not reply):
@@ -1211,10 +1206,7 @@ class AgentEngine:
                 await self._update_chat_task(
                     task_id, "error", error=f"{label} 继续执行失败：{exc}"
                 )
-                await self._send_task_notice(
-                    group.id,
-                    "后台执行器中断了，我没拿到最终结果，先把任务停在这里。",
-                )
+                await self._send_task_notice(group.id, failure_notice(task_id, exc))
                 return
 
         if not reply:
@@ -1223,7 +1215,7 @@ class AgentEngine:
             )
             await self._send_task_notice(
                 group.id,
-                "后台执行器跑完了，但没有返回可读结果，我先不糊弄你。",
+                failure_notice(task_id, f"{label} 跑完了但没有返回可读结果，不能当完成"),
             )
             return
 
@@ -2619,8 +2611,10 @@ class AgentEngine:
                 # admin's private chat.
                 await self._send_task_notice(
                     group.id,
-                    f"任务 #{int(task_record['id'])} 没能开工：确认消息没发出去"
-                    "（微信窗口/会话状态不对）。回我一句「重试」我就再跑一遍。",
+                    failure_notice(
+                        int(task_record["id"]),
+                        "任务确认消息没发出去（窗口/会话状态不对），这轮没能开工",
+                    ),
                 )
         return True
 
@@ -3104,7 +3098,7 @@ class AgentEngine:
                 )
                 await self._send_task_notice(
                     group.id,
-                    f"任务 #{task_id} 没跑出结果，先别当完成；可以让我重试。",
+                    failure_notice(task_id, "DSH 跑完了却没有产出最终回复，不能当完成"),
                 )
                 return
             await task_runs.step(task_id, "execute", "done")
