@@ -190,6 +190,40 @@ def search_files(pattern: str, root: str = ".", limit: int = 200) -> dict[str, A
     return {"root": str(base), "pattern": pattern, "matches": matches, "count": len(matches)}
 
 
+def _guard_self_restart(command: str) -> None:
+    """Refuse commands that kill the Qunban process hosting this task."""
+    if str(os.environ.get("QUNBAN_ALLOW_SELF_RESTART", "")).strip() == "1":
+        return
+    value = re.sub(r"\s+", " ", str(command or "")).lower()
+    touches_qunban = any(
+        marker in value
+        for marker in (
+            "8000",
+            "app.main:app",
+            "uvicorn",
+            "server.pid",
+            "stop-background",
+            "start-background",
+            "qunban_restart",
+        )
+    )
+    kills = any(
+        marker in value
+        for marker in (
+            "stop-process",
+            "taskkill",
+            "stop-service",
+            "restart-service",
+        )
+    )
+    if touches_qunban and kills:
+        raise RuntimeError(
+            "禁止在任务运行期间重启/停止群伴：当前任务本身就跑在 8000 服务里，"
+            "执行 Stop-Process/taskkill 会杀死任务自身。"
+            "请先让任务正常结束，再由用户或托盘重启；代码改动可以在下次重启后生效。"
+        )
+
+
 def _powershell_command(command: str) -> list[str]:
     return [
         "powershell.exe",
@@ -221,6 +255,7 @@ def run_powershell(
 ) -> dict[str, Any]:
     if not str(command or "").strip():
         raise ValueError("命令不能为空")
+    _guard_self_restart(command)
     workdir = resolve_path(cwd) if cwd else workspace_root()
     if not workdir.is_dir():
         workdir = workspace_root()

@@ -274,6 +274,7 @@ class ReplicaGuard:
         self._user_mouse_at = 0.0
         self._consent_until = 0.0
         self._synthetic_depth = 0
+        self._last_synthetic_at = 0.0
         self._expected: tuple[int, int] | None = None
         self._watch_stop = threading.Event()
         self._watch_thread: threading.Thread | None = None
@@ -308,15 +309,32 @@ class ReplicaGuard:
                 # movement belongs to the automation (wechatauto uses
                 # SetCursorPos/SendInput).  Recording it as "the user moved
                 # the mouse" caused false takeovers in the middle of sends.
-                if self._synthetic_depth > 0 or now < self._consent_until:
+                synthetic_recent = (
+                    self._synthetic_depth > 0
+                    or now - self._last_synthetic_at < 1.5
+                )
+                if synthetic_recent or now < self._consent_until:
                     last_pos = pos
                 else:
                     if last_pos is not None:
                         dx = pos[0] - last_pos[0]
                         dy = pos[1] - last_pos[1]
-                        if dx * dx + dy * dy >= 25:
+                        # 30px: ignore cursor jitter and Windows pointer
+                        # rounding while still noticing a real hand movement.
+                        if dx * dx + dy * dy >= 900:
                             self._user_mouse_at = now
                     last_pos = pos
+                # A mouse takeover is transient by nature.  If the user has
+                # stopped touching the mouse for a few seconds, resume instead
+                # of staying detached until someone clicks the dashboard.
+                if (
+                    self.detached
+                    and "鼠标" in self.reason
+                    and now - self._user_mouse_at > 2.5
+                    and now - self._last_synthetic_at > 2.5
+                    and (self._last_input_age() or 99.0) > 2.5
+                ):
+                    self.reattach()
             except Exception:
                 pass
             self._watch_stop.wait(0.08)
@@ -329,16 +347,27 @@ class ReplicaGuard:
 
     def before_action(self) -> None:
         if self.detached:
-            raise AutomationDetached(self.reason or "群伴已脱离控制，请重新接管")
+            if (
+                "鼠标" in self.reason
+                and time.time() - self._last_synthetic_at > 2.5
+                and (self._last_input_age() or 99.0) > 2.5
+            ):
+                self.reattach()
+            else:
+                raise AutomationDetached(self.reason or "群伴已脱离控制，请重新接管")
         now = time.time()
         if now < self._consent_until:
             return
-        if now - self._user_mouse_at < 1.2:
+        # Synthetic mouse movement updates GetLastInputInfo too.  Do not
+        # mistake the adapter's own clicks for a human takeover.
+        if now - self._last_synthetic_at < 1.0:
+            return
+        if now - self._user_mouse_at < 0.8:
             self._set_detached("检测到用户正在使用鼠标")
             raise AutomationDetached(self.reason)
         try:
             last_input = self._last_input_age()
-            if last_input is not None and last_input < 1.2:
+            if last_input is not None and last_input < 0.8:
                 self._set_detached("检测到用户正在使用键盘或鼠标")
                 raise AutomationDetached(self.reason)
         except AutomationDetached:
@@ -360,15 +389,18 @@ class ReplicaGuard:
 
     def begin_synthetic(self, expected: tuple[int, int] | None = None) -> None:
         self._synthetic_depth += 1
+        self._last_synthetic_at = time.time()
         if expected is not None:
             self._expected = expected
 
     def end_synthetic(self) -> None:
         self._synthetic_depth = max(0, self._synthetic_depth - 1)
+        self._last_synthetic_at = time.time()
         if self._synthetic_depth == 0:
             self._expected = None
 
     def note_action(self) -> None:
+        self._last_synthetic_at = time.time()
         try:
             import win32api
 
@@ -386,9 +418,15 @@ class ReplicaGuard:
             import win32api
 
             pos = win32api.GetCursorPos()
-            if abs(pos[0] - expected[0]) > 12 or abs(pos[1] - expected[1]) > 12:
-                self._set_detached("检测到鼠标被用户移动")
-                raise AutomationDetached(self.reason)
+            if abs(pos[0] - expected[0]) > 40 or abs(pos[1] - expected[1]) > 40:
+                # Confirm once: SetCursorPos can lag for one frame during a
+                # Windows animation.  A real hand movement persists and is
+                # still caught, without aborting a normal automated click.
+                time.sleep(0.06)
+                pos = win32api.GetCursorPos()
+                if abs(pos[0] - expected[0]) > 40 or abs(pos[1] - expected[1]) > 40:
+                    self._set_detached("检测到鼠标被用户移动")
+                    raise AutomationDetached(self.reason)
         except AutomationDetached:
             raise
         except Exception:
@@ -464,6 +502,7 @@ class ReplicaGuard:
         self.reason = ""
         self._user_mouse_at = 0.0
         self._expected = None
+        self._last_synthetic_at = time.time()
         self._consent_until = time.time() + 0.8
 
 
