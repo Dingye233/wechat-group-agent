@@ -735,6 +735,18 @@ class DSHAgentRuntime:
 
         stderr_tail = "\n".join(stderr_lines)[-2000:]
         returncode = int(process.returncode or 0)
+        # The DeepSeek plugin logs its model listing at info level. Some DSH
+        # builds surface that line on the error channel while still exiting 0;
+        # do not turn a successful task into a JsonSchema-style false failure.
+        if (
+            returncode == 0
+            and "model listing from" in error_text
+            and "loaded" in error_text
+        ):
+            error_text = ""
+        fatal_error = (error_text and not final_text) or (
+            returncode != 0 and not final_text
+        )
         if cancelled:
             reply = "已按你的要求停止当前任务。"
         elif stalled:
@@ -742,8 +754,14 @@ class DSHAgentRuntime:
                 f"后台执行器超过 {int(DEFAULT_STALL_SECONDS)} 秒没有新进展，"
                 "我已经自动中止，避免继续消耗 token。"
             )
-        elif error_text or (returncode != 0 and not final_text):
+        elif fatal_error:
             detail = error_text or stderr_tail or f"exit code {returncode}"
+            if returncode != 0:
+                detail = (
+                    f"DSH 进程退出码 {returncode}\n"
+                    f"{detail[-1200:]}\n"
+                    f"{stderr_tail[-1200:]}"
+                )
             missing = "does not exist" in detail and "session" in detail.lower()
             if missing:
                 return {

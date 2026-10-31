@@ -2057,16 +2057,37 @@ class RuntimeManager:
             )
         try:
             rows = await task_runs.list_tasks(100)
+            latest = None
             for row in rows:
                 if (
                     row.get("source") == "admin"
                     and row.get("session_id") == f"admin:{wxid}"
-                    and row.get("status") in {"queued", "running"}
                 ):
-                    return (
-                        f"任务 #{row.get('id')} 正在执行："
-                        f"{str(row.get('request') or '')[:80]}"
-                    )
+                    if row.get("status") in {"queued", "running"}:
+                        return (
+                            f"任务 #{row.get('id')} 正在执行："
+                            f"{str(row.get('request') or '')[:80]}"
+                        )
+                    if latest is None:
+                        latest = row
+            if latest is not None:
+                status = str(latest.get("status") or "unknown")
+                label = {
+                    "done": "已完成",
+                    "failed": "失败",
+                    "cancelled": "已取消",
+                }.get(status, status)
+                result = str(
+                    latest.get("error")
+                    or latest.get("result")
+                    or latest.get("request")
+                    or ""
+                ).strip()
+                return (
+                    f"最近任务 #{latest.get('id')}：{label}"
+                    + (f"｜{result[:100]}" if result else "")
+                    + "。当前没有正在执行的任务。"
+                )
         except Exception:
             pass
         try:
@@ -2086,7 +2107,7 @@ class RuntimeManager:
                     return status
         except Exception:
             pass
-        return "后台任务仍在执行"
+        return "当前没有正在执行的任务。"
 
     async def _maybe_save_private_memory(self, wxid: str, text: str) -> None:
         """Persist explicit private-chat memory cues without an extra LLM call."""
@@ -2237,7 +2258,7 @@ class RuntimeManager:
         value = str(text or "").strip()
         return bool(
             re.search(
-                r"(进度|到哪|在干嘛|在做什么|卡住|还在吗|还活着|多久|状态|完成了没|好了没|在做任务|有没有做|有没有在|任务呢|任务吗|到底有没有)",
+                r"(进度|到哪|在干嘛|在做什么|卡住|还在吗|还活着|多久|状态|完成了没|好了没|做完了吗|做完没|完成了吗|完成了没有|在做任务|有没有做|有没有在|还有任务|任务\s*#?\d+.*(做完|完成|状态|进度|失败|结果|怎么样)|任务呢|任务吗|到底有没有)",
                 value,
             )
         )
@@ -2318,10 +2339,13 @@ class RuntimeManager:
         # With no task running, status questions are answered from the durable
         # state instead of accidentally starting a new DSH task.
         if self._admin_progress_query(clean):
+            async def send_idle_status() -> None:
+                await self._send_admin_notice(
+                    contact_id, await self._admin_task_status(wxid)
+                )
+
             asyncio.create_task(
-                self._send_admin_notice(
-                    contact_id, self._admin_progress_snapshot(wxid, query=clean)
-                ),
+                send_idle_status(),
                 name=f"admin-progress-idle-{wxid}",
             )
             return
