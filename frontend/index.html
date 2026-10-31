@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui40">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui40">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui48">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui48">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -286,8 +286,13 @@
                 <label class="check-row"><input type="checkbox" id="cfg-roast"><span>怼怼模式 <small>说话带刺、爱抬杠，不骂脏话</small></span></label>
                 <label class="field">
                   <span>本群人设 <small>留空使用全局人设</small></span>
-                  <textarea id="cfg-persona" rows="4" placeholder="例如：你是群里的资深产品经理，说话简短、务实，偶尔冷幽默。"></textarea>
+                  <textarea id="cfg-persona" rows="4" maxlength="12000" placeholder="例如：你是群里的资深产品经理，说话简短、务实，偶尔冷幽默。"></textarea>
                 </label>
+                <div class="assistant-inline" style="align-items:center;margin:-4px 0 10px">
+                  <button type="button" class="btn btn-ghost" id="cfg-persona-file-btn">插入 MD 人设文件</button>
+                  <span class="field-hint" id="cfg-persona-file-name" style="margin:0">未选择文件，也可直接手动输入</span>
+                  <input type="file" id="cfg-persona-file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+                </div>
                 <label class="field">
                   <span>模型覆盖 <small>留空使用全局模型</small></span>
                   <input id="cfg-model" placeholder="例如 deepseek-chat">
@@ -1126,7 +1131,7 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261031-ui47" defer></script>
+  <script src="/app.js?v=20261031-ui48" defer></script>
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);

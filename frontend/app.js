@@ -1849,7 +1849,7 @@ function switchInspectorTab(name = 'config') {
 function renderInspector(group) {
   syncWorkspaceLayout(Boolean(group));
   const disabled = !group;
-  const fields = ['#cfg-read', '#cfg-read-interval', '#cfg-enabled', '#cfg-tools-enabled', '#cfg-trigger', '#cfg-keywords', '#cfg-probability', '#cfg-cooldown', '#cfg-max', '#cfg-quiet-start', '#cfg-quiet-end', '#cfg-stickers', '#cfg-multi-message', '#cfg-max-messages', '#cfg-proactive', '#cfg-proactive-interval', '#cfg-mention', '#cfg-persona', '#cfg-model', '#save-config-btn'];
+  const fields = ['#cfg-read', '#cfg-read-interval', '#cfg-enabled', '#cfg-tools-enabled', '#cfg-trigger', '#cfg-keywords', '#cfg-probability', '#cfg-cooldown', '#cfg-max', '#cfg-quiet-start', '#cfg-quiet-end', '#cfg-stickers', '#cfg-multi-message', '#cfg-max-messages', '#cfg-proactive', '#cfg-proactive-interval', '#cfg-mention', '#cfg-persona', '#cfg-persona-file-btn', '#cfg-model', '#save-config-btn'];
   for (const selector of fields) {
     const node = $(selector);
     if (node) node.disabled = disabled;
@@ -1863,6 +1863,10 @@ function renderInspector(group) {
   }
   const config = group.agent || {};
   const readEnabled = Boolean(config.read_enabled);
+  const personaFile = $('#cfg-persona-file');
+  const personaFileLabel = $('#cfg-persona-file-name');
+  if (personaFile) personaFile.value = '';
+  if (personaFileLabel) personaFileLabel.textContent = '未选择文件，也可直接手动输入';
   if (name) name.textContent = group.name || '当前群聊';
   if (hint) {
     hint.textContent = !readEnabled
@@ -7367,6 +7371,50 @@ function bindEvents() {
   $('#cfg-enabled')?.addEventListener('change', (event) => {
     const tools = $('#cfg-tools-enabled');
     if (tools) tools.disabled = !event.target.checked;
+  });
+  $('#cfg-persona-file-btn')?.addEventListener('click', () => {
+    $('#cfg-persona-file')?.click();
+  });
+  $('#cfg-persona-file')?.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const label = $('#cfg-persona-file-name');
+    const textarea = $('#cfg-persona');
+    try {
+      if (!/\.(md|markdown|txt)$/i.test(file.name)) {
+        toast('请选择 .md、.markdown 或 .txt 人设文件', 'warn');
+        return;
+      }
+      if (file.size > 512 * 1024) {
+        toast('人设文件不能超过 512KB', 'warn');
+        return;
+      }
+      const text = typeof file.text === 'function'
+        ? await file.text()
+        : await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+          reader.readAsText(file, 'utf-8');
+        });
+      const value = String(text || '').replace(/^\uFEFF/, '').trim();
+      if (!value) {
+        toast('这个文件是空的', 'warn');
+        return;
+      }
+      if (!textarea) return;
+      if (value.length > 12000) {
+        toast('人设文件超过 12000 字，请精简后再插入', 'warn');
+        return;
+      }
+      textarea.value = value;
+      if (label) label.textContent = `已插入：${file.name}（${value.length} 字），点保存生效`;
+      toast('人设已插入，点「保存本群配置」后生效');
+    } catch (error) {
+      toast(`读取人设文件失败：${error.message}`, 'error');
+    } finally {
+      event.target.value = '';
+    }
   });
   $('#members-refresh')?.addEventListener('click', openMembersDialog);
   $('#members-dialog-refresh')?.addEventListener('click', () => {

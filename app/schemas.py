@@ -63,8 +63,8 @@ class GroupConfigUpdate(BaseModel):
     @field_validator("persona")
     @classmethod
     def _persona(cls, value: str | None) -> str | None:
-        if value is not None and len(value) > 4000:
-            raise ValueError("人设不能超过 4000 字")
+        if value is not None and len(value) > 12000:
+            raise ValueError("人设不能超过 12000 字")
         return value
 
     @field_validator("model")
