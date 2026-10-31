@@ -1859,6 +1859,38 @@ class RuntimeManager:
             return f"{task_prefix}进度：刚才那步没成功，我换个办法再试｜已用 {elapsed}s"
         return ""
 
+    @staticmethod
+    def _explain_failure(exc: BaseException) -> str:
+        """Translate a technical traceback into one readable line.
+
+        The raw exception still goes to the log and to ``agent_task_runs.error``;
+        what the user receives must answer "why did nothing happen" without
+        making them read a cordis registration stack.
+        """
+        text = str(exc or "")
+        low = text.lower()
+        rules = (
+            (
+                'service "shell" has been registered',
+                "本机命令通道没起来（DSH 的 shell 插件冲突），这轮没有真正执行",
+            ),
+            ("spawn bash enoent", "本机没有可用的 bash，命令没能执行"),
+            ("spawn pwsh enoent", "本机没找到 PowerShell 7（pwsh）"),
+            ("sandbox", "沙箱执行器不可用，命令被拦下了"),
+            ("timeout", "某一步执行超时，我先停了下来"),
+            ("超时", "某一步执行超时，我先停了下来"),
+            ("not found", "要用的文件或命令没找到"),
+            ("permission", "没有权限执行这一步"),
+            ("微信窗口", "操作窗口时出了问题（窗口被最小化或被挡住）"),
+        )
+        for needle, human in rules:
+            if needle in low or needle in text:
+                return human
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            return lines[0][:120]
+        return type(exc).__name__
+
     async def _send_admin_notice(
         self, contact_id: int, text: str, *, allow_seconds: float = 60.0
     ) -> bool:
@@ -2581,6 +2613,14 @@ class RuntimeManager:
                     await task_runs.step(
                         private_task_id, "execute", "failed", detail=str(exc)
                     )
+                    # Close the remaining steps too: leaving them "pending" made
+                    # the task look like it was still running after it died.
+                    await task_runs.step(
+                        private_task_id, "send", "failed", detail="未发送"
+                    )
+                    await task_runs.step(
+                        private_task_id, "verify", "failed", detail="未执行"
+                    )
                     await task_runs.update(
                         private_task_id,
                         status="failed",
@@ -2591,22 +2631,18 @@ class RuntimeManager:
                     if private_task_id is not None
                     else ""
                 )
-                lines = [
-                    line.strip()
-                    for line in str(exc).splitlines()
-                    if line.strip()
-                ]
-                detail = next(
-                    (
-                        line
-                        for line in lines
-                        if "Error" in line or "失败" in line or "超时" in line
-                    ),
-                    lines[0] if lines else type(exc).__name__,
+                reason = self._explain_failure(exc)
+                delivered = await self._send_admin_notice(
+                    contact_id,
+                    f"{task_prefix}没做成。\n"
+                    f"原因：{reason}\n"
+                    "详细报错已经记到后台「任务」列表里了；回我一句「重试」我就再跑一遍。",
                 )
-                await self._send_admin_notice(
-                    contact_id, f"{task_prefix}执行失败：{detail[:180]}"
-                )
+                if not delivered:
+                    logger.warning(
+                        "失败说明也没发出去（发送通道不可用），已记入任务 #%s",
+                        private_task_id,
+                    )
             finally:
                 self._admin_progress.pop(wxid, None)
                 if self._admin_task_ids.get(wxid) == private_task_id:
