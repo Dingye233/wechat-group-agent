@@ -126,7 +126,18 @@ async def prune_completed(max_age_seconds: int = 120) -> int:
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         seconds=max(30, int(max_age_seconds))
     )
+    stale_running_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=10 * 60
+    )
     async with SessionLocal() as db:
+        # A tool row that was "running" when the host died has no owner
+        # anymore.  Remove it instead of showing a permanent ghost task.
+        await db.execute(
+            delete(AssistantToolTask).where(
+                AssistantToolTask.status == "running",
+                AssistantToolTask.updated_at < stale_running_cutoff,
+            )
+        )
         result = await db.execute(
             delete(AssistantToolTask).where(
                 AssistantToolTask.status.in_(("done", "error")),
