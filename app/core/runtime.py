@@ -2420,6 +2420,9 @@ class RuntimeManager:
                     "request": clean,
                     "task_id": private_task_id,
                     "last_progress": time.monotonic(),
+                    "pending": [],
+                    "flush_task": None,
+                    "step": 0,
                 }
                 self._admin_progress[wxid] = progress_state
                 heartbeat: asyncio.Task | None = None
@@ -2446,6 +2449,79 @@ class RuntimeManager:
                     progress_worker_loop(), name=f"admin-progress-{wxid}"
                 )
 
+                async def flush_progress() -> None:
+                    pending = progress_state.get("pending") or []
+                    if not pending:
+                        return
+                    lines = list(pending)
+                    progress_state["pending"] = []
+                    offer_progress("\n›\n".join(lines)[:3500])
+                    if private_task_id is not None:
+                        try:
+                            await task_runs.step(
+                                private_task_id,
+                                "execute",
+                                "running",
+                                detail=lines[-1][:300],
+                            )
+                        except Exception:
+                            pass
+
+                def add_progress(line: str) -> None:
+                    value = re.sub(r"[ \t]+", " ", str(line or "").strip())
+                    if not value:
+                        return
+                    pending = progress_state.setdefault("pending", [])
+                    if pending and pending[-1] == value:
+                        return
+                    pending.append(value[:700])
+                    if len(pending) > 30:
+                        del pending[:-30]
+                    progress_state["last_progress"] = time.monotonic()
+                    if progress_state.get("flush_task") is None:
+                        progress_state["flush_task"] = asyncio.create_task(
+                            delayed_progress_flush(), name=f"admin-progress-flush-{wxid}"
+                        )
+
+                async def delayed_progress_flush() -> None:
+                    try:
+                        await asyncio.sleep(2.0)
+                        progress_state["flush_task"] = None
+                        await flush_progress()
+                    except asyncio.CancelledError:
+                        raise
+
+                def tool_line(event: dict[str, Any], *, completed: bool) -> str:
+                    tool = str(event.get("tool") or "工具")
+                    step = event.get("step")
+                    try:
+                        step = int(step) if step is not None else 0
+                    except Exception:
+                        step = 0
+                    if step <= 0:
+                        step = int(progress_state.get("step") or 0)
+                    progress_state["step"] = max(
+                        int(progress_state.get("step") or 0), step
+                    )
+                    try:
+                        args = json.dumps(
+                            event.get("args") or {}, ensure_ascii=False, default=str
+                        )
+                    except Exception:
+                        args = str(event.get("args") or "")
+                    output = str(
+                        event.get("output")
+                        or event.get("message")
+                        or ""
+                    ).replace("\n", " ")
+                    if completed:
+                        ok = bool(event.get("ok", True))
+                        return (
+                            f"第 {step} 步：{'完成' if ok else '失败'} {tool}"
+                            f" · {output[:260] or args[:260]}"
+                        )
+                    return f"第 {step} 步：调用 {tool} · {args[:260]}"
+
                 async def heartbeat_loop() -> None:
                     while True:
                         await asyncio.sleep(25.0)
@@ -2457,12 +2533,6 @@ class RuntimeManager:
                             ),
                         )
                         stage = str(progress_state.get("stage") or "处理中")
-                        if int(progress_state.get("sent") or 0) >= 8:
-                            continue
-                        progress_state["sent"] = int(
-                            progress_state.get("sent") or 0
-                        ) + 1
-                        progress_state["last_sent"] = time.monotonic()
                         task_prefix = (
                             f"任务 #{private_task_id} "
                             if private_task_id is not None
@@ -2474,7 +2544,7 @@ class RuntimeManager:
                             > 90.0
                         )
                         note = "（可能卡住）" if stale else ""
-                        offer_progress(
+                        add_progress(
                             f"{task_prefix}进度{note}：{stage}｜已用 {elapsed}s"
                         )
                         if private_task_id is not None:
@@ -2496,30 +2566,44 @@ class RuntimeManager:
                     if private_task_id is not None
                     else ""
                 )
-                offer_progress(
-                    f"{task_prefix}开始处理："
-                    f"{clean[:80]}{'…' if len(clean) > 80 else ''}"
-                )
+                add_progress("已收到任务，开始处理")
+                add_progress("开始处理，步数不限（安全上限 500 步 / 30 分钟）")
                 progress_state["sent"] = 1
                 progress_state["last_sent"] = time.monotonic()
 
                 async def emit_progress(event: dict[str, Any]) -> None:
-                    message = self._admin_progress_text(event, progress_state)
-                    if message:
-                        offer_progress(message)
-                        if private_task_id is not None:
-                            now = time.monotonic()
-                            if now - float(progress_state.get("last_db") or 0.0) > 15.0:
-                                progress_state["last_db"] = now
-                                try:
-                                    await task_runs.step(
-                                        private_task_id,
-                                        "execute",
-                                        "running",
-                                        detail=message[:300],
-                                    )
-                                except Exception:
-                                    pass
+                    phase = str(event.get("phase") or "")
+                    if phase == "start":
+                        add_progress(
+                            str(event.get("message") or "DeepSeek Harness 已接管，开始执行")
+                        )
+                    elif phase == "thinking":
+                        step = event.get("step")
+                        try:
+                            step = int(step) if step is not None else 0
+                        except Exception:
+                            step = 0
+                        if step <= 0:
+                            step = int(progress_state.get("step") or 0) + 1
+                        progress_state["step"] = max(
+                            int(progress_state.get("step") or 0), step
+                        )
+                        add_progress(f"第 {step} 步：规划下一步")
+                    elif phase == "tool":
+                        tool = str(event.get("tool") or "工具")
+                        add_progress(tool_line(event, completed=False))
+                        progress_state["stage"] = f"调用 {tool}"
+                    elif phase == "tool_result":
+                        tool = str(event.get("tool") or "工具")
+                        add_progress(tool_line(event, completed=True))
+                        progress_state["stage"] = f"完成 {tool}"
+                    elif phase in {"permission", "question"}:
+                        add_progress(
+                            "已自动确认权限"
+                            if phase == "permission"
+                            else "已自动回答确认选项"
+                        )
+                    progress_state["last_progress"] = time.monotonic()
 
                 try:
                     result = await asyncio.wait_for(
@@ -2575,12 +2659,13 @@ class RuntimeManager:
                 progress_state["finalizing"] = True
                 if heartbeat is not None:
                     heartbeat.cancel()
-                while not progress_queue.empty():
-                    try:
-                        progress_queue.get_nowait()
-                        progress_queue.task_done()
-                    except asyncio.QueueEmpty:
-                        break
+                flush_task = progress_state.get("flush_task")
+                if flush_task is not None and not flush_task.done():
+                    flush_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await flush_task
+                    progress_state["flush_task"] = None
+                await flush_progress()
                 try:
                     await asyncio.wait_for(progress_queue.join(), timeout=5.0)
                 except asyncio.TimeoutError:
