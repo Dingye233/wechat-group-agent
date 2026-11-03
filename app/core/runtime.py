@@ -2533,11 +2533,6 @@ class RuntimeManager:
                             ),
                         )
                         stage = str(progress_state.get("stage") or "处理中")
-                        task_prefix = (
-                            f"任务 #{private_task_id} "
-                            if private_task_id is not None
-                            else ""
-                        )
                         stale = (
                             time.monotonic()
                             - float(progress_state.get("last_progress") or 0.0)
@@ -2545,7 +2540,7 @@ class RuntimeManager:
                         )
                         note = "（可能卡住）" if stale else ""
                         add_progress(
-                            f"{task_prefix}进度{note}：{stage}｜已用 {elapsed}s"
+                            f"任务仍在执行{note}：{stage}｜已用 {elapsed}s"
                         )
                         if private_task_id is not None:
                             try:
