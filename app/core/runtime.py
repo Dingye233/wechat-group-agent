@@ -2319,14 +2319,8 @@ class RuntimeManager:
                     name=f"admin-progress-{wxid}",
                 )
                 return
-            # A long OpenCode run must not swallow casual messages. Answer
-            # chat/status questions in a separate LLM call while the task keeps
-            # running; only real task instructions are inserted into the loop.
-            if self._admin_casual_message(clean):
-                self._start_admin_side_chat(contact_id, wxid, clean)
-                return
-            # Do not cancel the running task. Queue this message and let the
-            # running loop process it as an inserted requirement.
+            # Private chat always uses the task Agent.  There is no separate
+            # casual-chat lane in this mode; queue the message into the task.
             enqueue_session_message(session_id, clean)
             asyncio.create_task(
                 self._send_admin_notice(
@@ -2348,11 +2342,6 @@ class RuntimeManager:
                 send_idle_status(),
                 name=f"admin-progress-idle-{wxid}",
             )
-            return
-        # With no task running, casual messages go to the chat model directly;
-        # they must not spin up an OpenCode session just to say hello.
-        if self._admin_casual_message(clean):
-            self._start_admin_side_chat(contact_id, wxid, clean)
             return
 
         # The previous task may have ended between our check and its cleanup.
@@ -2839,7 +2828,11 @@ class RuntimeManager:
                     str(finished.get("error") or "私聊消息发送失败")
                 )
         elif self.adapter_id in {"replica", "replica-remote"}:
-            await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
+            sender = getattr(self.adapter, "send_contact_text", None)
+            if callable(sender):
+                await sender(wxid, text, reuse_chat=reuse_chat)
+            else:
+                await self.adapter.send_text(wxid, text, reuse_chat=reuse_chat)
         else:
             await self.adapter.send_text(wxid, text)
         return await self._persist_direct_outgoing(

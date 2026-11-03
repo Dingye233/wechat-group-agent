@@ -1753,11 +1753,26 @@ class ReplicaAdapter(BaseAdapter):
     def _ensure_wx(self) -> Any:
         if self._db is None:
             raise RuntimeError("微信 4.x 数据库尚未就绪")
+        target_hwnd = self._find_main_weixin_hwnd()
+        if self._wx is not None and target_hwnd:
+            gui = getattr(self._wx, "_gui", None)
+            bound = int(getattr(gui, "main_hwnd", 0) or 0)
+            try:
+                import win32gui
+
+                alive = bool(bound and win32gui.IsWindow(bound))
+            except Exception:
+                alive = bool(bound)
+            if bound != int(target_hwnd) or not alive:
+                # WeChat restarted or the previous bind targeted a transient
+                # window.  Discard it and bind the current main window.
+                with self._lock:
+                    self._wx = None
         if self._wx is None:
             from wechatauto import WeChat
             from wechatauto.guia import WeChatGUI
 
-            hwnd = self._find_main_weixin_hwnd()
+            hwnd = target_hwnd or self._find_main_weixin_hwnd()
             try:
                 gui = WeChatGUI(hwnd=hwnd) if hwnd else WeChatGUI()
                 self._wx = WeChat(gui=gui, db=self._db)
@@ -2035,6 +2050,55 @@ class ReplicaAdapter(BaseAdapter):
     ) -> None:
         await asyncio.to_thread(
             self._send_text_sync, room_id, text, reuse_chat
+        )
+
+    def _contact_display_name(self, wxid: str) -> str:
+        raw = str(wxid or "").strip()
+        if self._db is None or not raw:
+            return raw
+        try:
+            rows = self._db.search_contact(raw)
+        except Exception:
+            rows = []
+        for row in rows or []:
+            if str((row or {}).get("username") or "").strip() != raw:
+                continue
+            return str(
+                (row or {}).get("remark")
+                or (row or {}).get("nick_name")
+                or raw
+            ).strip() or raw
+        return raw
+
+    def _send_contact_text_sync(
+        self, wxid: str, text: str, reuse_chat: bool = False
+    ) -> None:
+        self._ensure_attached()
+        raw = str(wxid or "").strip()
+        if not raw:
+            raise RuntimeError("缺少私聊目标 wxid")
+        name = self._contact_display_name(raw)
+
+        def task() -> Any:
+            wx = self._ensure_wx()
+            if not wx.ChatWith(name, exact=True):
+                raise RuntimeError(f"没有打开私聊会话：{name}")
+            return wx.SendMsg(text, who=name, exact=True)
+
+        self._send_with_retry(
+            task,
+            raw,
+            content=text,
+            timeout=150.0,
+            action="发送私聊消息",
+        )
+        self.log(f"已发送私聊文本到「{name}」")
+
+    async def send_contact_text(
+        self, wxid: str, text: str, *, reuse_chat: bool = False
+    ) -> None:
+        await asyncio.to_thread(
+            self._send_contact_text_sync, wxid, text, reuse_chat
         )
 
     @staticmethod
@@ -2397,6 +2461,28 @@ class ReplicaAdapter(BaseAdapter):
         self._detached = False
         self._detach_reason = ""
         self.log("已重新接管微信 4.x 自动操作")
+
+    def recover_after_stuck_send(self) -> None:
+        """Abandon a wedged UI worker and create a fresh one.
+
+        A stuck send can block the single UI executor forever while the service
+        queue is otherwise healthy.  Replace the executor and GUI binding; the
+        adapter's database listener is not touched.
+        """
+        with self._lock:
+            old_executor = self._ui_executor
+            self._ui_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="replica-ui-recovered"
+            )
+            self._wx = None
+            self._detached = False
+            self._detach_reason = ""
+            self._guard.reattach()
+        try:
+            old_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        self.log("发送超时：已重建微信 UI 执行器，等待下一条消息", level="warn")
 
     def _ensure_attached(self) -> None:
         if self._detached or self._guard.detached:

@@ -37,6 +37,8 @@ class ServiceQueue:
         self.queue: asyncio.Queue[int] = asyncio.Queue(maxsize=2000)
         self.worker: asyncio.Task | None = None
         self._started = False
+        self.job_timeout_seconds = 240.0
+        self.max_queued_age_seconds = 15 * 60
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,9 +76,29 @@ class ServiceQueue:
             return
         self.init()
         self._started = True
+        now = time.time()
         with self._connect() as con:
+            # A send that was in flight when the service died cannot be
+            # retried safely: it may already have reached WeChat.  Mark it
+            # uncertain instead of leaving the queue stuck forever.
+            con.execute(
+                "UPDATE outbound_jobs SET status='failed', "
+                "error=CASE WHEN error='' THEN '服务重启，发送状态未知' ELSE error END, "
+                "result=?, finished_at=? WHERE status='sending'",
+                (json.dumps({"uncertain": True, "retryable": True}), now),
+            )
+            # Old progress/ack messages are worse than useless after a long
+            # outage.  Expire queued work instead of flooding the chat later.
+            cutoff = now - float(self.max_queued_age_seconds)
+            con.execute(
+                "UPDATE outbound_jobs SET status='failed', "
+                "error='排队过期，未发送', result=?, finished_at=? "
+                "WHERE status='queued' AND created_at < ?",
+                (json.dumps({"uncertain": True, "retryable": True}), now, cutoff),
+            )
+            con.commit()
             rows = con.execute(
-                "SELECT id FROM outbound_jobs WHERE status IN ('queued','sending') "
+                "SELECT id FROM outbound_jobs WHERE status='queued' "
                 "ORDER BY id ASC LIMIT 200"
             ).fetchall()
         for row in rows:
@@ -317,11 +339,45 @@ class ServiceQueue:
             except asyncio.CancelledError:
                 raise
             try:
-                await self._run(int(job_id))
+                await asyncio.wait_for(
+                    self._run(int(job_id)),
+                    timeout=float(self.job_timeout_seconds),
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "wechatauto outbound %s timed out after %.0fs",
+                    job_id,
+                    self.job_timeout_seconds,
+                )
+                await self._fail(job_id, "发送超时，已中断当前发送任务")
+                recover = getattr(self.adapter, "recover_after_stuck_send", None)
+                if callable(recover):
+                    try:
+                        result = recover()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception:
+                        logger.exception("wechatauto adapter recovery failed")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("wechatauto outbound worker error")
+
+    async def _fail(self, job_id: int, error: str) -> None:
+        with self._connect() as con:
+            con.execute(
+                "UPDATE outbound_jobs SET status='failed', error=?, result=?, "
+                "finished_at=? WHERE id=? AND status='sending'",
+                (
+                    str(error)[:2000],
+                    json.dumps({"uncertain": True, "retryable": True}),
+                    time.time(),
+                    int(job_id),
+                ),
+            )
+            con.commit()
+        job = await self.get(int(job_id))
+        self._event("failed", job or {"id": int(job_id), "status": "failed"})
 
     async def _run(self, job_id: int) -> None:
         with self._connect() as con:
@@ -356,13 +412,28 @@ class ServiceQueue:
             sticker_id = int(payload.get("sticker_id") or 0)
             if text.strip():
                 try:
-                    await self.adapter.send_text(
-                        external_id,
-                        text,
-                        reuse_chat=bool(payload.get("reuse_chat")),
-                    )
+                    if target:
+                        sender = getattr(self.adapter, "send_contact_text", None)
+                        if not callable(sender):
+                            raise RuntimeError("当前适配器不支持私聊发送")
+                        await sender(
+                            external_id,
+                            text,
+                            reuse_chat=bool(payload.get("reuse_chat")),
+                        )
+                    else:
+                        await self.adapter.send_text(
+                            external_id,
+                            text,
+                            reuse_chat=bool(payload.get("reuse_chat")),
+                        )
                 except TypeError:
-                    await self.adapter.send_text(external_id, text)
+                    if target:
+                        await self.adapter.send_contact_text(external_id, text)
+                    else:
+                        await self.adapter.send_text(external_id, text)
+            if target and (sticker_id or files):
+                raise RuntimeError("私聊队列暂不支持表情/文件，请用文本通道")
             if sticker_id:
                 sticker_path = self._sticker_path(sticker_id)
                 if sticker_path is None:
