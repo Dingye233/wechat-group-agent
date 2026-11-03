@@ -63,6 +63,7 @@ class RemoteAdapter(BaseAdapter):
                 base_url=self.base_url,
                 timeout=httpx.Timeout(120.0, connect=5.0),
                 headers=self._headers(),
+                trust_env=False,
             )
         return self._client
 

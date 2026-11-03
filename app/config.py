@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Windows system proxy settings must never intercept localhost traffic
+# (wechatauto, Qunban sidecar, task store).  Keep external proxying intact.
+for _proxy_key in ("NO_PROXY", "no_proxy"):
+    _current = os.environ.get(_proxy_key, "")
+    _entries = [item.strip() for item in _current.split(",") if item.strip()]
+    for _local in ("127.0.0.1", "localhost", "::1"):
+        if _local not in _entries:
+            _entries.append(_local)
+    os.environ[_proxy_key] = ",".join(_entries)
 
 
 class Settings(BaseSettings):
