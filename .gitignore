@@ -39,5 +39,3 @@ node_modules/
 .codegraph/
 data/agent_workspace/doc_work/
 
-tools/mock_upstream/data/
-tools/upstream_server/data/
