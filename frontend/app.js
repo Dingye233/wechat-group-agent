@@ -3961,8 +3961,62 @@ async function applyQunbanUpdate() {
   }
 }
 
+async function loadClashVergeControl() {
+  const checkbox = $('#clash-verge-enabled');
+  const status = $('#clash-verge-status');
+  if (!checkbox) return;
+  try {
+    const data = await api('/dsh/plugins');
+    const rows = [...(data.generated || []), ...(data.installed || [])];
+    const row = rows.find(
+      (item) =>
+        item.id === 'studio-clash-verge' ||
+        item.name === '@qunban/clash-verge',
+    );
+    if (!row) {
+      checkbox.checked = false;
+      checkbox.disabled = true;
+      if (status) status.textContent = '未安装 · 在插件管理中导入 @qunban/clash-verge';
+      return;
+    }
+    const channels = row.channels || {};
+    checkbox.disabled = false;
+    checkbox.checked = Boolean(row.enabled);
+    if (status) {
+      status.textContent = row.enabled
+        ? `已启用 · 私聊${channels.private === false ? '关闭' : '可用'} · 群聊${channels.group ? '可用' : '关闭'}`
+        : '已安装但未启用';
+    }
+  } catch (error) {
+    checkbox.disabled = true;
+    if (status) status.textContent = `读取失败：${error.message}`;
+  }
+}
+
+async function toggleClashVerge(enabled) {
+  const checkbox = $('#clash-verge-enabled');
+  try {
+    await api('/dsh/plugins/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ id: 'studio-clash-verge', enabled: Boolean(enabled) }),
+    });
+    const reload = await hotReloadPlugins();
+    toast(
+      reload
+        ? `Clash Verge 管理已${enabled ? '启用' : '停用'}，DSH 已热加载`
+        : `Clash Verge 管理已${enabled ? '启用' : '停用'}；请重启 DSH 链路`,
+      reload ? undefined : 'error',
+    );
+    await loadClashVergeControl();
+  } catch (error) {
+    if (checkbox) checkbox.checked = !enabled;
+    toast(error.message, 'error');
+  }
+}
+
 async function loadDSH() {
   loadQunbanUpdate().catch(() => {});
+  loadClashVergeControl().catch(() => {});
   const statusLine = $('#dsh-status-line');
   const jobLine = $('#dsh-job-line');
   const logRoot = $('#dsh-log');
@@ -6438,6 +6492,9 @@ function bindAssistantActions() {
     applyQunbanUpdate().catch(() => {});
   });
   $('#dsh-refresh')?.addEventListener('click', loadDSH);
+  $('#clash-verge-enabled')?.addEventListener('change', (event) => {
+    toggleClashVerge(event.target.checked).catch(() => {});
+  });
   $('#dsh-enabled')?.addEventListener('change', async (event) => {
     try {
       const enabled = Boolean(event.target.checked);

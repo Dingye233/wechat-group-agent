@@ -7,8 +7,8 @@
   <title>群伴 · WeChat Group Agent</title>
   <link rel="icon" type="image/png" href="/qunban-icon.png?v=2">
   <link rel="apple-touch-icon" href="/qunban-icon.png?v=2">
-  <link rel="stylesheet" href="/styles.css?v=20261029-ui49">
-<link rel="stylesheet" href="/ui.css?v=20261029-ui49">
+  <link rel="stylesheet" href="/styles.css?v=20261029-ui50">
+<link rel="stylesheet" href="/ui.css?v=20261029-ui50">
 </head>
 <body>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
@@ -600,6 +600,10 @@
                   <span class="field-hint" id="dsh-latest-version" style="margin:0">检查中…</span>
                   <button class="btn btn-primary" id="dsh-push-update" disabled style="margin-left:auto">推送更新</button>
                 </div>
+                <div class="switch-row">
+                  <div><strong>Clash Verge 管理</strong><small id="clash-verge-status">检查中…</small></div>
+                  <label class="switch"><input type="checkbox" id="clash-verge-enabled"><span></span></label>
+                </div>
                 <label class="check-row"><input type="checkbox" id="dsh-enabled"><span>启用 DeepSeek Harness 作为唯一 Agent 运行时</span></label>
                 <div class="assistant-inline">
                   <label class="field-label" style="min-width:140px">更新渠道
@@ -1131,7 +1135,7 @@
     </div>
   </dialog>
 
-  <script src="/app.js?v=20261031-ui49" defer></script>
+  <script src="/app.js?v=20261031-ui50" defer></script>
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);
